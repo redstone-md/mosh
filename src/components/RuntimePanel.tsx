@@ -10,6 +10,7 @@ type RuntimePanelProps = {
   errorNote?: string
   onToggle: () => void
   isBusy: boolean
+  compact?: boolean
 }
 
 export function RuntimePanel({
@@ -22,7 +23,30 @@ export function RuntimePanel({
   errorNote,
   onToggle,
   isBusy,
+  compact = false,
 }: RuntimePanelProps) {
+  if (compact) {
+    return (
+      <div className="flex items-center gap-4 text-xs font-mono max-w-full">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-primary shadow-[0_0_0_2px_rgba(90,198,136,0.2)]' : 'bg-foreground/30'}`} />
+          <span className="text-foreground/70 hidden lg:inline-block truncate max-w-[200px]" title={summary}>{summary}</span>
+        </div>
+        <div className="hidden xl:flex gap-2 shrink-0">
+          <span className="px-2 py-0.5 rounded-full bg-muted border border-border/50 text-foreground/70">{natHint}</span>
+          <span className="px-2 py-0.5 rounded-full bg-muted border border-border/50 text-foreground/70">{route}</span>
+        </div>
+        <button 
+          className={`shrink-0 flex items-center gap-1.5 px-2 py-1 rounded border transition-colors ${isOnline ? 'border-primary/30 text-primary hover:bg-primary/10' : 'border-border text-foreground/70 hover:bg-white/5'} disabled:opacity-50`}
+          onClick={onToggle} 
+          disabled={isBusy}
+        >
+          {isOnline ? <PowerOff size={12} /> : <Power size={12} />}
+        </button>
+      </div>
+    )
+  }
+
   return (
     <section className="bg-primary/5 border-b border-primary/10 px-4 py-2 flex items-center justify-between gap-4 shrink-0 text-sm">
       <div className="flex items-center gap-6 min-w-0">

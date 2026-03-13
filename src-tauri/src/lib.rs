@@ -17,6 +17,7 @@ pub fn run() {
             commands::toggle_runtime,
             commands::update_runtime_settings,
             commands::subscribe_room,
+            commands::unsubscribe_room,
             commands::connect_peer,
             commands::open_direct_room,
             commands::publish_message

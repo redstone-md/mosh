@@ -1,4 +1,5 @@
 import type { PeerSummary } from '../lib/schemas'
+import { MessageSquare, Signal, Activity } from 'lucide-react'
 
 type PeerPanelProps = {
   peers: PeerSummary[]
@@ -7,44 +8,74 @@ type PeerPanelProps = {
 
 export function PeerPanel({ peers, onOpenDirectRoom }: PeerPanelProps) {
   return (
-    <aside className="w-80 shrink-0 border-l border-border/10 bg-muted/10 flex flex-col h-full overflow-hidden">
-      <div className="p-4 border-b border-border/10 shrink-0 bg-background/50 backdrop-blur-sm">
-        <p className="text-[10px] uppercase tracking-widest text-primary font-bold mb-1">Channel</p>
-        <h2 className="text-lg font-bold">Participants</h2>
+    <aside className="w-72 shrink-0 border-l border-border/20 bg-background/50 flex flex-col h-full overflow-hidden">
+      <div className="px-5 py-4 border-b border-border/20 shrink-0 bg-muted/20 backdrop-blur-md flex items-center justify-between">
+        <div>
+            <h2 className="text-sm font-bold tracking-tight text-foreground/90">Participants</h2>
+            <p className="text-[11px] font-medium text-foreground/50">{peers.length} Online</p>
+        </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      
+      <div className="flex-1 overflow-y-auto p-3 space-y-1">
         {peers.length > 0 ? (
-          peers.map((peer) => (
-            <article className="bg-background/40 border border-border/20 rounded-xl p-3 flex flex-col gap-3" key={peer.id}>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 shrink-0 flex items-center justify-center rounded-xl bg-gradient-to-br from-primary/30 to-primary/10 text-primary-foreground font-bold text-sm border border-primary/20">
-                  {avatarLabel(peer.displayName)}
+          peers.map((peer) => {
+            const isSelf = peer.status === 'self';
+            const displayName = isSelf ? peer.displayName.replace(' (you)', '') : peer.displayName;
+
+            return (
+            <div 
+              key={peer.id}
+              className="group relative flex items-center gap-3 p-2 rounded-xl hover:bg-muted/50 transition-colors cursor-pointer"
+            >
+              <div className="relative">
+                  <div className="w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-secondary text-foreground font-bold text-xs shadow-sm ring-1 ring-border/50 group-hover:ring-border">
+                    {avatarLabel(displayName)}
+                  </div>
+                  <div className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-background ${isSelf ? 'bg-primary' : 'bg-primary/80'}`} />
+              </div>
+              
+              <div className="flex-1 min-w-0 flex flex-col justify-center">
+                <div className="flex items-center justify-between gap-2">
+                    <strong className="text-sm font-medium truncate text-foreground/90 group-hover:text-foreground transition-colors">
+                        {displayName}
+                        {isSelf && <span className="ml-1.5 text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-md font-bold uppercase tracking-widest">You</span>}
+                    </strong>
                 </div>
-                <div className="flex flex-col min-w-0">
-                  <strong className="text-sm truncate text-foreground">{peer.displayName}</strong>
-                  <span className="text-[10px] uppercase tracking-wider text-foreground/50">{peer.status}</span>
+                <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[11px] text-foreground/40 flex items-center gap-1">
+                        <Activity size={10} />
+                        {peer.latency}
+                    </span>
+                    <span className="text-[11px] text-foreground/30 truncate max-w-[80px]">
+                        {peer.route.split(':')[0] || peer.route}
+                    </span>
                 </div>
               </div>
-              <p className="text-xs font-mono text-foreground/60 truncate">{peer.route}</p>
-              <div className="flex flex-wrap gap-2 text-[10px]">
-                <span className="px-2 py-0.5 rounded bg-muted/50 border border-border/30 text-foreground/70">{peer.latency}</span>
-                <span className="px-2 py-0.5 rounded bg-muted/50 border border-border/30 text-foreground/70 truncate max-w-full">{peer.rooms.join(', ')}</span>
-              </div>
-              {peer.status !== 'self' ? (
+
+              {!isSelf && (
                 <button
-                  className="mt-1 w-full bg-secondary text-foreground text-xs font-bold py-2 rounded-lg hover:bg-secondary/80 border border-border/20 transition-all"
-                  type="button"
-                  onClick={() => onOpenDirectRoom(peer.displayName)}
+                  className="opacity-0 group-hover:opacity-100 absolute right-2 p-1.5 bg-background border border-border/50 text-foreground/70 hover:text-primary rounded-lg shadow-sm transition-all"
+                  title="Direct Message"
+                  onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenDirectRoom(displayName);
+                  }}
                 >
-                  Direct message
+                  <MessageSquare size={14} />
                 </button>
-              ) : null}
-            </article>
-          ))
+              )}
+            </div>
+          )
+        })
         ) : (
-          <div className="border border-dashed border-border/20 rounded-xl p-4 text-center space-y-2">
-            <strong className="block text-sm text-foreground/80">No participants yet</strong>
-            <p className="text-xs text-foreground/50">When peers join this channel, they will appear here.</p>
+          <div className="flex flex-col items-center justify-center h-40 text-center space-y-3 opacity-50">
+            <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                <Signal size={24} />
+            </div>
+            <div>
+                <strong className="block text-sm">No peers visible</strong>
+                <p className="text-xs max-w-[180px] mx-auto">Peers in this channel will appear here.</p>
+            </div>
           </div>
         )}
       </div>

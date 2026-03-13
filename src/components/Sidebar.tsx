@@ -1,4 +1,4 @@
-import { Search, Plus, User, Hash, Settings, Users } from 'lucide-react'
+import { Search, Compass, User, Hash, Settings, Users, LogOut } from 'lucide-react'
 import type { RoomSummary } from '../lib/schemas'
 import { cn } from '../lib/utils'
 
@@ -10,6 +10,7 @@ type SidebarProps = {
   onRoomSearchChange: (value: string) => void
   onOpenCreateChannel: () => void
   onSelectRoom: (roomId: string) => void
+  onLeaveRoom: (roomId: string) => void
   onOpenProfile: () => void
 }
 
@@ -21,6 +22,7 @@ export function Sidebar({
   onRoomSearchChange,
   onOpenCreateChannel,
   onSelectRoom,
+  onLeaveRoom,
   onOpenProfile,
 }: SidebarProps) {
   return (
@@ -47,29 +49,35 @@ export function Sidebar({
             className="w-full bg-background/50 border border-border/50 rounded-xl pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/40 transition-all"
             value={roomSearch}
             onChange={(event) => onRoomSearchChange(event.target.value)}
-            placeholder="Search channels..."
+            placeholder="Search joined channels..."
           />
         </div>
       </div>
 
       <div className="px-6 flex items-center justify-between mb-4">
-        <p className="text-xs font-bold uppercase tracking-widest text-foreground/40">Channels</p>
+        <p className="text-xs font-bold uppercase tracking-widest text-foreground/40">Joined Channels</p>
         <button 
           className="p-1 rounded-md hover:bg-primary/20 text-primary transition-colors" 
           type="button" 
           onClick={onOpenCreateChannel}
-          title="Create Channel"
+          title="Discover Channels"
         >
-          <Plus size={18} />
+          <Compass size={18} />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 space-y-1 pb-6">
+      <div className="flex-1 overflow-y-auto px-3 space-y-1 pb-6 custom-scrollbar">
         {channels.length > 0 ? (
-          channels.map((room) => renderRoom(room, selectedRoomId, onSelectRoom))
+          channels.map((room) => renderRoom(room, selectedRoomId, onSelectRoom, onLeaveRoom))
         ) : (
-          <div className="px-4 py-8 text-center">
-            <p className="text-sm font-medium text-foreground/40">No channels found</p>
+          <div className="px-4 py-8 text-center border border-dashed border-border/20 rounded-xl mx-3 mt-2">
+            <p className="text-sm font-medium text-foreground/60 mb-2">No channels joined</p>
+            <button 
+                onClick={onOpenCreateChannel}
+                className="text-xs bg-primary/10 text-primary px-3 py-1.5 rounded-lg font-bold hover:bg-primary/20 transition-colors"
+            >
+                Discover Channels
+            </button>
           </div>
         )}
 
@@ -90,46 +98,56 @@ function renderRoom(
   room: RoomSummary,
   selectedRoomId: string,
   onSelectRoom: (roomId: string) => void,
+  onLeaveRoom?: (roomId: string) => void
 ) {
   const selected = room.id === selectedRoomId
   return (
-    <button
-      className={cn(
-        "w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left transition-all group relative",
-        selected 
-          ? "bg-primary/10 text-primary ring-1 ring-primary/20" 
-          : "hover:bg-white/5 text-foreground/60 hover:text-foreground"
-      )}
-      key={room.id}
-      type="button"
-      onClick={() => onSelectRoom(room.id)}
-    >
-      <div className="flex items-center gap-3">
-        <div className={cn(
-          "w-8 h-8 rounded-lg flex items-center justify-center transition-colors",
-          selected ? "bg-primary/20 text-primary" : "bg-muted text-foreground/40 group-hover:bg-muted/80 group-hover:text-foreground/60"
-        )}>
-          {room.kind === 'system' ? <Settings size={16} /> : <Hash size={16} />}
+    <div className="group relative flex items-center" key={room.id}>
+      <button
+        className={cn(
+          "w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left transition-all",
+          selected 
+            ? "bg-primary/10 text-primary ring-1 ring-primary/20" 
+            : "hover:bg-white/5 text-foreground/60 hover:text-foreground"
+        )}
+        type="button"
+        onClick={() => onSelectRoom(room.id)}
+      >
+        <div className="flex items-center gap-3">
+          <div className={cn(
+            "w-8 h-8 rounded-lg flex items-center justify-center transition-colors",
+            selected ? "bg-primary/20 text-primary" : "bg-muted text-foreground/40 group-hover:bg-muted/80 group-hover:text-foreground/60"
+          )}>
+            {room.kind === 'system' ? <Settings size={16} /> : <Hash size={16} />}
+          </div>
+          <div className="flex flex-col">
+            <strong className="text-sm font-semibold truncate max-w-[120px]">{room.label}</strong>
+            <span className="text-[10px] opacity-60 flex items-center gap-1">
+              <Users size={10} />
+              {room.participants}
+            </span>
+          </div>
         </div>
-        <div className="flex flex-col">
-          <strong className="text-sm font-semibold truncate max-w-[140px]">{room.label}</strong>
-          <span className="text-[10px] opacity-60 flex items-center gap-1">
-            <Users size={10} />
-            {room.participants}
+        
+        {room.unread > 0 && (
+          <span className="bg-accent text-background text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.2rem] text-center">
+            {room.unread}
           </span>
-        </div>
-      </div>
-      
-      {room.unread > 0 && (
-        <span className="bg-accent text-background text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[1.2rem] text-center">
-          {room.unread}
-        </span>
+        )}
+      </button>
+
+      {onLeaveRoom && room.kind !== 'system' && (
+          <button
+            className="absolute right-2 opacity-0 group-hover:opacity-100 p-1.5 bg-background border border-border/50 text-foreground/70 hover:text-red-400 rounded-lg shadow-sm transition-all"
+            title="Leave Channel"
+            onClick={(e) => {
+                e.stopPropagation()
+                onLeaveRoom(room.id)
+            }}
+          >
+            <LogOut size={14} />
+          </button>
       )}
-      {!room.unread && room.kind !== 'system' && !selected && (
-        <span className="text-[10px] opacity-0 group-hover:opacity-40 transition-opacity uppercase font-bold tracking-tighter">
-          {room.kind}
-        </span>
-      )}
-    </button>
+    </div>
   )
 }

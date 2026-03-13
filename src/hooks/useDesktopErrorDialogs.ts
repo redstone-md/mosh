@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { showDesktopError } from '../lib/desktopDialogs'
+import toast from 'react-hot-toast'
 
 type UseDesktopErrorDialogsOptions = {
   errors: string[]
@@ -15,7 +15,10 @@ export function useDesktopErrorDialogs({ errors }: UseDesktopErrorDialogsOptions
         continue
       }
       shownErrors.current.add(normalized)
-      void showDesktopError('MOSH', normalized)
+      toast.error(normalized, {
+        duration: 5000,
+        position: 'bottom-right',
+      })
     }
   }, [errors])
 }
