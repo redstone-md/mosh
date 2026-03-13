@@ -17,6 +17,7 @@ type MossInit = unsafe extern "C" fn(*const c_char, *const u8, *const c_char) ->
 type MossStart = unsafe extern "C" fn(MossHandle) -> i32;
 type MossStop = unsafe extern "C" fn(MossHandle) -> i32;
 type MossSubscribe = unsafe extern "C" fn(MossHandle, *const c_char) -> i32;
+type MossUnsubscribe = unsafe extern "C" fn(MossHandle, *const c_char) -> i32;
 type MossConnect = unsafe extern "C" fn(MossHandle, *const c_char) -> i32;
 type MossPublish = unsafe extern "C" fn(MossHandle, *const c_char, *const u8, u32) -> i32;
 type MossSetCallback = unsafe extern "C" fn(MossHandle, Option<MossMessageCallback>) -> i32;
@@ -71,6 +72,7 @@ pub struct MossLibrary {
     start: MossStart,
     stop: MossStop,
     subscribe: MossSubscribe,
+    unsubscribe: MossUnsubscribe,
     connect: MossConnect,
     publish: MossPublish,
     set_callback: MossSetCallback,
@@ -134,6 +136,16 @@ impl MossLibrary {
         let code = unsafe { (self.subscribe)(handle, channel.as_ptr()) };
         if code != 0 {
             return Err(format!("Moss_Subscribe failed: {}", error_message(code)));
+        }
+        Ok(())
+    }
+
+    pub fn unsubscribe(&self, handle: MossHandle, channel: &str) -> Result<(), String> {
+        let channel =
+            CString::new(channel).map_err(|_| "channel contains NUL byte".to_string())?;
+        let code = unsafe { (self.unsubscribe)(handle, channel.as_ptr()) };
+        if code != 0 {
+            return Err(format!("Moss_Unsubscribe failed: {}", error_message(code)));
         }
         Ok(())
     }
@@ -227,6 +239,9 @@ impl MossLibrary {
         let subscribe = *lib
             .get::<MossSubscribe>(b"Moss_Subscribe\0")
             .map_err(|err| format!("missing Moss_Subscribe: {err}"))?;
+        let unsubscribe = *lib
+            .get::<MossUnsubscribe>(b"Moss_Unsubscribe\0")
+            .map_err(|err| format!("missing Moss_Unsubscribe: {err}"))?;
         let connect = *lib
             .get::<MossConnect>(b"Moss_Connect\0")
             .map_err(|err| format!("missing Moss_Connect: {err}"))?;
@@ -255,6 +270,7 @@ impl MossLibrary {
             start,
             stop,
             subscribe,
+            unsubscribe,
             connect,
             publish,
             set_callback,

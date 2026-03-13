@@ -55,6 +55,16 @@ export class DesktopStatusClient {
     return result.data
   }
 
+  async unsubscribeRoom(input: SubscribeRoomInput): Promise<DesktopSnapshot> {
+    const parsed = subscribeRoomInputSchema.parse(input)
+    const payload = await invoke('unsubscribe_room', parsed)
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid unsubscribe payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
   async connectPeer(input: ConnectPeerInput): Promise<DesktopSnapshot> {
     const parsed = connectPeerInputSchema.parse(input)
     const payload = await invoke('connect_peer', parsed)

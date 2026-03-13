@@ -157,6 +157,23 @@ impl DesktopShellState {
         Ok(self.snapshot())
     }
 
+    pub fn unsubscribe_room(&mut self, room: &str) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        library.unsubscribe(handle, room)?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.record_unsubscribed_room(room);
+            callbacks.note_runtime(format!("Unsubscribed desktop runtime from #{room}."));
+        }
+        self.publish_presence(library, handle)?;
+        Ok(self.snapshot())
+    }
+
     pub fn connect_peer(&mut self, addr: &str) -> Result<DesktopSnapshot, String> {
         let handle = self
             .handle

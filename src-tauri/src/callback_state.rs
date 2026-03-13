@@ -96,6 +96,16 @@ impl CallbackState {
         self.bump_room_participants();
     }
 
+    pub fn record_unsubscribed_room(&mut self, room: &str) {
+        let normalized = normalize_room_id(room);
+        self.self_rooms.remove(&normalized);
+        if let Some(peer) = self.self_peer_mut() {
+            let label = format!("#{normalized}");
+            peer.rooms.retain(|r| r != &label);
+        }
+        self.bump_room_participants();
+    }
+
     pub fn subscribed_rooms(&self) -> Vec<String> {
         self.self_rooms.iter().cloned().collect()
     }

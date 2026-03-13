@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChatHeader } from './components/ChatHeader'
 import { CreateChannelModal } from './components/CreateChannelModal'
@@ -8,13 +8,17 @@ import { OnboardingScreen } from './components/OnboardingScreen'
 import { PeerPanel } from './components/PeerPanel'
 import { ProfileEditorPanel } from './components/ProfileEditorPanel'
 import { QuickActionsPanel } from './components/QuickActionsPanel'
-import { RuntimePanel } from './components/RuntimePanel'
+import { Titlebar } from './components/Titlebar'
 import { Sidebar } from './components/Sidebar'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
 import { cn } from './lib/utils'
+
+import { Toaster } from 'react-hot-toast'
+
+import { MeshLoader } from './components/MeshLoader'
 
 type ShellView = 'chat' | 'profile'
 
@@ -87,14 +91,24 @@ export function App() {
   })
 
   const subscribeRoom = useMutation({
-    mutationFn: () => desktopStatusClient.subscribeRoom({ room: roomDraft }),
-    onSuccess: (data) => {
+    mutationFn: (roomToJoin?: string) => desktopStatusClient.subscribeRoom({ room: roomToJoin ?? roomDraft }),
+    onSuccess: (data, roomToJoin) => {
       queryClient.setQueryData(['desktop-snapshot'], data)
-      const normalizedRoom = roomDraft.replace(/^#/, '').toLowerCase()
+      const normalizedRoom = (roomToJoin ?? roomDraft).replace(/^#/, '').toLowerCase()
       setSelectedRoomId(normalizedRoom)
       setCreateModalOpen(false)
       setSidebarOpen(false)
       setSelectedView('chat')
+    },
+  })
+
+  const unsubscribeRoom = useMutation({
+    mutationFn: (roomToLeave: string) => desktopStatusClient.unsubscribeRoom({ room: roomToLeave }),
+    onSuccess: (data, roomToLeave) => {
+      queryClient.setQueryData(['desktop-snapshot'], data)
+      if (selectedRoomId === roomToLeave) {
+         setSelectedRoomId(data.settings.initialRoom)
+      }
     },
   })
 
@@ -149,13 +163,41 @@ export function App() {
     ),
   })
 
+  const peerNames = React.useMemo(() => {
+    if (!snapshot.data) return []
+    
+    const settings = snapshot.data.settings
+    const rooms = snapshot.data.rooms.length > 0 ? snapshot.data.rooms : [getFallbackRoom()]
+    const visibleRooms = rooms
+      .filter((room) => room.id !== '__moss_chat_control__')
+      .sort((left, right) => {
+        if (left.kind === 'system' && right.kind !== 'system') {
+          return 1
+        }
+        if (left.kind !== 'system' && right.kind === 'system') {
+          return -1
+        }
+        return left.label.localeCompare(right.label)
+      })
+    const computedVisibleRooms = visibleRooms.length > 0 ? visibleRooms : [getFallbackRoom()]
+    
+    const activeRoom =
+        computedVisibleRooms.find((room) => room.id === selectedRoomId) ??
+        computedVisibleRooms.find((room) => room.id === settings.initialRoom) ??
+        computedVisibleRooms[0]
+
+    const visiblePeers = snapshot.data.peers.filter((peer) =>
+        activeRoom.kind === 'system'
+        ? true
+        : peer.rooms.includes(activeRoom.label) || peer.rooms.includes(`#${activeRoom.id}`)
+    )
+    return visiblePeers.map(p => p.status === 'self' ? p.displayName.replace(' (you)', '') : p.displayName)
+  }, [snapshot.data, selectedRoomId])
+
   if (snapshot.isPending) {
     return (
       <main className="h-screen flex items-center justify-center bg-background text-foreground/40 font-medium">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-          Loading desktop runtime snapshot...
-        </div>
+        <MeshLoader />
       </main>
     )
   }
@@ -206,7 +248,12 @@ export function App() {
     return visibleRooms.filter((room) => room.label.toLowerCase().includes(needle))
   })()
 
-  const sidebarChannels = filteredRooms.filter((room) => room.kind !== 'system')
+  // Find joined channels
+  const activeChannelIds = new Set(data.diagnostics.activeChannels.map(c => c.replace(/^#/, '')))
+  // Also include the initial room to be safe, though activeChannels should have it
+  activeChannelIds.add(settings.initialRoom)
+
+  const sidebarChannels = filteredRooms.filter((room) => room.kind !== 'system' && activeChannelIds.has(room.id))
   const sidebarUtilityRooms = filteredRooms.filter((room) => room.kind === 'system')
 
   const activeRoom =
@@ -222,8 +269,7 @@ export function App() {
       : peer.rooms.includes(activeRoom.label) || peer.rooms.includes(`#${activeRoom.id}`),
   )
 
-  async function applyAndStartRuntime() {
-    const updatedSnapshot = await updateRuntimeSettings.mutateAsync()
+  async function applyAndStartRuntime() {    const updatedSnapshot = await updateRuntimeSettings.mutateAsync()
     setSelectedRoomId(updatedSnapshot.settings.initialRoom)
     if (updatedSnapshot.runtime.state !== 'Runtime online') {
       const runningSnapshot = await toggleRuntime.mutateAsync()
@@ -249,42 +295,57 @@ export function App() {
 
   if (showOnboarding) {
     return (
-      <OnboardingScreen
-        nickname={nicknameValue}
-        meshId={meshValue}
-        listenPort={listenPortValue}
-        initialRoom={initialRoomValue}
-        startupPeer={startupPeerValue}
-        trackerMode={trackerModeValue}
-        lanDiscoveryEnabled={lanDiscoveryValue}
-        configPreview={settings.configPreview}
-        errorNote={settingsError ?? runtimeError}
-        isSaving={updateRuntimeSettings.isPending || toggleRuntime.isPending}
-        onNicknameChange={setNicknameDraft}
-        onMeshIdChange={setMeshDraft}
-        onListenPortChange={setListenPortDraft}
-        onInitialRoomChange={setInitialRoomDraft}
-        onStartupPeerChange={setStartupPeerDraft}
-        onTrackerModeChange={setTrackerModeDraft}
-        onLanDiscoveryChange={setLanDiscoveryDraft}
-        onSave={() => void applyAndStartRuntime()}
-        onSkip={() => setOnboardingDismissed(true)}
-      />
+      <main className="h-screen w-screen flex flex-col bg-background overflow-hidden text-foreground">
+        <Titlebar
+          runtime={data.runtime}
+          onToggleRuntime={() => toggleRuntime.mutate()}
+          isBusy={toggleRuntime.isPending}
+          errorNote={runtimeError}
+        />
+        <div className="flex-1 flex overflow-y-auto">
+          <OnboardingScreen
+            nickname={nicknameValue}
+            meshId={meshValue}
+            listenPort={listenPortValue}
+            initialRoom={initialRoomValue}
+            startupPeer={startupPeerValue}
+            trackerMode={trackerModeValue}
+            lanDiscoveryEnabled={lanDiscoveryValue}
+            configPreview={settings.configPreview}
+            errorNote={settingsError ?? runtimeError}
+            isSaving={updateRuntimeSettings.isPending || toggleRuntime.isPending}
+            onNicknameChange={setNicknameDraft}
+            onMeshIdChange={setMeshDraft}
+            onListenPortChange={setListenPortDraft}
+            onInitialRoomChange={setInitialRoomDraft}
+            onStartupPeerChange={setStartupPeerDraft}
+            onTrackerModeChange={setTrackerModeDraft}
+            onLanDiscoveryChange={setLanDiscoveryDraft}
+            onSave={() => void applyAndStartRuntime()}
+            onSkip={() => setOnboardingDismissed(true)}
+          />
+        </div>
+      </main>
     )
   }
 
   return (
     <main className="h-screen w-screen flex flex-col bg-background overflow-hidden text-foreground">
-      <RuntimePanel
-        state={data.runtime.state}
-        summary={data.runtime.summary}
-        route={data.runtime.route}
-        natHint={data.runtime.natHint}
-        sharedBridge={data.runtime.sharedBridge}
-        isOnline={data.runtime.state === 'Runtime online'}
-        errorNote={runtimeError}
-        onToggle={() => toggleRuntime.mutate()}
+      <Toaster 
+        toastOptions={{
+          style: {
+            background: '#1a2b1e',
+            color: '#eef6ef',
+            border: '1px solid rgba(90, 198, 136, 0.2)',
+          },
+          success: { iconTheme: { primary: '#5ac688', secondary: '#050806' } },
+        }}
+      />
+      <Titlebar
+        runtime={data.runtime}
+        onToggleRuntime={() => toggleRuntime.mutate()}
         isBusy={toggleRuntime.isPending}
+        errorNote={runtimeError}
       />
 
       <section className="flex-1 flex min-h-0 relative">
@@ -304,6 +365,7 @@ export function App() {
               setSelectedView('chat')
               setSidebarOpen(false)
             }}
+            onLeaveRoom={(roomId) => unsubscribeRoom.mutate(roomId)}
             onOpenProfile={() => {
               setSelectedView('profile')
               setSidebarOpen(false)
@@ -382,8 +444,12 @@ export function App() {
                 room={activeRoom}
                 messages={visibleMessages}
                 draft={messageDraft}
+                peerNames={peerNames}
                 onDraftChange={setMessageDraft}
-                onSend={() => publishMessage.mutate()}
+                onSend={() => {
+                  publishMessage.mutate()
+                  setMessageDraft('')
+                }}
                 isSending={publishMessage.isPending}
                 errorNote={sendError}
               />
@@ -407,8 +473,9 @@ export function App() {
           isCreating={subscribeRoom.isPending}
           errorNote={subscribeRoom.error?.message}
           onRoomDraftChange={setRoomDraft}
-          onCreate={() => subscribeRoom.mutate()}
+          onCreate={(roomToJoin) => subscribeRoom.mutate(roomToJoin)}
           onClose={() => setCreateModalOpen(false)}
+          availableRooms={visibleRooms.filter(r => r.kind !== 'system' && !activeChannelIds.has(r.id))}
         />
       )}
     </main>

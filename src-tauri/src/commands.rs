@@ -49,6 +49,21 @@ pub fn subscribe_room(
 }
 
 #[tauri::command]
+pub fn unsubscribe_room(
+    state: State<'_, SharedDesktopState>,
+    room: String,
+) -> Result<DesktopSnapshot, String> {
+    let room = room.trim().trim_start_matches('#').to_lowercase();
+    if room.is_empty() {
+        return Err("room is required".to_string());
+    }
+    let mut state = state
+        .lock()
+        .map_err(|_| "desktop state lock poisoned".to_string())?;
+    Ok(state.unsubscribe_room(&room)?)
+}
+
+#[tauri::command]
 pub fn connect_peer(
     state: State<'_, SharedDesktopState>,
     addr: String,

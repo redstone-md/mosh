@@ -45,7 +45,7 @@ export function OnboardingScreen({
   onSkip,
 }: OnboardingScreenProps) {
   return (
-    <main className="min-h-screen bg-background flex flex-col items-center justify-center p-6 sm:p-12 overflow-y-auto">
+    <main className="w-full min-h-full bg-background flex flex-col items-center justify-center p-6 sm:p-12 overflow-y-auto">
       <div className="w-full max-w-4xl space-y-12 py-12">
         <header className="text-center space-y-4">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 text-primary mb-4">
