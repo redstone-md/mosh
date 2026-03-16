@@ -19,6 +19,7 @@ import { useMeshInviteActions } from '../../hooks/useMeshInviteActions'
 import type { MediaSessionState } from '../../hooks/useMediaSession'
 import type { VerifiedArchive } from '../../lib/appShellStorage'
 import { buildGlobalSearchEntries, type GlobalSearchResult } from '../../lib/globalMessageSearch'
+import type { DisplayMessage } from '../../lib/messageDelivery'
 import type {
   DesktopSnapshot,
   Message,
@@ -63,13 +64,14 @@ type MainSurfaceProps = {
   visibleRooms: RoomSummary[]
   activeRoom: RoomSummary
   visiblePeers: PeerSummary[]
+  currentUser: string
   mentionablePeerNames: string[]
   createDialogOpen: boolean
   settingsOpen: boolean
   archiveState: {
     archive: VerifiedArchive | null
-    mergedMessages: DesktopSnapshot['messages']
   }
+  displayMessages: DisplayMessage[]
   archiveRefreshToken: number
   identityFingerprint: string
   mediaLabel: string
@@ -106,6 +108,8 @@ type MainSurfaceProps = {
   onApplyInvite: (invite: MeshInvitePayload) => Promise<void>
   onDraftChange: (value: string) => void
   onSendMessage: () => void
+  onRetryMessage: (clientId: string) => void
+  onDismissMessage: (clientId: string) => void
   onTogglePinMessage: (messageId: string) => void
   onToggleMuteRoom: (roomId: string) => void
   onTogglePeerTrust: (peer: PeerSummary) => void
@@ -134,10 +138,12 @@ export function MainSurface({
   visibleRooms,
   activeRoom,
   visiblePeers,
+  currentUser,
   mentionablePeerNames,
   createDialogOpen,
   settingsOpen,
   archiveState,
+  displayMessages,
   archiveRefreshToken,
   identityFingerprint,
   mediaLabel,
@@ -174,6 +180,8 @@ export function MainSurface({
   onApplyInvite,
   onDraftChange,
   onSendMessage,
+  onRetryMessage,
+  onDismissMessage,
   onTogglePinMessage,
   onToggleMuteRoom,
   onTogglePeerTrust,
@@ -273,7 +281,8 @@ export function MainSurface({
         <ConversationView
           room={activeRoom}
           peers={visiblePeers}
-          messages={archiveState.mergedMessages}
+          messages={displayMessages}
+          currentUser={currentUser}
           archiveFingerprint={archiveState.archive?.signerFingerprint}
           archiveVerified={archiveState.archive?.verified}
           externalFocusMessageId={
@@ -291,6 +300,8 @@ export function MainSurface({
           errorNote={publishError}
           onDraftChange={onDraftChange}
           onSend={onSendMessage}
+          onRetryMessage={onRetryMessage}
+          onDismissMessage={onDismissMessage}
           onTogglePinMessage={onTogglePinMessage}
           onToggleMute={() => onToggleMuteRoom(activeRoom.id)}
           onResolveExternalFocus={() => setFocusTarget(null)}

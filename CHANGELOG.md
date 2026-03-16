@@ -29,3 +29,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added trust-aware identity transfer metadata, so handoff and import screens now show the source fingerprint, export time, and a direct current-to-incoming identity replacement summary.
 - Added a persisted device handoff history in storage settings, so MOSH now records recent identity exports/imports, the transfer source, replaced fingerprint, and the last accepted handoff on this machine.
 - Added identity rollback recovery in storage settings, so MOSH now preserves the previous signing identity before imports, lets users restore it locally, and records rollback events in the device handoff history.
+- Added an outgoing message delivery pipeline with optimistic local outbox, failed-send recovery, and `sending / delivered / archived` states in the chat timeline.

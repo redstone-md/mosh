@@ -8,6 +8,7 @@ import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
 import { useIdentityTransferFlow } from './hooks/useIdentityTransferFlow'
 import { useInviteFlow } from './hooks/useInviteFlow'
+import { useMessageOutbox } from './hooks/useMessageOutbox'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
 import { usePeerTrustState } from './hooks/usePeerTrustState'
@@ -98,7 +99,6 @@ export function App() {
       }),
     onSuccess: (data) => {
       queryClient.setQueryData(['desktop-snapshot'], data)
-      setMessageDraft('')
     },
   })
 
@@ -220,6 +220,17 @@ export function App() {
     trustedPeers: preferences.trustedPeers,
     setPreferences,
   })
+  const messageOutbox = useMessageOutbox({
+    currentUser: runtimeDraft.nickname,
+    liveMessages: data?.messages ?? [],
+    publishMessage: async (roomId, body) => {
+      await publishMessage.mutateAsync({ roomId, body })
+    },
+  })
+  const displayMessages = useMemo(
+    () => messageOutbox.buildDisplayMessages(activeRoom.id, archiveState.mergedMessages, archiveState.archive?.messages.map((message) => message.id) ?? []),
+    [activeRoom.id, archiveState.archive?.messages, archiveState.mergedMessages, messageOutbox.buildDisplayMessages],
+  )
 
   useEffect(() => {
     if (JSON.stringify(reconciledGroups) === JSON.stringify(preferences.groups)) {
@@ -255,11 +266,7 @@ export function App() {
     subscribeRoom,
   })
   const identityTransferFlow = useIdentityTransferFlow({
-    copy: {
-      invalidLink: activeCopy.identityTransfer.deepLinkInvalid,
-      imported: activeCopy.identityTransfer.deepLinkImported,
-      importFailed: activeCopy.identityTransfer.importFailed,
-    },
+    copy: { invalidLink: activeCopy.identityTransfer.deepLinkInvalid, imported: activeCopy.identityTransfer.deepLinkImported, importFailed: activeCopy.identityTransfer.importFailed },
     currentIdentityFingerprint: identityFingerprint,
     onImported: reload,
     onRecordEvent: recordIdentityTransferEvent,
@@ -292,12 +299,9 @@ export function App() {
   }
 
   if (shellPreferences.isPending || snapshot.isPending) return <ShellI18nFrame {...shellFrameProps}><LoadingScreen /></ShellI18nFrame>
-  if (shellPreferences.error instanceof Error) return <ShellI18nFrame {...shellFrameProps}><BootstrapErrorScreen message={shellPreferences.error.message} /></ShellI18nFrame>
-  if (snapshot.isError) return <ShellI18nFrame {...shellFrameProps}><BootstrapErrorScreen message={snapshot.error.message} /></ShellI18nFrame>
+  if (shellPreferences.error instanceof Error || snapshot.isError) return <ShellI18nFrame {...shellFrameProps}><BootstrapErrorScreen message={shellPreferences.error instanceof Error ? shellPreferences.error.message : snapshot.error?.message ?? activeCopy.app.bootstrapError} /></ShellI18nFrame>
 
-  if (!data) {
-    return null
-  }
+  if (!data) return null
 
   async function handleStartFromOnboarding() {
     const updated = await updateRuntimeSettings.mutateAsync(preferences.runtimeDraft)
@@ -324,10 +328,9 @@ export function App() {
     if (!activeRoom || messageDraft.trim().length === 0) {
       return
     }
-    await publishMessage.mutateAsync({
-      roomId: activeRoom.id,
-      body: messageDraft.trim(),
-    })
+    const nextDraft = messageDraft.trim()
+    setMessageDraft('')
+    await messageOutbox.sendMessage(activeRoom.id, nextDraft)
   }
 
   function handleThemeChange(theme: ThemeId) { setPreferences((current) => ({ ...current, theme })) }
@@ -427,10 +430,12 @@ export function App() {
         visibleRooms={visibleRooms}
         activeRoom={activeRoom}
         visiblePeers={visiblePeers}
+        currentUser={runtimeDraft.nickname}
         mentionablePeerNames={mentionablePeerNames}
         createDialogOpen={createDialogOpen}
         settingsOpen={settingsOpen}
         archiveState={archiveState}
+        displayMessages={displayMessages}
         archiveRefreshToken={archiveRefreshKey}
         identityFingerprint={identityFingerprint}
         mediaLabel={mediaLabel}
@@ -497,6 +502,8 @@ export function App() {
         onApplyInvite={inviteFlow.applyInvite}
         onDraftChange={setMessageDraft}
         onSendMessage={() => void handleSendMessage()}
+        onRetryMessage={(clientId) => void messageOutbox.retryMessage(clientId)}
+        onDismissMessage={messageOutbox.dismissMessage}
         onTogglePinMessage={(messageId) =>
           setPreferences((current) => ({
             ...current,

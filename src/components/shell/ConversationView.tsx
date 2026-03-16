@@ -4,6 +4,7 @@ import { BellOff, ChevronDown, ChevronUp, MonitorUp, Phone, Pin, Search, Setting
 import { formatRoomTitle } from '../../lib/chatPresentation'
 import { describeArchiveStateLabel } from '../../lib/i18n'
 import { focusMessageElement } from '../../lib/messageFocus'
+import type { DisplayMessage } from '../../lib/messageDelivery'
 import { extractPlainText } from '../../lib/messageSearch'
 import type { ChannelType } from '../../lib/appShellSchemas'
 import { searchMessages } from '../../lib/messageSearch'
@@ -17,7 +18,8 @@ import { MessagePanel } from '../MessagePanel'
 type ConversationViewProps = {
   room: RoomSummary | undefined
   peers: PeerSummary[]
-  messages: Message[]
+  messages: DisplayMessage[]
+  currentUser: string
   archiveFingerprint?: string
   archiveVerified?: boolean
   externalFocusMessageId?: string
@@ -34,6 +36,8 @@ type ConversationViewProps = {
   onDraftChange: (value: string) => void
   onSend: () => void
   onTogglePinMessage: (messageId: string) => void
+  onRetryMessage: (clientId: string) => void
+  onDismissMessage: (clientId: string) => void
   onToggleMute: () => void
   onResolveExternalFocus: () => void
   onOpenSettings: () => void
@@ -44,6 +48,7 @@ type ConversationViewProps = {
 export function ConversationView({
   room,
   messages,
+  currentUser,
   archiveFingerprint,
   archiveVerified,
   externalFocusMessageId,
@@ -60,6 +65,8 @@ export function ConversationView({
   onDraftChange,
   onSend,
   onTogglePinMessage,
+  onRetryMessage,
+  onDismissMessage,
   onToggleMute,
   onResolveExternalFocus,
   onOpenSettings,
@@ -251,6 +258,7 @@ export function ConversationView({
         key={`${room?.id ?? 'room'}:${language}`}
         room={room}
         messages={messages}
+        currentUser={currentUser}
         matchedMessageIds={matchedMessageIds}
         activeSearchMessageId={activeSearchResult?.messageId}
         activeSearchPreview={activeSearchResult?.preview}
@@ -261,6 +269,8 @@ export function ConversationView({
         onDraftChange={onDraftChange}
         onSend={onSend}
         onTogglePinMessage={onTogglePinMessage}
+        onRetryMessage={onRetryMessage}
+        onDismissMessage={onDismissMessage}
         onResolveExternalFocus={onResolveExternalFocus}
         isSending={isSending}
         errorNote={errorNote}

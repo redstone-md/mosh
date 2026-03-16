@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import type { Message, RoomSummary } from '../lib/schemas'
-import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply, Pin } from 'lucide-react'
+import type { RoomSummary } from '../lib/schemas'
+import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply, Pin, RotateCcw, X } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { formatRoomTitle } from '../lib/chatPresentation'
 import {
@@ -9,6 +9,7 @@ import {
   isImageAttachment,
 } from '../lib/messageAttachments'
 import { focusMessageElement } from '../lib/messageFocus'
+import type { DisplayMessage } from '../lib/messageDelivery'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -21,7 +22,8 @@ import { useI18n } from './I18nProvider'
 
 type MessagePanelProps = {
   room: RoomSummary | undefined
-  messages: Message[]
+  messages: DisplayMessage[]
+  currentUser: string
   matchedMessageIds?: string[]
   activeSearchMessageId?: string
   activeSearchPreview?: string
@@ -32,6 +34,8 @@ type MessagePanelProps = {
   onDraftChange: (value: string) => void
   onSend: () => void
   onTogglePinMessage: (messageId: string) => void
+  onRetryMessage: (clientId: string) => void
+  onDismissMessage: (clientId: string) => void
   onResolveExternalFocus?: () => void
   isSending: boolean
   errorNote?: string
@@ -40,6 +44,7 @@ type MessagePanelProps = {
 export function MessagePanel({
   room,
   messages,
+  currentUser,
   matchedMessageIds = [],
   activeSearchMessageId,
   activeSearchPreview,
@@ -50,6 +55,8 @@ export function MessagePanel({
   onDraftChange,
   onSend,
   onTogglePinMessage,
+  onRetryMessage,
+  onDismissMessage,
   onResolveExternalFocus,
   isSending,
   errorNote,
@@ -188,7 +195,7 @@ export function MessagePanel({
     navigator.clipboard.writeText(tempDiv.textContent || tempDiv.innerText || "")
   }, [])
 
-  const handleReply = useCallback((message: Message) => {
+  const handleReply = useCallback((message: DisplayMessage) => {
     const tempDiv = document.createElement("div")
     tempDiv.innerHTML = message.body
     const text = tempDiv.textContent || tempDiv.innerText || ""
@@ -238,7 +245,7 @@ export function MessagePanel({
                 )} aria-hidden="true">
                   {avatarLabel(message.author)}
                 </div>
-                <div className="flex-1 space-y-1 min-w-0">
+                <div className="flex-1 min-w-0 space-y-1">
                   <div className="flex items-center gap-3">
                     <span className="font-bold text-[15px] tracking-tight text-foreground/90">
                       {message.author}
@@ -253,8 +260,7 @@ export function MessagePanel({
                       {message.timestamp}
                     </span>
                   </div>
-                  
-                  {/* Rich Text Render */}
+
                   <div 
                     className={cn(
                         "text-[15px] leading-relaxed text-foreground/80 prose prose-sm dark:prose-invert max-w-none break-words",
@@ -282,6 +288,13 @@ export function MessagePanel({
                       }),
                     }}
                   />
+                  {renderDeliveryState(
+                    message,
+                    currentUser,
+                    copy,
+                    onRetryMessage,
+                    onDismissMessage,
+                  )}
                 </div>
 
                 {/* Hover Actions */}
@@ -403,6 +416,53 @@ export function MessagePanel({
         </div>
       </div>
     </section>
+  )
+}
+
+function renderDeliveryState(
+  message: DisplayMessage,
+  currentUser: string,
+  copy: ReturnType<typeof useI18n>['copy'],
+  onRetryMessage: (clientId: string) => void,
+  onDismissMessage: (clientId: string) => void,
+) {
+  if (message.author.trim().toLowerCase() !== currentUser.trim().toLowerCase() || !message.deliveryState) {
+    return null
+  }
+
+  const label =
+    message.deliveryState === 'sending'
+      ? copy.messages.sending
+      : message.deliveryState === 'archived'
+        ? copy.messages.archived
+        : message.deliveryState === 'failed'
+          ? copy.messages.failed
+          : copy.messages.delivered
+
+  return (
+    <div className="flex items-center gap-2 pt-1 text-[11px] text-[var(--muted-foreground)]">
+      <span>{label}</span>
+      {message.deliveryState === 'failed' && message.pendingClientId ? (
+        <>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted"
+            onClick={() => onRetryMessage(message.pendingClientId!)}
+          >
+            <RotateCcw size={12} />
+            {copy.messages.retrySend}
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[11px] text-[var(--muted-foreground)] transition-colors hover:bg-muted"
+            onClick={() => onDismissMessage(message.pendingClientId!)}
+          >
+            <X size={12} />
+            {copy.messages.dismissFailed}
+          </button>
+        </>
+      ) : null}
+    </div>
   )
 }
 
