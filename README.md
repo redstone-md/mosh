@@ -70,6 +70,16 @@ Release artifacts are built only from tags. The release workflow packages:
 - bundled MOSH installers/packages with the matching `MOSS` runtime already embedded
 - build artifacts for Linux x64/arm64, Windows x64/arm64, macOS Intel, and macOS Apple Silicon
 
+## Deep links
+
+MOSH now registers the `mosh://` scheme for desktop builds and can ingest invite links such as:
+
+```text
+mosh://invite/<encoded-payload>
+```
+
+Installed builds handle the scheme via the Tauri deep-link plugin, and development builds register it at runtime on Windows and Linux.
+
 ## Desktop contract
 
 Current scope:
