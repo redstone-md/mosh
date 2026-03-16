@@ -55,6 +55,15 @@ export const signedRoomArchiveSchema = z.object({
 })
 
 export const archiveStoreSchema = z.record(z.string(), signedRoomArchiveSchema)
+export const storageOverviewSchema = z.object({
+  baseDir: z.string().min(1),
+  settingsPath: z.string().min(1),
+  identityPath: z.string().min(1),
+  archivesDir: z.string().min(1),
+  archiveCount: z.number().int().nonnegative(),
+  hasSettings: z.boolean(),
+  hasSigningIdentity: z.boolean(),
+})
 
 export type ThemeId = z.infer<typeof themeIdSchema>
 export type LanguagePreference = z.infer<typeof languagePreferenceSchema>
@@ -65,3 +74,4 @@ export type ShellPreferences = z.infer<typeof shellPreferencesSchema>
 export type StoredMessage = z.infer<typeof storedMessageSchema>
 export type SigningIdentity = z.infer<typeof signingIdentitySchema>
 export type SignedRoomArchive = z.infer<typeof signedRoomArchiveSchema>
+export type StorageOverview = z.infer<typeof storageOverviewSchema>

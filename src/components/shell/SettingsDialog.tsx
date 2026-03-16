@@ -13,6 +13,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { RuntimeSettingsForm } from './RuntimeSettingsForm'
+import { StoragePanel } from './StoragePanel'
 import { WorkspaceEditor } from './WorkspaceEditor'
 
 type SettingsDialogProps = {
@@ -86,6 +87,7 @@ export function SettingsDialog({
             <TabsTrigger value="workspace">{copy.common.workspace}</TabsTrigger>
             <TabsTrigger value="runtime">{copy.common.runtime}</TabsTrigger>
             <TabsTrigger value="archive">{copy.common.archive}</TabsTrigger>
+            <TabsTrigger value="storage">{copy.common.storage}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="appearance" className="space-y-4">
@@ -180,6 +182,10 @@ export function SettingsDialog({
                 </p>
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="storage">
+            <StoragePanel />
           </TabsContent>
         </Tabs>
       </DialogContent>
