@@ -7,10 +7,10 @@ import { OnboardingSurface } from './components/shell/OnboardingSurface'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
 import { useMediaSession } from './hooks/useMediaSession'
+import { useShellPreferences } from './hooks/useShellPreferences'
 import { useSignedChatArchive } from './hooks/useSignedChatArchive'
 import { findRoomById, getVisiblePeers, sameRuntimeDraft, selectRoomFallback, toRuntimeDraft } from './lib/appShellSelectors'
-import { ensureSigningIdentity } from './lib/appShellStorage'
-import { hasPersistedPreferences, loadPreferences, reconcileGroups, reconcileRoomTypes, savePreferences } from './lib/appShellStorage'
+import { reconcileGroups, reconcileRoomTypes } from './lib/appShellStorage'
 import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
@@ -22,12 +22,11 @@ export function App() {
   const queryClient = useQueryClient()
   const settingsHydratedRef = useRef(false)
   const runtimeAutoStartRef = useRef(false)
-  const [preferences, setPreferences] = useState(loadPreferences)
+  const shellPreferences = useShellPreferences()
+  const { preferences, setPreferences, identityFingerprint } = shellPreferences
   const [messageDraft, setMessageDraft] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [identityFingerprint, setIdentityFingerprint] = useState<string>('')
-  const [playOnboardingIntro] = useState(() => !hasPersistedPreferences())
   const systemLanguage = useMemo(() => detectSystemLanguage(), [])
 
   const snapshot = useQuery({
@@ -99,16 +98,6 @@ export function App() {
   const mediaSession = useMediaSession(snapshot.data)
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      savePreferences(preferences)
-    }, 120)
-
-    return () => {
-      window.clearTimeout(timeout)
-    }
-  }, [preferences])
-
-  useEffect(() => {
     document.documentElement.dataset.theme = preferences.theme
   }, [preferences.theme])
   const activeLanguage = resolveAppLanguage(preferences.languagePreference, systemLanguage)
@@ -118,13 +107,7 @@ export function App() {
   }, [activeLanguage])
 
   useEffect(() => {
-    void ensureSigningIdentity().then((identity) => {
-      setIdentityFingerprint(identity.fingerprint)
-    })
-  }, [])
-
-  useEffect(() => {
-    if (!snapshot.data || settingsHydratedRef.current) {
+    if (shellPreferences.isPending || !snapshot.data || settingsHydratedRef.current) {
       return
     }
     settingsHydratedRef.current = true
@@ -134,7 +117,7 @@ export function App() {
         settingsHydratedRef.current = false
       })
     }
-  }, [preferences.runtimeDraft, snapshot.data, updateRuntimeSettings])
+  }, [preferences.runtimeDraft, shellPreferences.isPending, snapshot.data, updateRuntimeSettings])
 
   useEffect(() => {
     if (!snapshot.data || !preferences.onboardingCompleted) {
@@ -160,6 +143,7 @@ export function App() {
   useDesktopErrorDialogs({
     errors: [
       snapshot.error instanceof Error ? snapshot.error.message : undefined,
+      shellPreferences.error instanceof Error ? shellPreferences.error.message : undefined,
       toggleRuntime.error?.message,
       updateRuntimeSettings.error?.message,
       subscribeRoom.error?.message,
@@ -246,7 +230,7 @@ export function App() {
     }))
   }, [preferences.roomTypes, reconciledRoomTypes])
 
-  if (snapshot.isPending) {
+  if (shellPreferences.isPending || snapshot.isPending) {
     return (
       <I18nProvider
         language={activeLanguage}
@@ -255,6 +239,19 @@ export function App() {
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
       >
         <LoadingScreen />
+      </I18nProvider>
+    )
+  }
+
+  if (shellPreferences.error instanceof Error) {
+    return (
+      <I18nProvider
+        language={activeLanguage}
+        systemLanguage={systemLanguage}
+        languagePreference={preferences.languagePreference}
+        onLanguagePreferenceChange={handleLanguagePreferenceChange}
+      >
+        <BootstrapErrorScreen message={shellPreferences.error.message} />
       </I18nProvider>
     )
   }
@@ -389,7 +386,7 @@ export function App() {
           runtime={data.runtime}
           theme={preferences.theme}
           languagePreference={preferences.languagePreference}
-          playIntro={playOnboardingIntro}
+          playIntro={!shellPreferences.hasPersistedPreferences}
           runtimeDraft={runtimeDraft}
           isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
           formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
