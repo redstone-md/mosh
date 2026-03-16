@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractInviteDeepLinks } from './deepLinkInvites'
+import { buildMeshInvite } from './meshInvite'
+import { appendUniqueDeepLinkInvites, extractInviteDeepLinks } from './deepLinkInvites'
 
 describe('deepLinkInvites', () => {
   it('filters unrelated URLs and trims invite links', () => {
@@ -21,5 +22,27 @@ describe('deepLinkInvites', () => {
         'mosh://invite/beta',
       ]),
     ).toEqual(['mosh://invite/alpha', 'mosh://invite/beta'])
+  })
+
+  it('appends only deep link invites that are not already queued', () => {
+    const invite = buildMeshInvite('operator', {
+      nickname: 'operator',
+      meshId: 'mosh',
+      listenPort: 0,
+      initialRoom: 'lobby',
+      startupPeer: '',
+      trackerMode: 'default',
+      lanDiscoveryEnabled: true,
+    })
+
+    expect(
+      appendUniqueDeepLinkInvites(
+        [{ sourceUrl: 'mosh://invite/alpha', invite }],
+        [
+          { sourceUrl: 'mosh://invite/alpha', invite },
+          { sourceUrl: 'mosh://invite/beta', invite },
+        ],
+      ),
+    ).toHaveLength(2)
   })
 })
