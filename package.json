@@ -5,12 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run build:web",
+    "build:web": "tsc && vite build",
     "test": "vitest run",
     "preview": "vite preview",
+    "moss:sync": "git submodule update --init --remote --recursive moss",
+    "moss:bundle": "node ./scripts/build-moss-runtime.mjs",
+    "desktop:prepare": "npm run moss:sync && npm run moss:bundle",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:dev": "npm run desktop:prepare && tauri dev",
+    "tauri:build": "npm run desktop:prepare && tauri build"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1",

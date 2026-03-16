@@ -25,35 +25,18 @@ jobs:
           - os: ubuntu-22.04
             label: linux-amd64
             rust-target: x86_64-unknown-linux-gnu
-            binary: src-tauri/target/x86_64-unknown-linux-gnu/release/mosh
-            shared-output: libmoss.so
-            shared-header: libmoss.h
-            goos: linux
-            goarch: amd64
+          - os: ubuntu-22.04-arm
+            label: linux-arm64
+            rust-target: aarch64-unknown-linux-gnu
           - os: windows-latest
             label: windows-amd64
             rust-target: x86_64-pc-windows-msvc
-            binary: src-tauri/target/x86_64-pc-windows-msvc/release/mosh.exe
-            shared-output: moss.dll
-            shared-header: moss.h
-            goos: windows
-            goarch: amd64
           - os: macos-15-intel
             label: macos-amd64
             rust-target: x86_64-apple-darwin
-            binary: src-tauri/target/x86_64-apple-darwin/release/mosh
-            shared-output: libmoss.dylib
-            shared-header: libmoss.h
-            goos: darwin
-            goarch: amd64
           - os: macos-latest
             label: macos-arm64
             rust-target: aarch64-apple-darwin
-            binary: src-tauri/target/aarch64-apple-darwin/release/mosh
-            shared-output: libmoss.dylib
-            shared-header: libmoss.h
-            goos: darwin
-            goarch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -96,24 +79,24 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build shared runtime from submodule
-        working-directory: moss
-        env:
-          CGO_ENABLED: "1"
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: go build -buildmode=c-shared -o ../${{ matrix.shared-output }} ./cmd/moss-ffi
+      - name: Sync submodule to latest MOSS main
+        run: npm run moss:sync
 
-      - name: Build Tauri desktop binary
-        run: npx tauri build --no-bundle --target ${{ matrix.rust-target }}
+      - name: Build and attach shared runtime
+        run: node ./scripts/build-moss-runtime.mjs --target ${{ matrix.rust-target }}
+
+      - name: Build frontend
+        run: npm run build:web
+
+      - name: Build Tauri desktop bundle
+        run: npx tauri build --target ${{ matrix.rust-target }}
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
           name: mosh-${{ matrix.label }}
           path: |
-            ${{ matrix.binary }}
-            ${{ matrix.shared-output }}
-            ${{ matrix.shared-header }}
+            src-tauri/target/${{ matrix.rust-target }}/release/bundle/**/*
+            src-tauri/resources/moss/*
             README.md
           if-no-files-found: error

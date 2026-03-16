@@ -4,7 +4,7 @@
 
 ## Repository layout
 
-- `moss/` - `MOSS` Git submodule pinned to a compatible runtime revision
+- `moss/` - `MOSS` Git submodule tracked against `origin/main`
 - `src/` - React frontend
 - `src-tauri/` - Rust/Tauri desktop backend
 
@@ -13,6 +13,22 @@
 ```bash
 git submodule update --init --recursive
 npm install
+```
+
+## Desktop build flow
+
+MOSH now prepares the bundled runtime automatically before desktop builds:
+
+1. sync `moss/` to the latest `origin/main`
+2. build the platform-specific shared runtime from `moss`
+3. attach the runtime into `src-tauri/resources/moss`
+4. build and bundle the Tauri desktop app
+
+Local commands:
+
+```bash
+npm run desktop:prepare
+npm run tauri:build
 ```
 
 ## Build the frontend
@@ -38,29 +54,21 @@ The desktop backend loads the `MOSS` shared runtime dynamically. It checks:
 - `MOSS_SHARED_PATH`
 - the desktop executable directory
 - the current working directory
+- `src-tauri/resources/moss/`
 - the local `moss/` submodule directory
 
-To build the runtime from the bundled submodule:
+To build and attach the runtime from the bundled submodule:
 
 ```bash
-cd moss
-go build -buildmode=c-shared -o ../libmoss.so ./cmd/moss-ffi
-```
-
-On Windows:
-
-```powershell
-cd moss
-go build -buildmode=c-shared -o ..\moss.dll .\cmd\moss-ffi
+npm run moss:bundle
 ```
 
 ## Release flow
 
 Release artifacts are built only from tags. The release workflow packages:
 
-- the `MOSH` desktop binary
-- the matching `MOSS` shared runtime
-- the generated C header from `MOSS`
+- bundled MOSH installers/packages with the matching `MOSS` runtime already embedded
+- build artifacts for Linux x64/arm64, Windows x64, macOS Intel, and macOS Apple Silicon
 
 ## Desktop contract
 

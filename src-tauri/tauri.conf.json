@@ -5,7 +5,7 @@
   "identifier": "md.redstone.mosh",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:web",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
@@ -27,7 +27,7 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "../moss.dll"
+      "resources/moss/*"
     ],
     "icon": [
       "icons/32x32.png",

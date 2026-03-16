@@ -16,6 +16,8 @@ moss.h
 libmoss.so
 libmoss.h
 libmoss.dylib
+src-tauri/resources/moss/*
+!src-tauri/resources/moss/.gitkeep
 
 # Editor directories and files
 .vscode/*

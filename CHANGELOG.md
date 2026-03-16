@@ -18,3 +18,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added local read-state tracking and room mute controls, including unread badges driven by persisted room activity and muted-room suppression for desktop notifications.
 - Added a local peer trust registry with trust/revoke actions, trusted/new/name-changed states in the member list, and a dedicated trust tab in settings.
 - Added a mesh invite flow for copying the current room/runtime setup and applying incoming `mosh://invite/...` links without manually re-entering mesh settings.
+- Reworked desktop packaging so builds now sync `moss` from `origin/main`, bundle the platform runtime into MOSH automatically, and produce cross-platform release artifacts with embedded `MOSS` libraries.
