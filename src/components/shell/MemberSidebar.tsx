@@ -1,31 +1,42 @@
-import { Fingerprint, MessageSquare, Radio } from 'lucide-react'
+import { Fingerprint, MessageSquare, Radio, ShieldCheck, ShieldQuestion } from 'lucide-react'
 
 import { describeArchiveStateLabel, localizePeerStatus } from '../../lib/i18n'
 import { initialsFromName } from '../../lib/chatPresentation'
+import type { PeerTrustState } from '../../lib/peerTrust'
+import { formatPeerFingerprint } from '../../lib/peerTrust'
 import type { PeerSummary, RoomSummary, VoiceRoom } from '../../lib/schemas'
 import { useI18n } from '../I18nProvider'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { ScrollArea } from '../ui/scroll-area'
+import { TrustBadge } from './PeerTrustPanel'
 
 type MemberSidebarProps = {
   room: RoomSummary | undefined
   peers: PeerSummary[]
+  trustByPeerId: Record<string, PeerTrustState>
+  trustedCount: number
+  reviewCount: number
   archiveFingerprint?: string
   archiveVerified?: boolean
   mediaLabel: string
   activeVoiceRoom: VoiceRoom | null
+  onTogglePeerTrust: (peer: PeerSummary) => void
   onOpenDirectRoom: (target: string) => void
 }
 
 export function MemberSidebar({
   room,
   peers,
+  trustByPeerId,
+  trustedCount,
+  reviewCount,
   archiveFingerprint,
   archiveVerified,
   mediaLabel,
   activeVoiceRoom,
+  onTogglePeerTrust,
   onOpenDirectRoom,
 }: MemberSidebarProps) {
   const { copy } = useI18n()
@@ -62,6 +73,15 @@ export function MemberSidebar({
             </p>
           ) : null}
         </div>
+        <div className="rounded-md border border-border bg-[var(--panel-strong)] p-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <ShieldCheck className="h-4 w-4" />
+            {copy.common.trust}
+          </div>
+          <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+            {copy.trust.summary(trustedCount, reviewCount)}
+          </p>
+        </div>
       </div>
       <ScrollArea className="flex-1">
         <div className="space-y-1 p-3">
@@ -71,11 +91,34 @@ export function MemberSidebar({
                 <AvatarFallback>{initialsFromName(peer.displayName)}</AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{peer.displayName}</p>
-                <p className="truncate text-xs text-[var(--muted-foreground)]">{peer.route}</p>
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-sm font-medium">{peer.displayName}</p>
+                  {peer.status !== 'self' ? (
+                    <TrustBadge state={trustByPeerId[peer.id] ?? 'new'} />
+                  ) : null}
+                </div>
+                <p className="truncate text-xs text-[var(--muted-foreground)]">
+                  {formatPeerFingerprint(peer.id)} · {peer.route}
+                </p>
               </div>
               {peer.status !== 'self' ? (
                 <div className="flex items-center gap-1">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => onTogglePeerTrust(peer)}
+                    title={
+                      trustByPeerId[peer.id] === 'trusted'
+                        ? copy.trust.revoke
+                        : copy.trust.verify
+                    }
+                  >
+                    {trustByPeerId[peer.id] === 'trusted' ? (
+                      <ShieldCheck className="h-4 w-4" />
+                    ) : (
+                      <ShieldQuestion className="h-4 w-4" />
+                    )}
+                  </Button>
                   <Button
                     size="icon"
                     variant="ghost"

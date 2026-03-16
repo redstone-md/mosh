@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import type { ChannelType, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
 import { describeArchiveStateLabel } from '../../lib/i18n'
+import type { PeerTrustState, TrustedPeerEntry } from '../../lib/peerTrust'
 import { formatRoomTitle } from '../../lib/chatPresentation'
 import { useGlobalSearchArchives } from '../../hooks/useGlobalSearchArchives'
 import type { MediaSessionState } from '../../hooks/useMediaSession'
@@ -67,6 +68,10 @@ type MainSurfaceProps = {
   roomTypes: Record<string, ChannelType>
   unreadCounts: Record<string, number>
   mutedRoomIds: string[]
+  trustByPeerId: Record<string, PeerTrustState>
+  trustedPeerEntries: TrustedPeerEntry[]
+  trustedCount: number
+  reviewCount: number
   pinnedMessages: Message[]
   pinnedMessageIds: string[]
   publishPending: boolean
@@ -89,6 +94,8 @@ type MainSurfaceProps = {
   onSendMessage: () => void
   onTogglePinMessage: (messageId: string) => void
   onToggleMuteRoom: (roomId: string) => void
+  onTogglePeerTrust: (peer: PeerSummary) => void
+  onForgetPeer: (peerId: string) => void
   onThemeChange: (theme: ThemeId) => void
   onLanguagePreferenceChange: (value: 'system' | 'en' | 'ru') => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
@@ -123,6 +130,10 @@ export function MainSurface({
   roomTypes,
   unreadCounts,
   mutedRoomIds,
+  trustByPeerId,
+  trustedPeerEntries,
+  trustedCount,
+  reviewCount,
   pinnedMessages,
   pinnedMessageIds,
   publishPending,
@@ -145,6 +156,8 @@ export function MainSurface({
   onSendMessage,
   onTogglePinMessage,
   onToggleMuteRoom,
+  onTogglePeerTrust,
+  onForgetPeer,
   onThemeChange,
   onLanguagePreferenceChange,
   onRuntimeDraftChange,
@@ -274,10 +287,14 @@ export function MainSurface({
         <MemberSidebar
           room={activeRoom}
           peers={visiblePeers}
+          trustByPeerId={trustByPeerId}
+          trustedCount={trustedCount}
+          reviewCount={reviewCount}
           archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
           archiveVerified={archiveState.archive?.verified}
           mediaLabel={mediaLabel}
           activeVoiceRoom={activeVoiceRoom}
+          onTogglePeerTrust={onTogglePeerTrust}
           onOpenDirectRoom={onOpenDirectRoom}
         />
       </section>
@@ -303,6 +320,9 @@ export function MainSurface({
         archiveLabel={archiveLabel}
         archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
         archiveVerified={archiveState.archive?.verified}
+        trustedPeers={trustedPeerEntries}
+        trustedCount={trustedCount}
+        reviewCount={reviewCount}
         saving={runtimeSettingsPending}
         onOpenChange={onOpenSettings}
         onThemeChange={onThemeChange}
@@ -310,6 +330,7 @@ export function MainSurface({
         onRuntimeDraftChange={onRuntimeDraftChange}
         onSaveRuntime={onSaveRuntime}
         onSaveWorkspace={onSaveWorkspace}
+        onForgetPeer={onForgetPeer}
         onRestoreStorage={onRestoreStorage}
         onResetOnboarding={onResetOnboarding}
       />

@@ -8,6 +8,7 @@ import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
+import { usePeerTrustState } from './hooks/usePeerTrustState'
 import { useRoomActivityState } from './hooks/useRoomActivityState'
 import { useShellPreferences } from './hooks/useShellPreferences'
 import { useSignedChatArchive } from './hooks/useSignedChatArchive'
@@ -154,25 +155,10 @@ export function App() {
   const data = snapshot.data
   const runtimeDraft = preferences.runtimeDraft
   const showOnboarding = data?.runtime.state !== 'Runtime online' && !preferences.onboardingCompleted
-  const mentionablePeerNames = useMemo(
-    () =>
-      (data?.peers ?? [])
-        .filter((peer) => peer.status !== 'self')
-        .map((peer) => peer.displayName),
-    [data?.peers],
-  )
-  const visibleRooms = useMemo(
-    () => (data?.rooms.length ? data.rooms : [getFallbackRoom()]),
-    [data?.rooms],
-  )
-  const reconciledGroups = useMemo(
-    () => reconcileGroups(preferences.groups, visibleRooms),
-    [preferences.groups, visibleRooms],
-  )
-  const reconciledRoomTypes = useMemo(
-    () => reconcileRoomTypes(preferences.roomTypes, visibleRooms),
-    [preferences.roomTypes, visibleRooms],
-  )
+  const mentionablePeerNames = useMemo(() => (data?.peers ?? []).filter((peer) => peer.status !== 'self').map((peer) => peer.displayName), [data?.peers])
+  const visibleRooms = useMemo(() => (data?.rooms.length ? data.rooms : [getFallbackRoom()]), [data?.rooms])
+  const reconciledGroups = useMemo(() => reconcileGroups(preferences.groups, visibleRooms), [preferences.groups, visibleRooms])
+  const reconciledRoomTypes = useMemo(() => reconcileRoomTypes(preferences.roomTypes, visibleRooms), [preferences.roomTypes, visibleRooms])
   const activeRoom = useMemo(
     () =>
       data
@@ -194,10 +180,7 @@ export function App() {
       visibleRooms,
     ],
   )
-  const visiblePeers = useMemo(
-    () => (data ? getVisiblePeers(activeRoom, data.peers) : []),
-    [activeRoom, data],
-  )
+  const visiblePeers = useMemo(() => (data ? getVisiblePeers(activeRoom, data.peers) : []), [activeRoom, data])
   const liveMessages = useMemo(
     () =>
       data
@@ -220,6 +203,11 @@ export function App() {
     selectedRoomId: preferences.selectedRoomId,
     lastReadMessageIds: preferences.lastReadMessageIds,
     mutedRooms: preferences.mutedRooms,
+    setPreferences,
+  })
+  const peerTrust = usePeerTrustState({
+    peers: data?.peers ?? [],
+    trustedPeers: preferences.trustedPeers,
     setPreferences,
   })
 
@@ -336,25 +324,14 @@ export function App() {
     })
   }
 
-  function handleThemeChange(theme: ThemeId) {
-    setPreferences((current) => ({
-      ...current,
-      theme,
-    }))
-  }
+  function handleThemeChange(theme: ThemeId) { setPreferences((current) => ({ ...current, theme })) }
 
   function handleLanguagePreferenceChange(languagePreference: 'system' | 'en' | 'ru') {
-    setPreferences((current) => ({
-      ...current,
-      languagePreference,
-    }))
+    setPreferences((current) => ({ ...current, languagePreference }))
   }
 
   function handleRuntimeDraftChange(draft: UpdateRuntimeSettingsInput) {
-    setPreferences((current) => ({
-      ...current,
-      runtimeDraft: draft,
-    }))
+    setPreferences((current) => ({ ...current, runtimeDraft: draft }))
   }
 
   function handleSaveWorkspace(
@@ -458,6 +435,10 @@ export function App() {
         roomTypes={reconciledRoomTypes}
         unreadCounts={roomActivity.unreadCounts}
         mutedRoomIds={roomActivity.mutedRooms}
+        trustByPeerId={peerTrust.trustByPeerId}
+        trustedPeerEntries={peerTrust.trustedPeerEntries}
+        trustedCount={peerTrust.trustedCount}
+        reviewCount={peerTrust.reviewCount}
         pinnedMessages={pinnedMessages}
         pinnedMessageIds={activePinnedMessageIds}
         publishPending={publishMessage.isPending}
@@ -515,6 +496,8 @@ export function App() {
           }))
         }
         onToggleMuteRoom={roomActivity.toggleRoomMute}
+        onTogglePeerTrust={peerTrust.togglePeerTrust}
+        onForgetPeer={peerTrust.removeTrustedPeer}
         onThemeChange={handleThemeChange}
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
         onRuntimeDraftChange={handleRuntimeDraftChange}

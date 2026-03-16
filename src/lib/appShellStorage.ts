@@ -65,6 +65,7 @@ export function createDefaultPreferences(): ShellPreferences {
     pinnedMessages: {},
     mutedRooms: [],
     lastReadMessageIds: {},
+    trustedPeers: {},
   }
 }
 
