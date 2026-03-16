@@ -1,10 +1,26 @@
 import { describe, expect, it } from 'vitest'
 
+import { encodeBytesToBase64Url } from './base64Url'
 import {
   appendUniqueDeepLinkIdentityTransfers,
   decodePendingIdentityTransfer,
   extractIdentityTransferDeepLinks,
 } from './deepLinkIdentityTransfers'
+
+function createTransferUrl(name: string) {
+  return `mosh-identity://transfer/${encodeBytesToBase64Url(
+    new TextEncoder().encode(
+      JSON.stringify({
+        version: 1,
+        exportedAt: '2026-03-16T10:30:00.000Z',
+        sourceFingerprint: name,
+        salt: 'abc',
+        iv: 'def',
+        cipherText: '123',
+      }),
+    ),
+  )}`
+}
 
 describe('deepLinkIdentityTransfers', () => {
   it('extracts only identity transfer links', () => {
@@ -18,18 +34,18 @@ describe('deepLinkIdentityTransfers', () => {
   })
 
   it('builds a pending transfer payload with handoff metadata', () => {
-    const pending = decodePendingIdentityTransfer('mosh-identity://transfer/abc_def-123')
+    const pending = decodePendingIdentityTransfer(createTransferUrl('ab:cd:ef'))
 
-    expect(pending.transferPackage).toBe('mosh-identity://transfer/abc_def-123')
-    expect(pending.handoff.shortCode).toBe('ABCD-EF12-3XXX-XXXX')
+    expect(pending.transferPackage).toBe(createTransferUrl('ab:cd:ef'))
+    expect(pending.handoff.summary.sourceFingerprint).toBe('ab:cd:ef')
   })
 
   it('appends only unique transfer urls', () => {
-    const alpha = decodePendingIdentityTransfer('mosh-identity://transfer/alpha')
-    const beta = decodePendingIdentityTransfer('mosh-identity://transfer/beta')
+    const alpha = decodePendingIdentityTransfer(createTransferUrl('alpha'))
+    const beta = decodePendingIdentityTransfer(createTransferUrl('beta'))
 
     expect(
       appendUniqueDeepLinkIdentityTransfers([alpha], [alpha, beta]).map((entry) => entry.sourceUrl),
-    ).toEqual(['mosh-identity://transfer/alpha', 'mosh-identity://transfer/beta'])
+    ).toEqual([createTransferUrl('alpha'), createTransferUrl('beta')])
   })
 })

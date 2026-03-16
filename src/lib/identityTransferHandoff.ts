@@ -1,4 +1,4 @@
-import { normalizeIdentityTransferPackage } from './identityTransfer'
+import { normalizeIdentityTransferPackage, readIdentityTransferSummary } from './identityTransfer'
 
 const SHORT_CODE_GROUP_LENGTH = 4
 const SHORT_CODE_GROUP_COUNT = 4
@@ -9,6 +9,10 @@ export type IdentityTransferHandoff = {
   qrValue: string
   shortCode: string
   previewLines: string[]
+  summary: {
+    exportedAt: string
+    sourceFingerprint: string
+  }
 }
 
 export function buildIdentityTransferHandoff(value: string): IdentityTransferHandoff {
@@ -23,6 +27,7 @@ export function buildIdentityTransferHandoff(value: string): IdentityTransferHan
     qrValue: normalizedPackage,
     shortCode: splitIntoChunks(paddedCode, SHORT_CODE_GROUP_LENGTH).join('-'),
     previewLines: splitIntoChunks(normalizedPackage, PACKAGE_PREVIEW_CHUNK).slice(0, 6),
+    summary: readIdentityTransferSummary(normalizedPackage),
   }
 }
 

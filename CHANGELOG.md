@@ -26,3 +26,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added an encrypted identity transfer tool in storage settings so users can move their local signing identity between MOSH devices with a passphrase-protected `mosh-identity://transfer/...` package.
 - Added a dedicated identity handoff view with QR rendering, a short verification code, and package preview so device-to-device identity transfer is clearer than a raw textarea alone.
 - Added deep-link import for `mosh-identity://transfer/...`, so an installed MOSH client can receive an identity handoff from the OS and finish the import with a passphrase prompt.
+- Added trust-aware identity transfer metadata, so handoff and import screens now show the source fingerprint, export time, and a direct current-to-incoming identity replacement summary.
