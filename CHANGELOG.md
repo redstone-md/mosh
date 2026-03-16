@@ -16,3 +16,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added pinned messages with persisted room-level pins, hover actions, and a compact pinned strip in the chat header.
 - Added global room search with `Ctrl/Cmd+K`, cross-room live message indexing, and signed archive results for quick navigation across MOSH.
 - Added local read-state tracking and room mute controls, including unread badges driven by persisted room activity and muted-room suppression for desktop notifications.
+- Added a local peer trust registry with trust/revoke actions, trusted/new/name-changed states in the member list, and a dedicated trust tab in settings.

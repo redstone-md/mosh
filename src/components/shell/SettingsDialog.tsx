@@ -1,5 +1,6 @@
 import type { ChannelType, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
 import { languagePreferenceOptions } from '../../lib/i18n'
+import type { TrustedPeerEntry } from '../../lib/peerTrust'
 import type { RoomSummary, UpdateRuntimeSettingsInput } from '../../lib/schemas'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
@@ -14,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { RuntimeSettingsForm } from './RuntimeSettingsForm'
 import { StoragePanel } from './StoragePanel'
+import { PeerTrustPanel } from './PeerTrustPanel'
 import { WorkspaceEditor } from './WorkspaceEditor'
 
 type SettingsDialogProps = {
@@ -25,6 +27,9 @@ type SettingsDialogProps = {
   rooms: RoomSummary[]
   roomTypes: Record<string, ChannelType>
   selectedGroupId: string
+  trustedPeers: TrustedPeerEntry[]
+  trustedCount: number
+  reviewCount: number
   runtimeError?: string
   archiveLabel: string
   archiveFingerprint?: string
@@ -40,6 +45,7 @@ type SettingsDialogProps = {
     roomTypes: Record<string, ChannelType>,
     selectedGroupId: string,
   ) => void
+  onForgetPeer: (peerId: string) => void
   onRestoreStorage: () => void
   onResetOnboarding: () => void
 }
@@ -53,6 +59,9 @@ export function SettingsDialog({
   rooms,
   roomTypes,
   selectedGroupId,
+  trustedPeers,
+  trustedCount,
+  reviewCount,
   runtimeError,
   archiveLabel,
   archiveFingerprint,
@@ -64,6 +73,7 @@ export function SettingsDialog({
   onRuntimeDraftChange,
   onSaveRuntime,
   onSaveWorkspace,
+  onForgetPeer,
   onRestoreStorage,
   onResetOnboarding,
 }: SettingsDialogProps) {
@@ -89,6 +99,7 @@ export function SettingsDialog({
             <TabsTrigger value="workspace">{copy.common.workspace}</TabsTrigger>
             <TabsTrigger value="runtime">{copy.common.runtime}</TabsTrigger>
             <TabsTrigger value="archive">{copy.common.archive}</TabsTrigger>
+            <TabsTrigger value="trust">{copy.common.trust}</TabsTrigger>
             <TabsTrigger value="storage">{copy.common.storage}</TabsTrigger>
           </TabsList>
 
@@ -184,6 +195,15 @@ export function SettingsDialog({
                 </p>
               </div>
             </div>
+          </TabsContent>
+
+          <TabsContent value="trust">
+            <PeerTrustPanel
+              trustedPeers={trustedPeers}
+              trustedCount={trustedCount}
+              reviewCount={reviewCount}
+              onForgetPeer={onForgetPeer}
+            />
           </TabsContent>
 
           <TabsContent value="storage">
