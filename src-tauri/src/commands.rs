@@ -276,6 +276,11 @@ pub fn load_room_archive(app: AppHandle, room: String) -> Result<Option<Value>, 
 }
 
 #[tauri::command]
+pub fn load_all_room_archives(app: AppHandle) -> Result<Vec<Value>, String> {
+    storage::load_all_room_archives(&app)
+}
+
+#[tauri::command]
 pub fn save_room_archive(
     app: AppHandle,
     room: String,

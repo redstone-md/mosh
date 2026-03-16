@@ -14,3 +14,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added in-room message search with result navigation over the merged live transcript and signed archive history.
 - Added embedded file attachments with download cards for non-image files and inline previews for images inside the rich message flow.
 - Added pinned messages with persisted room-level pins, hover actions, and a compact pinned strip in the chat header.
+- Added global room search with `Ctrl/Cmd+K`, cross-room live message indexing, and signed archive results for quick navigation across MOSH.

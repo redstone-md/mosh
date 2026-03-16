@@ -47,6 +47,11 @@ export class DesktopStorageClient {
     return signedRoomArchiveSchema.parse(payload)
   }
 
+  async loadAllRoomArchives(): Promise<SignedRoomArchive[]> {
+    const payload = await invoke('load_all_room_archives')
+    return z.array(signedRoomArchiveSchema).parse(payload)
+  }
+
   async saveRoomArchive(room: string, value: SignedRoomArchive): Promise<void> {
     const payload = signedRoomArchiveSchema.parse(value)
     await invoke('save_room_archive', { room, payload })

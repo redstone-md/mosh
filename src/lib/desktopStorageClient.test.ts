@@ -43,6 +43,25 @@ describe('desktopStorageClient', () => {
     })
   })
 
+  it('parses all room archives payloads', async () => {
+    invoke.mockResolvedValue([
+      {
+        roomId: 'lobby',
+        signerFingerprint: 'aa:bb',
+        publicKeyJwk: { kty: 'EC' },
+        signature: 'sig',
+        signedAt: '2026-03-16T10:00:00.000Z',
+        messages: [],
+      },
+    ])
+
+    const { desktopStorageClient } = await import('./desktopStorageClient')
+    const archives = await desktopStorageClient.loadAllRoomArchives()
+
+    expect(archives[0]?.roomId).toBe('lobby')
+    expect(invoke).toHaveBeenCalledWith('load_all_room_archives')
+  })
+
   it('sends validated backup import payloads', async () => {
     invoke.mockResolvedValue(undefined)
 

@@ -1,18 +1,30 @@
 import type { MouseEvent } from 'react'
+import { Search } from 'lucide-react'
 
 import { RuntimePanel } from './RuntimePanel'
 import { WindowControls } from './WindowControls'
 import type { DesktopSnapshot } from '../lib/schemas'
 import { startDesktopWindowDrag, toggleDesktopWindowMaximize } from '../lib/desktopWindow'
+import { Button } from './ui/button'
+import { useI18n } from './I18nProvider'
 
 type TitlebarProps = {
   runtime: DesktopSnapshot['runtime']
+  onOpenGlobalSearch: () => void
   onToggleRuntime: () => void
   isBusy: boolean
   errorNote?: string
 }
 
-export function Titlebar({ runtime, onToggleRuntime, isBusy, errorNote }: TitlebarProps) {
+export function Titlebar({
+  runtime,
+  onOpenGlobalSearch,
+  onToggleRuntime,
+  isBusy,
+  errorNote,
+}: TitlebarProps) {
+  const { copy } = useI18n()
+
   const handleDragStart = (event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) {
       return
@@ -36,11 +48,23 @@ export function Titlebar({ runtime, onToggleRuntime, isBusy, errorNote }: Titleb
       </div>
 
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        <div
-          className="h-6 min-w-12 flex-1 rounded-sm border border-border/50 bg-[var(--chat)]"
-          onDoubleClick={() => void toggleDesktopWindowMaximize()}
-          onMouseDown={handleDragStart}
-        />
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div
+            className="h-6 min-w-12 flex-1 rounded-sm border border-border/50 bg-[var(--chat)]"
+            onDoubleClick={() => void toggleDesktopWindowMaximize()}
+            onMouseDown={handleDragStart}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-8 shrink-0 gap-2 rounded-md border border-border/60 bg-[var(--chat)] px-2.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--panel-strong)] hover:text-foreground"
+            onClick={onOpenGlobalSearch}
+            title={copy.messages.globalSearch}
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{copy.messages.globalSearchShortcut}</span>
+          </Button>
+        </div>
         <div className="shrink-0">
           <RuntimePanel
             state={runtime.state}

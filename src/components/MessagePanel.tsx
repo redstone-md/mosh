@@ -25,12 +25,14 @@ type MessagePanelProps = {
   matchedMessageIds?: string[]
   activeSearchMessageId?: string
   activeSearchPreview?: string
+  externalFocusMessageId?: string
   draft: string
   peerNames: string[]
   pinnedMessageIds: string[]
   onDraftChange: (value: string) => void
   onSend: () => void
   onTogglePinMessage: (messageId: string) => void
+  onResolveExternalFocus?: () => void
   isSending: boolean
   errorNote?: string
 }
@@ -41,12 +43,14 @@ export function MessagePanel({
   matchedMessageIds = [],
   activeSearchMessageId,
   activeSearchPreview,
+  externalFocusMessageId,
   draft,
   peerNames,
   pinnedMessageIds,
   onDraftChange,
   onSend,
   onTogglePinMessage,
+  onResolveExternalFocus,
   isSending,
   errorNote,
 }: MessagePanelProps) {
@@ -131,6 +135,16 @@ export function MessagePanel({
 
     focusMessageElement(activeSearchMessageId)
   }, [activeSearchMessageId])
+
+  useEffect(() => {
+    if (!externalFocusMessageId) {
+      return
+    }
+
+    if (focusMessageElement(externalFocusMessageId, true)) {
+      onResolveExternalFocus?.()
+    }
+  }, [externalFocusMessageId, onResolveExternalFocus])
 
   // Removed redundant DOM event listener since we handle it in editorProps now
 
