@@ -37,7 +37,10 @@ fn configure_bundled_runtime_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) 
 
     if let Ok(path) = app
         .path()
-        .resolve(library_file_name(), BaseDirectory::Resource)
+        .resolve(
+            format!("moss/{}", library_file_name()),
+            BaseDirectory::Resource,
+        )
     {
         if path.exists() {
             env::set_var("MOSS_SHARED_PATH", path);

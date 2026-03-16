@@ -364,6 +364,13 @@ fn shared_candidates() -> Vec<PathBuf> {
     if let Ok(cwd) = env::current_dir() {
         push_candidate(&mut candidates, cwd.join(library_file_name()));
         push_candidate(&mut candidates, cwd.join("moss").join(library_file_name()));
+        push_candidate(
+            &mut candidates,
+            cwd.join("src-tauri")
+                .join("resources")
+                .join("moss")
+                .join(library_file_name()),
+        );
         let repo_root = cwd
             .ancestors()
             .find(|candidate| candidate.join("go.mod").exists())
