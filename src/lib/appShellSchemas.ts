@@ -1,0 +1,64 @@
+import { z } from 'zod'
+
+import { messageSchema, updateRuntimeSettingsInputSchema } from './schemas'
+
+export const themeIdSchema = z.enum(['moss', 'graphite', 'linen', 'ember'])
+
+export const groupAccentSchema = z.enum(['forest', 'slate', 'sand', 'ember'])
+export const channelTypeSchema = z.enum(['text', 'voice'])
+
+export const roomGroupSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(1).max(32),
+  icon: z
+    .string()
+    .trim()
+    .min(1)
+    .max(2)
+    .regex(/^[\p{L}\p{N}]{1,2}$/u, 'Use one or two letters'),
+  accent: groupAccentSchema,
+  roomIds: z.array(z.string().min(1)).max(256),
+})
+
+export const shellPreferencesSchema = z.object({
+  theme: themeIdSchema,
+  onboardingCompleted: z.boolean(),
+  selectedDock: z.enum(['home', 'group']),
+  selectedGroupId: z.string().min(1),
+  selectedRoomId: z.string().min(1),
+  selectedPanel: z.enum(['chat', 'settings']),
+  runtimeDraft: updateRuntimeSettingsInputSchema,
+  groups: z.array(roomGroupSchema).max(32),
+  roomTypes: z.record(z.string(), channelTypeSchema).default({}),
+})
+
+export const storedMessageSchema = messageSchema.extend({
+  storedAt: z.string().min(1),
+})
+
+export const signingIdentitySchema = z.object({
+  algorithm: z.literal('ECDSA-P256'),
+  fingerprint: z.string().min(1),
+  publicKeyJwk: z.record(z.string(), z.unknown()),
+  privateKeyJwk: z.record(z.string(), z.unknown()),
+})
+
+export const signedRoomArchiveSchema = z.object({
+  roomId: z.string().min(1),
+  signerFingerprint: z.string().min(1),
+  publicKeyJwk: z.record(z.string(), z.unknown()),
+  signature: z.string().min(1),
+  signedAt: z.string().min(1),
+  messages: z.array(storedMessageSchema).max(5000),
+})
+
+export const archiveStoreSchema = z.record(z.string(), signedRoomArchiveSchema)
+
+export type ThemeId = z.infer<typeof themeIdSchema>
+export type GroupAccent = z.infer<typeof groupAccentSchema>
+export type ChannelType = z.infer<typeof channelTypeSchema>
+export type RoomGroup = z.infer<typeof roomGroupSchema>
+export type ShellPreferences = z.infer<typeof shellPreferencesSchema>
+export type StoredMessage = z.infer<typeof storedMessageSchema>
+export type SigningIdentity = z.infer<typeof signingIdentitySchema>
+export type SignedRoomArchive = z.infer<typeof signedRoomArchiveSchema>

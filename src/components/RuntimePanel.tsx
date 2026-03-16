@@ -1,4 +1,12 @@
-import { Power, PowerOff } from 'lucide-react'
+import {
+  CircleDot,
+  Cloud,
+  Network,
+  Power,
+  PowerOff,
+  TriangleAlert,
+  Waypoints,
+} from 'lucide-react'
 
 type RuntimePanelProps = {
   state: string
@@ -27,19 +35,33 @@ export function RuntimePanel({
 }: RuntimePanelProps) {
   if (compact) {
     return (
-      <div className="flex items-center gap-4 text-xs font-mono max-w-full">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className={`shrink-0 w-2 h-2 rounded-full ${isOnline ? 'bg-primary shadow-[0_0_0_2px_rgba(90,198,136,0.2)]' : 'bg-foreground/30'}`} />
-          <span className="text-foreground/70 hidden lg:inline-block truncate max-w-[200px]" title={summary}>{summary}</span>
-        </div>
-        <div className="hidden xl:flex gap-2 shrink-0">
-          <span className="px-2 py-0.5 rounded-full bg-muted border border-border/50 text-foreground/70">{natHint}</span>
-          <span className="px-2 py-0.5 rounded-full bg-muted border border-border/50 text-foreground/70">{route}</span>
-        </div>
-        <button 
-          className={`shrink-0 flex items-center gap-1.5 px-2 py-1 rounded border transition-colors ${isOnline ? 'border-primary/30 text-primary hover:bg-primary/10' : 'border-border text-foreground/70 hover:bg-white/5'} disabled:opacity-50`}
-          onClick={onToggle} 
+      <div className="flex items-center gap-1 rounded-md border border-border/70 bg-[var(--panel)] px-1.5 py-1">
+        <IndicatorButton
+          icon={CircleDot}
+          title={`${state} • ${summary}`}
+          active={isOnline}
+          className="text-primary"
+        />
+        <IndicatorButton icon={Cloud} title={natHint} active={hasTransportState(natHint)} />
+        <IndicatorButton icon={Waypoints} title={route} active={hasTransportState(route)} />
+        <IndicatorButton
+          icon={Network}
+          title={summarizeBridge(sharedBridge)}
+          active={hasTransportState(sharedBridge)}
+        />
+        {errorNote ? (
+          <IndicatorButton icon={TriangleAlert} title={errorNote} active={false} className="text-[var(--danger)]" />
+        ) : null}
+        <button
+          className={`ml-1 flex h-7 w-7 items-center justify-center rounded border transition-colors ${
+            isOnline
+              ? 'border-primary/30 text-primary hover:bg-primary/10'
+              : 'border-border text-foreground/65 hover:bg-[var(--panel-hover)]'
+          } disabled:opacity-50`}
+          onClick={onToggle}
           disabled={isBusy}
+          title={isOnline ? 'Stop runtime' : 'Start runtime'}
+          type="button"
         >
           {isOnline ? <PowerOff size={12} /> : <Power size={12} />}
         </button>
@@ -74,6 +96,32 @@ export function RuntimePanel({
   )
 }
 
+type IndicatorButtonProps = {
+  icon: typeof CircleDot
+  title: string
+  active: boolean
+  className?: string
+}
+
+function IndicatorButton({ icon: Icon, title, active, className }: IndicatorButtonProps) {
+  return (
+    <span
+      className={`flex h-7 w-7 items-center justify-center rounded border text-[11px] ${
+        active
+          ? 'border-primary/30 bg-primary/10 text-primary'
+          : 'border-border/80 bg-[var(--chat)] text-foreground/55'
+      } ${className ?? ''}`}
+      title={title}
+    >
+      <Icon size={13} />
+    </span>
+  )
+}
+
+function hasTransportState(value: string): boolean {
+  return !/inactive|offline|unknown|disabled|no active/i.test(value)
+}
+
 function summarizeBridge(value: string): string {
   const marker = 'Loaded from '
   if (!value.startsWith(marker)) {
@@ -83,4 +131,3 @@ function summarizeBridge(value: string): string {
   const normalized = path.replace(/\\/g, '/')
   return normalized.split('/').pop() ?? value
 }
-

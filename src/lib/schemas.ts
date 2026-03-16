@@ -40,6 +40,37 @@ export const peerSummarySchema = z.object({
   rooms: z.array(z.string().min(1)),
 })
 
+export const callStateSchema = z.object({
+  callId: z.string().min(1),
+  peerId: z.string().min(1),
+  peerName: z.string().min(1),
+  roomId: z.string().min(1),
+  status: z.string().min(1),
+  direction: z.string().min(1),
+})
+
+export const signalingEventSchema = z.object({
+  id: z.string().min(1),
+  callId: z.string().min(1),
+  roomId: z.string().min(1),
+  peerId: z.string().min(1),
+  signalType: z.string().min(1),
+  signalData: z.string().min(1),
+  sentAt: z.string().min(1),
+})
+
+export const voiceParticipantSchema = z.object({
+  peerId: z.string().min(1),
+  peerName: z.string().min(1),
+  isSelf: z.boolean(),
+})
+
+export const voiceRoomSchema = z.object({
+  roomId: z.string().min(1),
+  joined: z.boolean(),
+  participants: z.array(voiceParticipantSchema),
+})
+
 export const runtimeSettingsSchema = z.object({
   nickname: z.string().min(1),
   meshId: z.string().min(1),
@@ -127,6 +158,22 @@ export const publishMessageInputSchema = z.object({
   body: z.string().trim().min(1).max(65535),
 })
 
+export const startCallInputSchema = z.object({
+  target: z.string().trim().min(1).max(128),
+})
+
+export const sendCallSignalInputSchema = z.object({
+  targetPeerId: z.string().trim().min(1),
+  callId: z.string().trim().min(1),
+  room: z.string().trim().min(1),
+  signalType: z.string().trim().min(1).max(64),
+  signalData: z.string().trim().min(1).max(400_000),
+})
+
+export const joinVoiceRoomInputSchema = z.object({
+  room: z.string().trim().min(1),
+})
+
 export const milestoneSchema = z.object({
   title: z.string().min(1),
   detail: z.string().min(1),
@@ -144,6 +191,9 @@ export const desktopSnapshotSchema = z.object({
   rooms: z.array(roomSummarySchema),
   messages: z.array(messageSchema),
   peers: z.array(peerSummarySchema),
+  callState: callStateSchema.nullable(),
+  signalingEvents: z.array(signalingEventSchema),
+  voiceRooms: z.array(voiceRoomSchema),
 })
 
 export type Artifact = z.infer<typeof artifactSchema>
@@ -153,6 +203,10 @@ export type RuntimeDiagnostics = z.infer<typeof runtimeDiagnosticsSchema>
 export type RoomSummary = z.infer<typeof roomSummarySchema>
 export type Message = z.infer<typeof messageSchema>
 export type PeerSummary = z.infer<typeof peerSummarySchema>
+export type CallState = z.infer<typeof callStateSchema>
+export type SignalingEvent = z.infer<typeof signalingEventSchema>
+export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>
+export type VoiceRoom = z.infer<typeof voiceRoomSchema>
 export type Milestone = z.infer<typeof milestoneSchema>
 export type DesktopSnapshot = z.infer<typeof desktopSnapshotSchema>
 export type UpdateRuntimeSettingsInput = z.infer<typeof updateRuntimeSettingsInputSchema>
@@ -160,3 +214,6 @@ export type SubscribeRoomInput = z.infer<typeof subscribeRoomInputSchema>
 export type ConnectPeerInput = z.infer<typeof connectPeerInputSchema>
 export type OpenDirectRoomInput = z.infer<typeof openDirectRoomInputSchema>
 export type PublishMessageInput = z.infer<typeof publishMessageInputSchema>
+export type StartCallInput = z.infer<typeof startCallInputSchema>
+export type SendCallSignalInput = z.infer<typeof sendCallSignalInputSchema>
+export type JoinVoiceRoomInput = z.infer<typeof joinVoiceRoomInputSchema>

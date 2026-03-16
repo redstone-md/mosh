@@ -329,7 +329,7 @@ fn hex_string(bytes: &[u8]) -> String {
     out
 }
 
-fn library_file_name() -> &'static str {
+pub fn library_file_name() -> &'static str {
     #[cfg(target_os = "windows")]
     {
         "moss.dll"

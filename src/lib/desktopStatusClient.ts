@@ -1,13 +1,19 @@
 import { invoke } from '@tauri-apps/api/core'
 import {
   connectPeerInputSchema,
+  joinVoiceRoomInputSchema,
   desktopSnapshotSchema,
   openDirectRoomInputSchema,
   publishMessageInputSchema,
+  sendCallSignalInputSchema,
+  startCallInputSchema,
   subscribeRoomInputSchema,
   updateRuntimeSettingsInputSchema,
+  type SendCallSignalInput,
+  type StartCallInput,
   type ConnectPeerInput,
   type DesktopSnapshot,
+  type JoinVoiceRoomInput,
   type OpenDirectRoomInput,
   type PublishMessageInput,
   type SubscribeRoomInput,
@@ -91,6 +97,72 @@ export class DesktopStatusClient {
     const result = desktopSnapshotSchema.safeParse(payload)
     if (!result.success) {
       throw new Error(`Invalid publish payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async startCall(input: StartCallInput): Promise<DesktopSnapshot> {
+    const parsed = startCallInputSchema.parse(input)
+    const payload = await invoke('start_call', parsed)
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid start-call payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async answerCall(): Promise<DesktopSnapshot> {
+    const payload = await invoke('answer_call')
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid answer-call payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async declineCall(): Promise<DesktopSnapshot> {
+    const payload = await invoke('decline_call')
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid decline-call payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async hangupCall(): Promise<DesktopSnapshot> {
+    const payload = await invoke('hangup_call')
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid hangup-call payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async sendCallSignal(input: SendCallSignalInput): Promise<DesktopSnapshot> {
+    const parsed = sendCallSignalInputSchema.parse(input)
+    const payload = await invoke('send_call_signal', { payload: parsed })
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid call-signal payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async joinVoiceRoom(input: JoinVoiceRoomInput): Promise<DesktopSnapshot> {
+    const parsed = joinVoiceRoomInputSchema.parse(input)
+    const payload = await invoke('join_voice_room', parsed)
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid join-voice payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async leaveVoiceRoom(): Promise<DesktopSnapshot> {
+    const payload = await invoke('leave_voice_room')
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid leave-voice payload: ${result.error.message}`)
     }
     return result.data
   }

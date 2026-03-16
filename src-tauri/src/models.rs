@@ -75,6 +75,45 @@ pub struct PeerSummary {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CallStateSummary {
+    pub call_id: String,
+    pub peer_id: String,
+    pub peer_name: String,
+    pub room_id: String,
+    pub status: String,
+    pub direction: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalingEvent {
+    pub id: String,
+    pub call_id: String,
+    pub room_id: String,
+    pub peer_id: String,
+    pub signal_type: String,
+    pub signal_data: String,
+    pub sent_at: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceParticipantSummary {
+    pub peer_id: String,
+    pub peer_name: String,
+    pub is_self: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceRoomSummary {
+    pub room_id: String,
+    pub joined: bool,
+    pub participants: Vec<VoiceParticipantSummary>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopSnapshot {
     pub app_name: String,
     pub version: String,
@@ -86,4 +125,7 @@ pub struct DesktopSnapshot {
     pub rooms: Vec<RoomSummary>,
     pub messages: Vec<Message>,
     pub peers: Vec<PeerSummary>,
+    pub call_state: Option<CallStateSummary>,
+    pub signaling_events: Vec<SignalingEvent>,
+    pub voice_rooms: Vec<VoiceRoomSummary>,
 }

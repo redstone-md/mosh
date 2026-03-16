@@ -2,8 +2,8 @@ use crate::{
     callback_state::shared_callback_state,
     ffi::MeshInfo,
     models::{
-        DesktopSnapshot, Message, PeerSummary, RoomSummary, RuntimeDiagnostics,
-        RuntimeSettings, RuntimeStatus,
+        CallStateSummary, DesktopSnapshot, Message, PeerSummary, RoomSummary, RuntimeDiagnostics,
+        RuntimeSettings, RuntimeStatus, SignalingEvent, VoiceRoomSummary,
     },
 };
 
@@ -14,7 +14,7 @@ pub fn online_snapshot(
     bridge_path: String,
     branch: &str,
 ) -> DesktopSnapshot {
-    let (rooms, messages, peers) = live_callback_rows(mesh);
+    let (rooms, messages, peers, call_state, signaling_events, voice_rooms) = live_callback_rows(mesh);
     DesktopSnapshot {
         app_name: "MOSH".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -45,6 +45,9 @@ pub fn online_snapshot(
         rooms,
         messages,
         peers,
+        call_state,
+        signaling_events,
+        voice_rooms,
     }
 }
 
@@ -71,6 +74,9 @@ pub fn offline_snapshot(
         rooms: base_rooms(),
         messages: base_messages(),
         peers: base_peers(),
+        call_state: None,
+        signaling_events: Vec::new(),
+        voice_rooms: Vec::new(),
     }
 }
 
@@ -104,6 +110,9 @@ pub fn failed_snapshot(
             emphasis: "system".to_string(),
         }],
         peers: base_peers(),
+        call_state: None,
+        signaling_events: Vec::new(),
+        voice_rooms: Vec::new(),
     }
 }
 
@@ -158,12 +167,24 @@ fn base_messages() -> Vec<Message> {
     ]
 }
 
-fn live_callback_rows(mesh: &MeshInfo) -> (Vec<RoomSummary>, Vec<Message>, Vec<PeerSummary>) {
+fn live_callback_rows(
+    mesh: &MeshInfo,
+) -> (
+    Vec<RoomSummary>,
+    Vec<Message>,
+    Vec<PeerSummary>,
+    Option<CallStateSummary>,
+    Vec<SignalingEvent>,
+    Vec<VoiceRoomSummary>,
+) {
     let callback_state = shared_callback_state();
     if let Ok(state) = callback_state.lock() {
         let mut rooms = state.rooms();
         let mut messages = state.messages();
         let mut peers = state.peers();
+        let call_state = state.current_call();
+        let signaling_events = state.signaling_events();
+        let voice_rooms = state.voice_rooms();
 
         if rooms.is_empty() {
             rooms = live_room_rows(mesh);
@@ -176,9 +197,16 @@ fn live_callback_rows(mesh: &MeshInfo) -> (Vec<RoomSummary>, Vec<Message>, Vec<P
         }
 
         merge_peer_rows(&mut peers, mesh);
-        return (rooms, messages, peers);
+        return (rooms, messages, peers, call_state, signaling_events, voice_rooms);
     }
-    (live_room_rows(mesh), base_messages(), live_peer_rows(mesh))
+    (
+        live_room_rows(mesh),
+        base_messages(),
+        live_peer_rows(mesh),
+        None,
+        Vec::new(),
+        Vec::new(),
+    )
 }
 
 fn live_room_rows(mesh: &MeshInfo) -> Vec<RoomSummary> {

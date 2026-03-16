@@ -1,5 +1,4 @@
 use std::sync::Mutex;
-
 use crate::{
     callback_state::shared_callback_state,
     chat_protocol::{direct_room_name, ChatPayload, CONTROL_ROOM},
@@ -221,41 +220,246 @@ impl DesktopShellState {
             .as_ref()
             .ok_or_else(|| "shared library is not loaded".to_string())?;
 
-        let (target_peer, target_label) = {
-            let callback_state = shared_callback_state();
-            let state = callback_state
-                .lock()
-                .map_err(|_| "callback state lock poisoned".to_string())?;
-            state
-                .resolve_peer_target(target)
-                .ok_or_else(|| format!("peer {target:?} not found; wait for presence or use connect"))?
-        };
-
-        let mesh = self
-            .live_mesh_info()?
-            .ok_or_else(|| "runtime mesh info unavailable".to_string())?;
-        let room = direct_room_name(&mesh.public_key, &target_peer);
-        library.subscribe(handle, &room)?;
-        if let Ok(mut callbacks) = shared_callback_state().lock() {
-            callbacks.record_subscribed_room(&room);
-        }
-
-        let invite = serde_json::to_vec(&ChatPayload::dm_invite(
-            self.settings.nickname(),
-            &room,
-            &target_peer,
-        ))
-        .map_err(|err| format!("failed to encode direct chat invite: {err}"))?;
-        self.publish_control_payload(
-            library,
-            handle,
-            &invite,
-            format!("Queued direct-chat invite for {target_label} until a peer path is ready."),
-        )?;
-        self.publish_presence(library, handle)?;
+        let (_target_peer, target_label, _room) =
+            self.ensure_direct_room_for_target(library, handle, target)?;
         if let Ok(mut callbacks) = shared_callback_state().lock() {
             callbacks.note_runtime(format!("Direct chat opened with {target_label}."));
         }
+        Ok(self.snapshot())
+    }
+
+    pub fn start_call(&mut self, target: &str) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+
+        let (target_peer, target_label, room) =
+            self.ensure_direct_room_for_target(library, handle, target)?;
+        let call_id = {
+            let callback_state = shared_callback_state();
+            let mut state = callback_state
+                .lock()
+                .map_err(|_| "callback state lock poisoned".to_string())?;
+            state.begin_outgoing_call(target_peer.clone(), target_label.clone(), room.clone())
+        };
+        let payload = serde_json::to_vec(&ChatPayload::call_control(
+            self.settings.nickname(),
+            "call_invite",
+            &room,
+            &target_peer,
+            &call_id,
+        ))
+        .map_err(|err| format!("failed to encode call invite: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &payload,
+            format!("Queued call invite for {target_label} until a peer path is ready."),
+        )?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.note_runtime(format!("Dialing {target_label}."));
+        }
+        Ok(self.snapshot())
+    }
+
+    pub fn answer_call(&mut self) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        let call_state = {
+            let callback_state = shared_callback_state();
+            let mut state = callback_state
+                .lock()
+                .map_err(|_| "callback state lock poisoned".to_string())?;
+            state.answer_current_call()?
+        };
+        let payload = serde_json::to_vec(&ChatPayload::call_control(
+            self.settings.nickname(),
+            "call_accept",
+            &call_state.room_id,
+            &call_state.peer_id,
+            &call_state.call_id,
+        ))
+        .map_err(|err| format!("failed to encode call accept: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &payload,
+            format!("Queued call accept for {} until a peer path is ready.", call_state.peer_name),
+        )?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.note_runtime(format!("Call answered: {}.", call_state.peer_name));
+        }
+        Ok(self.snapshot())
+    }
+
+    pub fn decline_call(&mut self) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        let call_state = {
+            let callback_state = shared_callback_state();
+            let mut state = callback_state
+                .lock()
+                .map_err(|_| "callback state lock poisoned".to_string())?;
+            state.decline_current_call()?
+        };
+        let payload = serde_json::to_vec(&ChatPayload::call_control(
+            self.settings.nickname(),
+            "call_decline",
+            &call_state.room_id,
+            &call_state.peer_id,
+            &call_state.call_id,
+        ))
+        .map_err(|err| format!("failed to encode call decline: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &payload,
+            format!("Queued call decline for {} until a peer path is ready.", call_state.peer_name),
+        )?;
+        Ok(self.snapshot())
+    }
+
+    pub fn hangup_call(&mut self) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        let call_state = {
+            let callback_state = shared_callback_state();
+            let mut state = callback_state
+                .lock()
+                .map_err(|_| "callback state lock poisoned".to_string())?;
+            state.hangup_current_call()?
+        };
+        let payload = serde_json::to_vec(&ChatPayload::call_control(
+            self.settings.nickname(),
+            "call_hangup",
+            &call_state.room_id,
+            &call_state.peer_id,
+            &call_state.call_id,
+        ))
+        .map_err(|err| format!("failed to encode call hangup: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &payload,
+            format!("Queued call hangup for {} until a peer path is ready.", call_state.peer_name),
+        )?;
+        Ok(self.snapshot())
+    }
+
+    pub fn send_call_signal(
+        &mut self,
+        target_peer_id: &str,
+        call_id: &str,
+        room: &str,
+        signal_type: &str,
+        signal_data: &str,
+    ) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        let payload = serde_json::to_vec(&ChatPayload::webrtc_signal(
+            self.settings.nickname(),
+            room,
+            target_peer_id,
+            call_id,
+            signal_type,
+            signal_data,
+        ))
+        .map_err(|err| format!("failed to encode call signal: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &payload,
+            "Queued WebRTC signal until a peer path is ready.".to_string(),
+        )?;
+        Ok(self.snapshot())
+    }
+
+    pub fn join_voice_room(&mut self, room: &str) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        let room_id = room.trim().trim_start_matches('#').to_lowercase();
+        if room_id.is_empty() {
+            return Err("voice room is required".to_string());
+        }
+        library.subscribe(handle, &room_id)?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.record_subscribed_room(&room_id);
+            callbacks.join_voice_room(&room_id);
+        }
+        let payload = serde_json::to_vec(&ChatPayload::voice_presence(
+            self.settings.nickname(),
+            "voice_join",
+            &room_id,
+        ))
+        .map_err(|err| format!("failed to encode voice join: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &payload,
+            "Queued voice-room join until a peer path is ready.".to_string(),
+        )?;
+        Ok(self.snapshot())
+    }
+
+    pub fn leave_voice_room(&mut self) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        let room = {
+            let callback_state = shared_callback_state();
+            let mut state = callback_state
+                .lock()
+                .map_err(|_| "callback state lock poisoned".to_string())?;
+            state.leave_voice_room()
+        };
+        let Some(room_id) = room else {
+            return Ok(self.snapshot());
+        };
+        let payload = serde_json::to_vec(&ChatPayload::voice_presence(
+            self.settings.nickname(),
+            "voice_leave",
+            &room_id,
+        ))
+        .map_err(|err| format!("failed to encode voice leave: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &payload,
+            "Queued voice-room leave until a peer path is ready.".to_string(),
+        )?;
         Ok(self.snapshot())
     }
 
@@ -340,6 +544,47 @@ impl DesktopShellState {
             "No peers connected yet. Presence will fan out once a peer joins.".to_string(),
         )?;
         Ok(())
+    }
+
+    fn ensure_direct_room_for_target(
+        &self,
+        library: &MossLibrary,
+        handle: i64,
+        target: &str,
+    ) -> Result<(String, String, String), String> {
+        let (target_peer, target_label) = {
+            let callback_state = shared_callback_state();
+            let state = callback_state
+                .lock()
+                .map_err(|_| "callback state lock poisoned".to_string())?;
+            state
+                .resolve_peer_target(target)
+                .ok_or_else(|| format!("peer {target:?} not found; wait for presence or use connect"))?
+        };
+
+        let mesh = self
+            .live_mesh_info()?
+            .ok_or_else(|| "runtime mesh info unavailable".to_string())?;
+        let room = direct_room_name(&mesh.public_key, &target_peer);
+        library.subscribe(handle, &room)?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.record_subscribed_room(&room);
+        }
+
+        let invite = serde_json::to_vec(&ChatPayload::dm_invite(
+            self.settings.nickname(),
+            &room,
+            &target_peer,
+        ))
+        .map_err(|err| format!("failed to encode direct chat invite: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &invite,
+            format!("Queued direct-chat invite for {target_label} until a peer path is ready."),
+        )?;
+        self.publish_presence(library, handle)?;
+        Ok((target_peer, target_label, room))
     }
 
     fn publish_control_payload(

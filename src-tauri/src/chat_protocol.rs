@@ -21,6 +21,14 @@ pub struct ChatPayload {
     pub rooms: Vec<String>,
     #[serde(default)]
     pub target: String,
+    #[serde(default)]
+    pub call_id: String,
+    #[serde(default)]
+    pub call_action: String,
+    #[serde(default)]
+    pub signal_type: String,
+    #[serde(default)]
+    pub signal_data: String,
 }
 
 impl ChatPayload {
@@ -49,6 +57,56 @@ impl ChatPayload {
             nick: nick.to_string(),
             room: room.to_string(),
             target: target.to_string(),
+            sent_at: hhmmss_now(),
+            ..Self::default()
+        }
+    }
+
+    pub fn call_control(
+        nick: &str,
+        kind: &str,
+        room: &str,
+        target: &str,
+        call_id: &str,
+    ) -> Self {
+        Self {
+            kind: kind.to_string(),
+            nick: nick.to_string(),
+            room: room.to_string(),
+            target: target.to_string(),
+            call_id: call_id.to_string(),
+            call_action: kind.to_string(),
+            sent_at: hhmmss_now(),
+            ..Self::default()
+        }
+    }
+
+    pub fn webrtc_signal(
+        nick: &str,
+        room: &str,
+        target: &str,
+        call_id: &str,
+        signal_type: &str,
+        signal_data: &str,
+    ) -> Self {
+        Self {
+            kind: "webrtc_signal".to_string(),
+            nick: nick.to_string(),
+            room: room.to_string(),
+            target: target.to_string(),
+            call_id: call_id.to_string(),
+            signal_type: signal_type.to_string(),
+            signal_data: signal_data.to_string(),
+            sent_at: hhmmss_now(),
+            ..Self::default()
+        }
+    }
+
+    pub fn voice_presence(nick: &str, kind: &str, room: &str) -> Self {
+        Self {
+            kind: kind.to_string(),
+            nick: nick.to_string(),
+            room: room.to_string(),
             sent_at: hhmmss_now(),
             ..Self::default()
         }
