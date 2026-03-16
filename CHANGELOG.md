@@ -17,3 +17,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added global room search with `Ctrl/Cmd+K`, cross-room live message indexing, and signed archive results for quick navigation across MOSH.
 - Added local read-state tracking and room mute controls, including unread badges driven by persisted room activity and muted-room suppression for desktop notifications.
 - Added a local peer trust registry with trust/revoke actions, trusted/new/name-changed states in the member list, and a dedicated trust tab in settings.
+- Added a mesh invite flow for copying the current room/runtime setup and applying incoming `mosh://invite/...` links without manually re-entering mesh settings.
