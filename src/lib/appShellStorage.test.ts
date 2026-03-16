@@ -102,6 +102,7 @@ function createStoredPreferences() {
       lobby: 'text',
     },
     roomDrafts: {},
+    messageOverlays: {},
     pinnedMessages: {},
     mutedRooms: [],
     lastReadMessageIds: {},

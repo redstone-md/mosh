@@ -11,6 +11,7 @@ import { useInviteFlow } from './hooks/useInviteFlow'
 import { useMessageOutbox } from './hooks/useMessageOutbox'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
+import { useMessageOverlayState } from './hooks/useMessageOverlayState'
 import { usePeerTrustState } from './hooks/usePeerTrustState'
 import { useRoomDraftState } from './hooks/useRoomDraftState'
 import { useRoomActivityState } from './hooks/useRoomActivityState'
@@ -204,13 +205,19 @@ export function App() {
     archiveRefreshKey,
   )
   const activePinnedMessageIds = preferences.pinnedMessages[activeRoom.id] ?? []
-  const pinnedMessages = useMemo(
-    () => resolvePinnedMessages(preferences.pinnedMessages, activeRoom.id, archiveState.mergedMessages),
-    [activeRoom.id, archiveState.mergedMessages, preferences.pinnedMessages],
-  )
   const roomActivity = useRoomActivityState({ snapshot: data, selectedRoomId: preferences.selectedRoomId, lastReadMessageIds: preferences.lastReadMessageIds, mutedRooms: preferences.mutedRooms, setPreferences })
   const peerTrust = usePeerTrustState({ peers: data?.peers ?? [], trustedPeers: preferences.trustedPeers, setPreferences })
   const roomDraftState = useRoomDraftState({ roomDrafts: preferences.roomDrafts, setPreferences })
+  const messageOverlayState = useMessageOverlayState({
+    messageOverlays: preferences.messageOverlays,
+    setPreferences,
+    hiddenLabel: activeCopy.messages.hiddenLocally,
+  })
+  const overlaidMessages = useMemo(() => messageOverlayState.applyOverlays(archiveState.mergedMessages), [archiveState.mergedMessages, messageOverlayState.applyOverlays])
+  const pinnedMessages = useMemo(
+    () => resolvePinnedMessages(preferences.pinnedMessages, activeRoom.id, overlaidMessages),
+    [activeRoom.id, overlaidMessages, preferences.pinnedMessages],
+  )
   const messageOutbox = useMessageOutbox({
     currentUser: runtimeDraft.nickname,
     liveMessages: data?.messages ?? [],
@@ -219,11 +226,11 @@ export function App() {
     },
   })
   const displayMessages = useMemo(
-    () => messageOutbox.buildDisplayMessages(activeRoom.id, archiveState.mergedMessages, archiveState.archive?.messages.map((message) => message.id) ?? []),
-    [activeRoom.id, archiveState.archive?.messages, archiveState.mergedMessages, messageOutbox.buildDisplayMessages],
+    () =>
+      messageOutbox.buildDisplayMessages(activeRoom.id, overlaidMessages, archiveState.archive?.messages.map((message) => message.id) ?? []),
+    [activeRoom.id, archiveState.archive?.messages, overlaidMessages, messageOutbox.buildDisplayMessages],
   )
   const messageDraft = roomDraftState.getDraft(activeRoom.id)
-
   useEffect(() => {
     if (JSON.stringify(reconciledGroups) === JSON.stringify(preferences.groups)) {
       return
@@ -325,9 +332,7 @@ export function App() {
 
   function handleThemeChange(theme: ThemeId) { setPreferences((current) => ({ ...current, theme })) }
 
-  function handleLanguagePreferenceChange(languagePreference: 'system' | 'en' | 'ru') {
-    setPreferences((current) => ({ ...current, languagePreference }))
-  }
+  function handleLanguagePreferenceChange(languagePreference: 'system' | 'en' | 'ru') { setPreferences((current) => ({ ...current, languagePreference })) }
 
   function handleRuntimeDraftChange(draft: UpdateRuntimeSettingsInput) {
     setPreferences((current) => ({ ...current, runtimeDraft: draft }))
@@ -362,7 +367,6 @@ export function App() {
   async function handleRestoreRollbackSnapshot(snapshotId: string) {
     const selectedSnapshot = preferences.identityRollbackSnapshots.find((snapshot) => snapshot.id === snapshotId)
     if (!selectedSnapshot) throw new Error('Rollback snapshot not found.')
-
     const previousFingerprint = identityFingerprint
     const restoredSnapshot = await restoreIdentityRollbackSnapshot(snapshotId)
     recordIdentityTransferEvent({ action: 'rollback', channel: 'manual', activeFingerprint: restoredSnapshot.fingerprint, replacedFingerprint: previousFingerprint, packageSourceFingerprint: restoredSnapshot.fingerprint, packageExportedAt: restoredSnapshot.capturedAt })
@@ -495,6 +499,8 @@ export function App() {
         onSendMessage={() => void handleSendMessage()}
         onRetryMessage={(clientId) => void messageOutbox.retryMessage(clientId)}
         onDismissMessage={messageOutbox.dismissMessage}
+        onEditMessage={messageOverlayState.editMessage}
+        onToggleMessageHidden={messageOverlayState.toggleMessageHidden}
         onTogglePinMessage={(messageId) =>
           setPreferences((current) => ({
             ...current,

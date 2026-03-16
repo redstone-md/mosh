@@ -12,6 +12,7 @@ export type PendingOutgoingMessage = Message & {
 export type DisplayMessage = Message & {
   pendingClientId?: string
   deliveryState?: DeliveryState
+  overlayState?: 'edited' | 'hidden'
 }
 
 export function createPendingOutgoingMessage(
