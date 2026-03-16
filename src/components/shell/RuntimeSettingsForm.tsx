@@ -1,4 +1,5 @@
 import type { UpdateRuntimeSettingsInput } from '../../lib/schemas'
+import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
@@ -21,11 +22,13 @@ export function RuntimeSettingsForm({
   onDraftChange,
   onSubmit,
 }: RuntimeSettingsFormProps) {
+  const { copy } = useI18n()
+
   return (
     <div className="space-y-5">
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
-          <Label htmlFor="nickname">Nickname</Label>
+          <Label htmlFor="nickname">{copy.form.nickname}</Label>
           <Input
             id="nickname"
             value={draft.nickname}
@@ -34,7 +37,7 @@ export function RuntimeSettingsForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="mesh-id">Mesh ID</Label>
+          <Label htmlFor="mesh-id">{copy.form.meshId}</Label>
           <Input
             id="mesh-id"
             value={draft.meshId}
@@ -43,7 +46,7 @@ export function RuntimeSettingsForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="initial-room">Initial Channel</Label>
+          <Label htmlFor="initial-room">{copy.form.initialChannel}</Label>
           <Input
             id="initial-room"
             value={draft.initialRoom}
@@ -52,17 +55,17 @@ export function RuntimeSettingsForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="startup-peer">Startup Peer</Label>
+          <Label htmlFor="startup-peer">{copy.form.startupPeer}</Label>
           <Input
             id="startup-peer"
             value={draft.startupPeer}
-            placeholder="host:port"
+            placeholder={copy.form.startupPeerPlaceholder}
             disabled={disabled}
             onChange={(event) => onDraftChange({ ...draft, startupPeer: event.target.value })}
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="listen-port">Listen Port</Label>
+          <Label htmlFor="listen-port">{copy.form.listenPort}</Label>
           <Input
             id="listen-port"
             type="number"
@@ -79,7 +82,7 @@ export function RuntimeSettingsForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="tracker-mode">Tracker Bootstrap</Label>
+          <Label htmlFor="tracker-mode">{copy.form.trackerBootstrap}</Label>
           <Select
             value={draft.trackerMode}
             onValueChange={(value: 'default' | 'disabled') =>
@@ -90,8 +93,8 @@ export function RuntimeSettingsForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">Built-in tracker</SelectItem>
-              <SelectItem value="disabled">Disabled</SelectItem>
+              <SelectItem value="default">{copy.runtime.trackerBuiltIn}</SelectItem>
+              <SelectItem value="disabled">{copy.runtime.trackerDisabled}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -110,7 +113,7 @@ export function RuntimeSettingsForm({
             })
           }
         />
-        Enable LAN discovery
+        {copy.form.lanDiscovery}
       </label>
 
       {errorNote ? <p className="text-sm text-[var(--danger)]">{errorNote}</p> : null}

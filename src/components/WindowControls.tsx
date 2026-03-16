@@ -8,6 +8,7 @@ import {
   toggleDesktopWindowMaximize,
 } from '../lib/desktopWindow'
 import { isTauriEnvironment } from '../lib/tauriEnv'
+import { useI18n } from './I18nProvider'
 
 type WindowControlsProps = {
   className?: string
@@ -16,6 +17,7 @@ type WindowControlsProps = {
 export function WindowControls({ className }: WindowControlsProps) {
   const [isMaximized, setIsMaximized] = useState(false)
   const interactive = isTauriEnvironment()
+  const { copy } = useI18n()
 
   useEffect(() => {
     if (!interactive) {
@@ -40,7 +42,7 @@ export function WindowControls({ className }: WindowControlsProps) {
       <button
         className="p-2 text-foreground/50 transition-colors hover:bg-muted/50 hover:text-foreground"
         onClick={() => void minimizeDesktopWindow()}
-        title="Minimize"
+        title={copy.runtime.minimize}
       >
         <Minus size={16} />
       </button>
@@ -52,14 +54,14 @@ export function WindowControls({ className }: WindowControlsProps) {
             setIsMaximized(state.maximized)
           })
         }}
-        title={isMaximized ? 'Restore' : 'Maximize'}
+        title={isMaximized ? copy.runtime.restore : copy.runtime.maximize}
       >
         {isMaximized ? <Square size={14} /> : <Maximize2 size={16} />}
       </button>
       <button
         className="p-2 text-foreground/50 transition-colors hover:bg-red-500/10 hover:text-red-500"
         onClick={() => void hideWindowToTray()}
-        title="Hide to tray"
+        title={copy.runtime.hideToTray}
       >
         <X size={16} />
       </button>

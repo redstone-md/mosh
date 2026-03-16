@@ -1,27 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BootstrapErrorScreen, LoadingScreen } from './components/AppBootstrapState'
-import { ShellToaster } from './components/ShellToaster'
-import { CallDock } from './components/shell/CallDock'
-import { ConversationSidebar } from './components/shell/ConversationSidebar'
-import { ConversationView } from './components/shell/ConversationView'
-import { CreateSpaceDialog } from './components/shell/CreateSpaceDialog'
+import { I18nProvider } from './components/I18nProvider'
 import { IntroSurface } from './components/shell/IntroSurface'
-import { MemberSidebar } from './components/shell/MemberSidebar'
+import { MainSurface } from './components/shell/MainSurface'
 import { OnboardingSurface } from './components/shell/OnboardingSurface'
-import { ServerRail } from './components/shell/ServerRail'
-import { SettingsDialog } from './components/shell/SettingsDialog'
-import { Titlebar } from './components/Titlebar'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useSignedChatArchive } from './hooks/useSignedChatArchive'
 import { findRoomById, getVisiblePeers, sameRuntimeDraft, selectRoomFallback, toRuntimeDraft } from './lib/appShellSelectors'
 import { ensureSigningIdentity } from './lib/appShellStorage'
-import { getChannelType, hasPersistedPreferences, loadPreferences, reconcileGroups, reconcileRoomTypes, savePreferences } from './lib/appShellStorage'
-import { dedupeMessages, describeArchiveState, formatRoomTitle } from './lib/chatPresentation'
+import { hasPersistedPreferences, loadPreferences, reconcileGroups, reconcileRoomTypes, savePreferences } from './lib/appShellStorage'
+import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
+import { detectSystemLanguage, getI18nCopy, resolveAppLanguage } from './lib/i18n'
 import type { ChannelType, RoomGroup, ThemeId } from './lib/appShellSchemas'
 import type { UpdateRuntimeSettingsInput } from './lib/schemas'
 
@@ -35,6 +29,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [identityFingerprint, setIdentityFingerprint] = useState<string>('')
   const [introComplete, setIntroComplete] = useState(() => hasPersistedPreferences())
+  const systemLanguage = useMemo(() => detectSystemLanguage(), [])
 
   const snapshot = useQuery({
     queryKey: ['desktop-snapshot'],
@@ -117,6 +112,11 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = preferences.theme
   }, [preferences.theme])
+  const activeLanguage = resolveAppLanguage(preferences.languagePreference, systemLanguage)
+  const activeCopy = getI18nCopy(activeLanguage)
+  useEffect(() => {
+    document.documentElement.lang = activeLanguage
+  }, [activeLanguage])
 
   useEffect(() => {
     void ensureSigningIdentity().then((identity) => {
@@ -155,6 +155,7 @@ export function App() {
   useDesktopNotifications({
     snapshot: snapshot.data,
     selectedRoomId: preferences.selectedRoomId,
+    language: activeLanguage,
   })
 
   useDesktopErrorDialogs({
@@ -247,11 +248,29 @@ export function App() {
   }, [preferences.roomTypes, reconciledRoomTypes])
 
   if (snapshot.isPending) {
-    return <LoadingScreen />
+    return (
+      <I18nProvider
+        language={activeLanguage}
+        systemLanguage={systemLanguage}
+        languagePreference={preferences.languagePreference}
+        onLanguagePreferenceChange={handleLanguagePreferenceChange}
+      >
+        <LoadingScreen />
+      </I18nProvider>
+    )
   }
 
   if (snapshot.isError) {
-    return <BootstrapErrorScreen message={snapshot.error.message} />
+    return (
+      <I18nProvider
+        language={activeLanguage}
+        systemLanguage={systemLanguage}
+        languagePreference={preferences.languagePreference}
+        onLanguagePreferenceChange={handleLanguagePreferenceChange}
+      >
+        <BootstrapErrorScreen message={snapshot.error.message} />
+      </I18nProvider>
+    )
   }
 
   if (!data) {
@@ -315,6 +334,13 @@ export function App() {
     }))
   }
 
+  function handleLanguagePreferenceChange(languagePreference: 'system' | 'en' | 'ru') {
+    setPreferences((current) => ({
+      ...current,
+      languagePreference,
+    }))
+  }
+
   function handleRuntimeDraftChange(draft: UpdateRuntimeSettingsInput) {
     setPreferences((current) => ({
       ...current,
@@ -342,152 +368,129 @@ export function App() {
 
   const mediaLabel =
     mediaSession.state.activeRoomId
-      ? `${formatRoomTitle(visibleRooms.find((room) => room.id === mediaSession.state.activeRoomId))} · ${mediaSession.state.remoteStreams.length} peers`
-      : 'Voice idle'
+      ? activeCopy.runtime.roomLiveLabel(
+          formatRoomTitle(
+            visibleRooms.find((room) => room.id === mediaSession.state.activeRoomId),
+            activeCopy.common.unknownRoom,
+          ),
+          mediaSession.state.remoteStreams.length,
+        )
+      : activeCopy.runtime.offlineLabel
   const activeVoiceRoom = data.voiceRooms.find((room) => room.joined) ?? null
 
   if (!introComplete) {
     return (
-      <IntroSurface
-        runtime={data.runtime}
-        isBusy={toggleRuntime.isPending}
-        errorNote={toggleRuntime.error?.message}
-        onToggleRuntime={() => toggleRuntime.mutate()}
-        onComplete={() => setIntroComplete(true)}
-      />
+      <I18nProvider
+        language={activeLanguage}
+        systemLanguage={systemLanguage}
+        languagePreference={preferences.languagePreference}
+        onLanguagePreferenceChange={handleLanguagePreferenceChange}
+      >
+        <IntroSurface
+          runtime={data.runtime}
+          isBusy={toggleRuntime.isPending}
+          errorNote={toggleRuntime.error?.message}
+          onToggleRuntime={() => toggleRuntime.mutate()}
+          onComplete={() => setIntroComplete(true)}
+        />
+      </I18nProvider>
     )
   }
 
   if (showOnboarding) {
     return (
-      <OnboardingSurface
-        runtime={data.runtime}
-        theme={preferences.theme}
-        runtimeDraft={runtimeDraft}
-        isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
-        formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
-        titlebarErrorNote={toggleRuntime.error?.message}
-        onThemeChange={handleThemeChange}
-        onRuntimeDraftChange={handleRuntimeDraftChange}
-        onStart={() => void handleStartFromOnboarding()}
-        onSkip={handleSkipOnboarding}
-        onToggleRuntime={() => toggleRuntime.mutate()}
-        runtimeToggleBusy={toggleRuntime.isPending}
-      />
+      <I18nProvider
+        language={activeLanguage}
+        systemLanguage={systemLanguage}
+        languagePreference={preferences.languagePreference}
+        onLanguagePreferenceChange={handleLanguagePreferenceChange}
+      >
+        <OnboardingSurface
+          runtime={data.runtime}
+          theme={preferences.theme}
+          languagePreference={preferences.languagePreference}
+          runtimeDraft={runtimeDraft}
+          isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
+          formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
+          titlebarErrorNote={toggleRuntime.error?.message}
+          onThemeChange={handleThemeChange}
+          onLanguagePreferenceChange={handleLanguagePreferenceChange}
+          onRuntimeDraftChange={handleRuntimeDraftChange}
+          onStart={() => void handleStartFromOnboarding()}
+          onSkip={handleSkipOnboarding}
+          onToggleRuntime={() => toggleRuntime.mutate()}
+          runtimeToggleBusy={toggleRuntime.isPending}
+        />
+      </I18nProvider>
     )
   }
 
   return (
-    <main className="flex h-screen flex-col bg-[var(--app)] text-foreground">
-      <ShellToaster />
-
-      <Titlebar
-        runtime={data.runtime}
+    <I18nProvider
+      language={activeLanguage}
+      systemLanguage={systemLanguage}
+      languagePreference={preferences.languagePreference}
+      onLanguagePreferenceChange={handleLanguagePreferenceChange}
+    >
+      <MainSurface
+        data={data}
+        runtimeDraft={runtimeDraft}
+        preferences={{
+          theme: preferences.theme,
+          languagePreference: preferences.languagePreference,
+          selectedDock: preferences.selectedDock,
+          selectedGroupId: preferences.selectedGroupId,
+          selectedRoomId: preferences.selectedRoomId,
+        }}
+        reconciledGroups={reconciledGroups}
+        visibleRooms={visibleRooms}
+        activeRoom={activeRoom}
+        visiblePeers={visiblePeers}
+        mentionablePeerNames={mentionablePeerNames}
+        createDialogOpen={createDialogOpen}
+        settingsOpen={settingsOpen}
+        archiveState={archiveState}
+        identityFingerprint={identityFingerprint}
+        mediaLabel={mediaLabel}
+        activeVoiceRoom={activeVoiceRoom}
+        mediaSession={mediaSession}
+        messageDraft={messageDraft}
+        roomTypes={reconciledRoomTypes}
+        publishPending={publishMessage.isPending}
+        publishError={publishMessage.error?.message}
+        runtimeTogglePending={toggleRuntime.isPending}
+        runtimeToggleError={toggleRuntime.error?.message}
+        runtimeSettingsPending={updateRuntimeSettings.isPending}
+        runtimeSettingsError={updateRuntimeSettings.error?.message}
         onToggleRuntime={() => toggleRuntime.mutate()}
-        isBusy={toggleRuntime.isPending}
-        errorNote={toggleRuntime.error?.message}
-      />
-
-      <section className="flex min-h-0 flex-1">
-        <ServerRail
-          groups={reconciledGroups}
-          selectedDock={preferences.selectedDock}
-          selectedGroupId={preferences.selectedGroupId}
-          onSelectHome={() =>
-            setPreferences((current) => ({
-              ...current,
-              selectedDock: 'home',
-              selectedRoomId:
-                findRoomById(visibleRooms, current.selectedRoomId)?.kind === 'dm'
-                  ? current.selectedRoomId
-                  : visibleRooms.find((room) => room.kind === 'dm')?.id ?? current.selectedRoomId,
-            }))
-          }
-          onSelectGroup={(groupId) =>
-            setPreferences((current) => ({
-              ...current,
-              selectedDock: 'group',
-              selectedGroupId: groupId,
-            }))
-          }
-          onOpenCreate={() => setCreateDialogOpen(true)}
-        />
-
-        <ConversationSidebar
-          runtime={data.runtime}
-          currentUser={runtimeDraft.nickname}
-          selectedDock={preferences.selectedDock}
-          activeGroup={reconciledGroups.find((group) => group.id === preferences.selectedGroupId)}
-          rooms={visibleRooms}
-          peers={data.peers}
-          selectedRoomId={activeRoom.id}
-          mediaLabel={mediaLabel}
-          roomTypes={reconciledRoomTypes}
-          activeVoiceRoom={activeVoiceRoom}
-          onSelectRoom={(roomId) =>
-            setPreferences((current) => ({
-              ...current,
-              selectedRoomId: roomId,
-              selectedDock: findRoomById(visibleRooms, roomId)?.kind === 'dm' ? 'home' : current.selectedDock,
-            }))
-          }
-          onOpenSettings={() => setSettingsOpen(true)}
-          onOpenCreate={() => setCreateDialogOpen(true)}
-          onOpenDirectRoom={(target) => openDirectRoom.mutate(target)}
-        />
-
-        <ConversationView
-          room={activeRoom}
-          peers={visiblePeers}
-          messages={archiveState.mergedMessages}
-          archiveFingerprint={archiveState.archive?.signerFingerprint}
-          archiveVerified={archiveState.archive?.verified}
-          draft={messageDraft}
-          isSending={publishMessage.isPending}
-          mediaLive={mediaSession.state.status === 'live'}
-          mediaRoomId={mediaSession.state.activeRoomId}
-          channelType={getChannelType(activeRoom, reconciledRoomTypes)}
-          peerNames={mentionablePeerNames}
-          errorNote={publishMessage.error?.message}
-          onDraftChange={setMessageDraft}
-          onSend={() => void handleSendMessage()}
-          onOpenSettings={() => setSettingsOpen(true)}
-          onStartVoice={() => {
-            if (mediaSession.state.activeRoomId === activeRoom.id) {
-              void mediaSession.leaveVoiceRoom()
-              return
-            }
-            void mediaSession.joinVoiceRoom(activeRoom.id, false)
-          }}
-          onStartScreenShare={() => {
-            if (mediaSession.state.activeRoomId === activeRoom.id) {
-              if (mediaSession.state.screenSharingEnabled) {
-                void mediaSession.stopScreenShare()
-              } else {
-                void mediaSession.startScreenShare()
-              }
-              return
-            }
-            void mediaSession.joinVoiceRoom(activeRoom.id, true)
-          }}
-        />
-
-        <MemberSidebar
-          room={activeRoom}
-          peers={visiblePeers}
-          archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
-          archiveVerified={archiveState.archive?.verified}
-          mediaLabel={mediaLabel}
-          activeVoiceRoom={activeVoiceRoom}
-          onOpenDirectRoom={(target) => openDirectRoom.mutate(target)}
-        />
-      </section>
-
-      <CreateSpaceDialog
-        open={createDialogOpen}
-        availableChannels={visibleRooms.filter((room) => room.kind === 'channel')}
-        peers={data.peers}
-        onOpenChange={setCreateDialogOpen}
+        onSelectHome={() =>
+          setPreferences((current) => ({
+            ...current,
+            selectedDock: 'home',
+            selectedRoomId:
+              findRoomById(visibleRooms, current.selectedRoomId)?.kind === 'dm'
+                ? current.selectedRoomId
+                : visibleRooms.find((room) => room.kind === 'dm')?.id ?? current.selectedRoomId,
+          }))
+        }
+        onSelectGroup={(groupId) =>
+          setPreferences((current) => ({
+            ...current,
+            selectedDock: 'group',
+            selectedGroupId: groupId,
+          }))
+        }
+        onOpenCreate={() => setCreateDialogOpen(true)}
+        onCloseCreate={setCreateDialogOpen}
+        onOpenSettings={setSettingsOpen}
+        onSelectRoom={(roomId) =>
+          setPreferences((current) => ({
+            ...current,
+            selectedRoomId: roomId,
+            selectedDock: findRoomById(visibleRooms, roomId)?.kind === 'dm' ? 'home' : current.selectedDock,
+          }))
+        }
+        onOpenDirectRoom={(target) => openDirectRoom.mutate(target)}
         onCreateChannel={(room, channelType) => {
           setPreferences((current) => ({
             ...current,
@@ -499,27 +502,10 @@ export function App() {
           subscribeRoom.mutate(room)
         }}
         onCreateGroup={handleCreateGroup}
-        onCreateDirect={(target) => openDirectRoom.mutate(target)}
-      />
-
-      <SettingsDialog
-        open={settingsOpen}
-        theme={preferences.theme}
-        runtimeDraft={runtimeDraft}
-        groups={reconciledGroups}
-        rooms={visibleRooms}
-        roomTypes={reconciledRoomTypes}
-        selectedGroupId={preferences.selectedGroupId}
-        runtimeError={updateRuntimeSettings.error?.message}
-        archiveLabel={describeArchiveState(
-          archiveState.archive?.signerFingerprint ?? identityFingerprint,
-          archiveState.archive?.verified,
-        )}
-        archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
-        archiveVerified={archiveState.archive?.verified}
-        saving={updateRuntimeSettings.isPending}
-        onOpenChange={setSettingsOpen}
+        onDraftChange={setMessageDraft}
+        onSendMessage={() => void handleSendMessage()}
         onThemeChange={handleThemeChange}
+        onLanguagePreferenceChange={handleLanguagePreferenceChange}
         onRuntimeDraftChange={handleRuntimeDraftChange}
         onSaveRuntime={() => void handleSaveRuntime()}
         onSaveWorkspace={handleSaveWorkspace}
@@ -530,15 +516,6 @@ export function App() {
           }))
         }
       />
-
-      <CallDock
-        roomLabel={formatRoomTitle(activeRoom)}
-        memberCount={visiblePeers.length}
-        mediaState={mediaSession.state}
-        onToggleMicrophone={mediaSession.toggleMicrophone}
-        onStopScreenShare={mediaSession.stopScreenShare}
-        onLeaveVoice={mediaSession.leaveVoiceRoom}
-      />
-    </main>
+    </I18nProvider>
   )
 }

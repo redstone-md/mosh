@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { messageSchema, updateRuntimeSettingsInputSchema } from './schemas'
 
 export const themeIdSchema = z.enum(['moss', 'graphite', 'linen', 'ember'])
+export const languagePreferenceSchema = z.enum(['system', 'en', 'ru'])
 
 export const groupAccentSchema = z.enum(['forest', 'slate', 'sand', 'ember'])
 export const channelTypeSchema = z.enum(['text', 'voice'])
@@ -22,6 +23,7 @@ export const roomGroupSchema = z.object({
 
 export const shellPreferencesSchema = z.object({
   theme: themeIdSchema,
+  languagePreference: languagePreferenceSchema.default('system'),
   onboardingCompleted: z.boolean(),
   selectedDock: z.enum(['home', 'group']),
   selectedGroupId: z.string().min(1),
@@ -55,6 +57,7 @@ export const signedRoomArchiveSchema = z.object({
 export const archiveStoreSchema = z.record(z.string(), signedRoomArchiveSchema)
 
 export type ThemeId = z.infer<typeof themeIdSchema>
+export type LanguagePreference = z.infer<typeof languagePreferenceSchema>
 export type GroupAccent = z.infer<typeof groupAccentSchema>
 export type ChannelType = z.infer<typeof channelTypeSchema>
 export type RoomGroup = z.infer<typeof roomGroupSchema>

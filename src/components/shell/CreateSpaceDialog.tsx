@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 
 import { channelTypeSchema, groupAccentSchema, roomGroupSchema } from '../../lib/appShellSchemas'
 import type { PeerSummary, RoomSummary } from '../../lib/schemas'
+import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -56,6 +57,7 @@ export function CreateSpaceDialog({
   onCreateGroup,
   onCreateDirect,
 }: CreateSpaceDialogProps) {
+  const { copy } = useI18n()
   const [channelName, setChannelName] = useState('')
   const [channelType, setChannelType] = useState<z.infer<typeof channelTypeSchema>>('text')
   const [directTarget, setDirectTarget] = useState('')
@@ -80,7 +82,7 @@ export function CreateSpaceDialog({
       room: channelName,
     })
     if (!result.success) {
-      setErrorNote(result.error.issues[0]?.message ?? 'Channel name is invalid')
+      setErrorNote(copy.createSpace.channelNameInvalid)
       return
     }
     setErrorNote(null)
@@ -95,7 +97,7 @@ export function CreateSpaceDialog({
       target: directTarget,
     })
     if (!result.success) {
-      setErrorNote(result.error.issues[0]?.message ?? 'Peer target is invalid')
+      setErrorNote(copy.createSpace.peerTargetInvalid)
       return
     }
     setErrorNote(null)
@@ -112,7 +114,7 @@ export function CreateSpaceDialog({
       roomIds: groupRoomIds,
     })
     if (!result.success) {
-      setErrorNote(result.error.issues[0]?.message ?? 'Group is invalid')
+      setErrorNote(copy.createSpace.groupInvalid)
       return
     }
     setErrorNote(null)
@@ -127,20 +129,20 @@ export function CreateSpaceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create space</DialogTitle>
-          <DialogDescription>Join a channel, open a direct room, or create a local group layout.</DialogDescription>
+          <DialogTitle>{copy.createSpace.title}</DialogTitle>
+          <DialogDescription>{copy.createSpace.description}</DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="channel" className="space-y-4">
           <TabsList>
-            <TabsTrigger value="channel">Channel</TabsTrigger>
-            <TabsTrigger value="direct">Direct</TabsTrigger>
-            <TabsTrigger value="group">Group</TabsTrigger>
+            <TabsTrigger value="channel">{copy.common.channel}</TabsTrigger>
+            <TabsTrigger value="direct">{copy.common.direct}</TabsTrigger>
+            <TabsTrigger value="group">{copy.common.group}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="channel" className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="channel-name">Channel name</Label>
+              <Label htmlFor="channel-name">{copy.createSpace.channelName}</Label>
               <Input
                 id="channel-name"
                 value={channelName}
@@ -149,7 +151,7 @@ export function CreateSpaceDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="channel-type">Channel type</Label>
+              <Label htmlFor="channel-type">{copy.createSpace.channelType}</Label>
               <Select
                 value={channelType}
                 onValueChange={(value: z.infer<typeof channelTypeSchema>) => setChannelType(value)}
@@ -158,19 +160,19 @@ export function CreateSpaceDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="text">Text channel</SelectItem>
-                  <SelectItem value="voice">Voice channel</SelectItem>
+                  <SelectItem value="text">{copy.createSpace.textChannel}</SelectItem>
+                  <SelectItem value="voice">{copy.createSpace.voiceChannel}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <DialogFooter>
-              <Button onClick={handleCreateChannel}>Join or create channel</Button>
+              <Button onClick={handleCreateChannel}>{copy.createSpace.joinCreateChannel}</Button>
             </DialogFooter>
           </TabsContent>
 
           <TabsContent value="direct" className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="direct-target">Peer nickname</Label>
+              <Label htmlFor="direct-target">{copy.createSpace.peerNickname}</Label>
               <Input
                 id="direct-target"
                 value={directTarget}
@@ -179,14 +181,14 @@ export function CreateSpaceDialog({
               />
             </div>
             <DialogFooter>
-              <Button onClick={handleCreateDirect}>Open direct room</Button>
+              <Button onClick={handleCreateDirect}>{copy.createSpace.openDirectRoom}</Button>
             </DialogFooter>
           </TabsContent>
 
           <TabsContent value="group" className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="group-name">Group name</Label>
+                <Label htmlFor="group-name">{copy.createSpace.groupName}</Label>
                 <Input
                   id="group-name"
                   value={groupName}
@@ -195,7 +197,7 @@ export function CreateSpaceDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="group-icon">Icon</Label>
+                <Label htmlFor="group-icon">{copy.workspace.icon}</Label>
                 <Input
                   id="group-icon"
                   value={groupIcon}
@@ -205,7 +207,7 @@ export function CreateSpaceDialog({
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Accent</Label>
+              <Label>{copy.workspace.accent}</Label>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 {groupAccentSchema.options.map((accent) => (
                   <button
@@ -217,13 +219,13 @@ export function CreateSpaceDialog({
                     }`}
                     onClick={() => setGroupAccent(accent)}
                   >
-                    {accent}
+                    {copy.workspace.accents[accent]}
                   </button>
                 ))}
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Assigned channels</Label>
+              <Label>{copy.workspace.assignedChannels}</Label>
               <div className="grid max-h-44 gap-2 overflow-y-auto rounded-md border border-border bg-[var(--panel-strong)] p-3">
                 {availableChannels.length > 0 ? (
                   availableChannels.map((room) => {
@@ -247,12 +249,12 @@ export function CreateSpaceDialog({
                     )
                   })
                 ) : (
-                  <p className="text-sm text-[var(--muted-foreground)]">Join a channel first to group it here.</p>
+                  <p className="text-sm text-[var(--muted-foreground)]">{copy.createSpace.joinChannelFirst}</p>
                 )}
               </div>
             </div>
             <DialogFooter>
-              <Button onClick={handleCreateGroup}>Create group</Button>
+              <Button onClick={handleCreateGroup}>{copy.createSpace.createGroup}</Button>
             </DialogFooter>
           </TabsContent>
         </Tabs>

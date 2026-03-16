@@ -1,18 +1,22 @@
 import { useEffect, useRef } from 'react'
 import { formatRoomTitle } from '../lib/chatPresentation'
 import { readDesktopWindowState } from '../lib/desktopWindow'
+import { getI18nCopy, type AppLanguage } from '../lib/i18n'
 import type { DesktopSnapshot } from '../lib/schemas'
 import { notifyDesktop } from '../lib/desktopNotifications'
 
 type UseDesktopNotificationsOptions = {
   snapshot?: DesktopSnapshot
   selectedRoomId: string
+  language: AppLanguage
 }
 
 export function useDesktopNotifications({
   snapshot,
   selectedRoomId,
+  language,
 }: UseDesktopNotificationsOptions) {
+  const copy = getI18nCopy(language)
   const seenMessageIds = useRef<Set<string>>(new Set())
   const hydrated = useRef(false)
 
@@ -73,10 +77,10 @@ export function useDesktopNotifications({
         }
 
         const title = mention
-          ? `Mention from ${message.author}`
+          ? copy.notifications.mentionFrom(message.author)
           : directRoom
-            ? `Direct message from ${message.author}`
-            : `New message in ${formatRoomTitle(room)}`
+            ? copy.notifications.directMessageFrom(message.author)
+            : copy.notifications.newMessageIn(formatRoomTitle(room, copy.common.unknownRoom))
         await notifyDesktop(title, message.body)
       }
     })()
@@ -84,5 +88,5 @@ export function useDesktopNotifications({
     return () => {
       cancelled = true
     }
-  }, [selectedRoomId, snapshot])
+  }, [copy, selectedRoomId, snapshot])
 }

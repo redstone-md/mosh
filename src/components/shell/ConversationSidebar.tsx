@@ -3,9 +3,11 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import type { ChannelType, RoomGroup } from '../../lib/appShellSchemas'
+import { localizePeerStatus, localizeRuntimeState } from '../../lib/i18n'
 import { formatRoomTitle, initialsFromName } from '../../lib/chatPresentation'
 import type { PeerSummary, RoomSummary, RuntimeStatus, VoiceRoom } from '../../lib/schemas'
 import { cn } from '../../lib/utils'
+import { useI18n } from '../I18nProvider'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -45,6 +47,7 @@ export function ConversationSidebar({
   onOpenCreate,
   onOpenDirectRoom,
 }: ConversationSidebarProps) {
+  const { copy } = useI18n()
   const [search, setSearch] = useState('')
 
   const filteredRooms = useMemo(() => {
@@ -69,11 +72,11 @@ export function ConversationSidebar({
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">
-              {selectedDock === 'home' ? 'Direct messages' : activeGroup?.name ?? 'Group'}
+              {selectedDock === 'home' ? copy.sidebar.directMessages : activeGroup?.name ?? copy.common.group}
             </p>
-            <p className="text-xs text-[var(--muted-foreground)]">{runtime.state}</p>
+            <p className="text-xs text-[var(--muted-foreground)]">{localizeRuntimeState(copy, runtime.state)}</p>
           </div>
-          <Button variant="ghost" size="icon" onClick={onOpenCreate} title="Create space">
+          <Button variant="ghost" size="icon" onClick={onOpenCreate} title={copy.sidebar.createSpace}>
             <Plus className="h-4 w-4" />
           </Button>
         </div>
@@ -83,7 +86,7 @@ export function ConversationSidebar({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             className="pl-9"
-            placeholder={selectedDock === 'home' ? 'Search conversations' : 'Search channels'}
+            placeholder={selectedDock === 'home' ? copy.sidebar.searchConversations : copy.sidebar.searchChannels}
           />
         </div>
       </div>
@@ -92,7 +95,7 @@ export function ConversationSidebar({
         <div className="space-y-5 p-3">
           {selectedDock === 'home' ? (
             <>
-              <SidebarSection title="Pinned DMs">
+              <SidebarSection title={copy.sidebar.pinnedDms}>
                 {filteredRooms.length > 0 ? (
                   filteredRooms.map((room) => (
                     <RoomButton
@@ -105,11 +108,11 @@ export function ConversationSidebar({
                     />
                   ))
                 ) : (
-                  <EmptyNote label="No direct rooms yet." />
+                  <EmptyNote label={copy.sidebar.noDirectRooms} />
                 )}
               </SidebarSection>
 
-              <SidebarSection title="Peers online">
+              <SidebarSection title={copy.sidebar.peersOnline}>
                 {discoverablePeers.length > 0 ? (
                   discoverablePeers.map((peer) => (
                     <button
@@ -118,17 +121,17 @@ export function ConversationSidebar({
                       onClick={() => onOpenDirectRoom(peer.displayName)}
                     >
                       <span className="truncate">{peer.displayName}</span>
-                      <Badge variant="outline">{peer.status}</Badge>
+                      <Badge variant="outline">{localizePeerStatus(copy, peer.status)}</Badge>
                     </button>
                   ))
                 ) : (
-                  <EmptyNote label="Wait for peers to announce presence." />
+                  <EmptyNote label={copy.sidebar.waitForPeers} />
                 )}
               </SidebarSection>
             </>
           ) : (
             <>
-              <SidebarSection title="Channels">
+              <SidebarSection title={copy.common.channels}>
                 {filteredRooms.filter((room) => roomTypes[room.id] !== 'voice').length > 0 ? (
                   filteredRooms.filter((room) => roomTypes[room.id] !== 'voice').map((room) => (
                     <RoomButton
@@ -141,10 +144,10 @@ export function ConversationSidebar({
                     />
                   ))
                 ) : (
-                  <EmptyNote label="No text channels assigned to this group." />
+                  <EmptyNote label={copy.sidebar.noTextChannels} />
                 )}
               </SidebarSection>
-              <SidebarSection title="Voice">
+              <SidebarSection title={copy.common.voice}>
                 {filteredRooms.filter((room) => roomTypes[room.id] === 'voice').length > 0 ? (
                   filteredRooms.filter((room) => roomTypes[room.id] === 'voice').map((room) => (
                     <RoomButton
@@ -157,10 +160,10 @@ export function ConversationSidebar({
                     />
                   ))
                 ) : (
-                  <EmptyNote label="No voice channels assigned to this group." />
+                  <EmptyNote label={copy.sidebar.noVoiceChannels} />
                 )}
               </SidebarSection>
-              <SidebarSection title="Utilities">
+              <SidebarSection title={copy.sidebar.utilities}>
                 {rooms
                   .filter((room) => room.kind === 'system')
                   .map((room) => (
@@ -188,7 +191,7 @@ export function ConversationSidebar({
             <p className="truncate text-sm font-medium">{currentUser}</p>
             <p className="truncate text-xs text-[var(--muted-foreground)]">{mediaLabel}</p>
           </div>
-          <Button size="icon" variant="ghost" onClick={onOpenSettings} title="Preferences">
+          <Button size="icon" variant="ghost" onClick={onOpenSettings} title={copy.common.preferences}>
             <Settings className="h-4 w-4" />
           </Button>
         </div>

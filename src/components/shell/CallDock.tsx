@@ -2,6 +2,8 @@ import { Mic, MicOff, MonitorUp, PhoneOff } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 
 import type { MediaSessionState } from '../../hooks/useMediaSession'
+import { formatCallModes } from '../../lib/i18n'
+import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 
 type CallDockProps = {
@@ -21,6 +23,7 @@ export function CallDock({
   onStopScreenShare,
   onLeaveVoice,
 }: CallDockProps) {
+  const { copy } = useI18n()
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map())
   const remoteAudioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
@@ -54,7 +57,11 @@ export function CallDock({
       <div className="border-b border-border px-4 py-3">
         <p className="text-sm font-semibold">{roomLabel}</p>
         <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-          {memberCount} members · {mediaState.remoteStreams.length} connected · {mediaState.activeModes.join(' + ')}
+          {copy.call.connectedSummary(
+            memberCount,
+            mediaState.remoteStreams.length,
+            formatCallModes(copy, mediaState.activeModes),
+          )}
         </p>
       </div>
 
@@ -104,22 +111,22 @@ export function CallDock({
           <p className="text-sm text-[var(--danger)]">{mediaState.error}</p>
         ) : (
           <p className="text-sm text-[var(--muted-foreground)]">
-            Voice session is active for this room.
+            {copy.call.voiceActive}
           </p>
         )}
         <div className="flex items-center gap-2">
-          <Button variant="secondary" size="icon" onClick={onToggleMicrophone} title="Toggle microphone">
+          <Button variant="secondary" size="icon" onClick={onToggleMicrophone} title={copy.call.microphone}>
             {mediaState.microphoneEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
           </Button>
           {mediaState.activeModes.includes('screen') ? (
             <Button variant="outline" onClick={onStopScreenShare}>
               <MonitorUp className="h-4 w-4" />
-              Stop share
+              {copy.call.stopShare}
             </Button>
           ) : null}
           <Button variant="destructive" onClick={onLeaveVoice}>
             <PhoneOff className="h-4 w-4" />
-            Leave
+            {copy.call.leave}
           </Button>
         </div>
       </div>

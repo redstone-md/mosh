@@ -1,6 +1,7 @@
-import type { ChannelType, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
-import { getThemeLabel } from '../../lib/appShellStorage'
+import type { ChannelType, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
+import { languagePreferenceOptions } from '../../lib/i18n'
 import type { RoomSummary, UpdateRuntimeSettingsInput } from '../../lib/schemas'
+import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -17,6 +18,7 @@ import { WorkspaceEditor } from './WorkspaceEditor'
 type SettingsDialogProps = {
   open: boolean
   theme: ThemeId
+  languagePreference: LanguagePreference
   runtimeDraft: UpdateRuntimeSettingsInput
   groups: RoomGroup[]
   rooms: RoomSummary[]
@@ -29,6 +31,7 @@ type SettingsDialogProps = {
   saving: boolean
   onOpenChange: (open: boolean) => void
   onThemeChange: (theme: ThemeId) => void
+  onLanguagePreferenceChange: (languagePreference: LanguagePreference) => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
   onSaveRuntime: () => void
   onSaveWorkspace: (
@@ -42,6 +45,7 @@ type SettingsDialogProps = {
 export function SettingsDialog({
   open,
   theme,
+  languagePreference,
   runtimeDraft,
   groups,
   rooms,
@@ -54,11 +58,13 @@ export function SettingsDialog({
   saving,
   onOpenChange,
   onThemeChange,
+  onLanguagePreferenceChange,
   onRuntimeDraftChange,
   onSaveRuntime,
   onSaveWorkspace,
   onResetOnboarding,
 }: SettingsDialogProps) {
+  const { copy, getLanguageLabel } = useI18n()
   const workspaceEditorKey = JSON.stringify({
     groups,
     roomTypes,
@@ -70,41 +76,61 @@ export function SettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl">
         <DialogHeader>
-          <DialogTitle>Preferences</DialogTitle>
-          <DialogDescription>Appearance, runtime boot settings, and signed local archive metadata.</DialogDescription>
+          <DialogTitle>{copy.common.preferences}</DialogTitle>
+          <DialogDescription>{copy.settings.description}</DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="appearance" className="space-y-5">
           <TabsList>
-            <TabsTrigger value="appearance">Appearance</TabsTrigger>
-            <TabsTrigger value="workspace">Workspace</TabsTrigger>
-            <TabsTrigger value="runtime">Runtime</TabsTrigger>
-            <TabsTrigger value="archive">Archive</TabsTrigger>
+            <TabsTrigger value="appearance">{copy.common.appearance}</TabsTrigger>
+            <TabsTrigger value="workspace">{copy.common.workspace}</TabsTrigger>
+            <TabsTrigger value="runtime">{copy.common.runtime}</TabsTrigger>
+            <TabsTrigger value="archive">{copy.common.archive}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="appearance" className="space-y-4">
             <div className="space-y-2">
-              <p className="text-sm font-medium">Theme</p>
+              <p className="text-sm font-medium">{copy.common.theme}</p>
               <div className="max-w-xs">
                 <Select value={theme} onValueChange={(value: ThemeId) => onThemeChange(value)}>
                   <SelectTrigger>
-                    <SelectValue>{getThemeLabel(theme)}</SelectValue>
+                    <SelectValue>{copy.themes[theme]}</SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="moss">Moss</SelectItem>
-                    <SelectItem value="graphite">Graphite</SelectItem>
-                    <SelectItem value="linen">Linen</SelectItem>
-                    <SelectItem value="ember">Ember</SelectItem>
+                    <SelectItem value="moss">{copy.themes.moss}</SelectItem>
+                    <SelectItem value="graphite">{copy.themes.graphite}</SelectItem>
+                    <SelectItem value="linen">{copy.themes.linen}</SelectItem>
+                    <SelectItem value="ember">{copy.themes.ember}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-medium">{copy.common.language}</p>
+              <div className="max-w-xs">
+                <Select
+                  value={languagePreference}
+                  onValueChange={(value: LanguagePreference) => onLanguagePreferenceChange(value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue>{getLanguageLabel(languagePreference)}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {languagePreferenceOptions.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {getLanguageLabel(value)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4 text-sm text-[var(--muted-foreground)]">
-              Current archive status: {archiveLabel}
+              {copy.archive.currentStatus(archiveLabel)}
             </div>
             <div className="flex justify-end">
               <Button variant="outline" onClick={onResetOnboarding}>
-                Show onboarding on next launch
+                {copy.settings.showOnboarding}
               </Button>
             </div>
           </TabsContent>
@@ -124,7 +150,7 @@ export function SettingsDialog({
             <RuntimeSettingsForm
               draft={runtimeDraft}
               disabled={saving}
-              submitLabel={saving ? 'Saving...' : 'Save runtime settings'}
+              submitLabel={saving ? copy.runtime.saving : copy.runtime.saveSettings}
               errorNote={runtimeError}
               onDraftChange={onRuntimeDraftChange}
               onSubmit={onSaveRuntime}
@@ -133,24 +159,24 @@ export function SettingsDialog({
 
           <TabsContent value="archive" className="space-y-4">
             <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4">
-              <p className="text-sm font-medium">Signed transcript</p>
+              <p className="text-sm font-medium">{copy.archive.transcript}</p>
               <p className="mt-2 text-sm text-[var(--muted-foreground)]">{archiveLabel}</p>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4">
-                <p className="text-sm font-medium">Fingerprint</p>
+                <p className="text-sm font-medium">{copy.archive.fingerprint}</p>
                 <p className="mt-2 font-mono text-sm text-[var(--muted-foreground)]">
-                  {archiveFingerprint ?? 'No archive written yet'}
+                  {archiveFingerprint ?? copy.archive.noArchive}
                 </p>
               </div>
               <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4">
-                <p className="text-sm font-medium">Verification</p>
+                <p className="text-sm font-medium">{copy.archive.verification}</p>
                 <p className="mt-2 text-sm text-[var(--muted-foreground)]">
                   {archiveFingerprint
                     ? archiveVerified
-                      ? 'Archive payload matches the stored signature.'
-                      : 'Archive payload does not match the stored signature.'
-                    : 'Verification starts after the first persisted room snapshot.'}
+                      ? copy.archive.verificationMatches
+                      : copy.archive.verificationMismatch
+                    : copy.archive.verificationPending}
                 </p>
               </div>
             </div>
