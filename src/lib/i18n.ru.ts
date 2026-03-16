@@ -197,8 +197,10 @@ export const ruTranslations = {
       searchClose: 'Закрыть поиск',
       reply: 'Ответить',
       copy: 'Скопировать текст',
+      attachFile: 'Прикрепить файл (<40KB)',
       attachImage: 'Прикрепить изображение (<40KB)',
       insertEmoji: 'Вставить эмодзи',
+      attachmentTooLarge: 'Файл слишком большой. В этой сборке встроенные вложения ограничены 40KB.',
       imageTooLarge: 'Файл слишком большой. В этой демо Base64-вложения ограничены 40KB.',
     },
     settings: {

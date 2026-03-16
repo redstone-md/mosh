@@ -3,6 +3,11 @@ import type { Message, RoomSummary } from '../lib/schemas'
 import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { formatRoomTitle } from '../lib/chatPresentation'
+import {
+  createFileAttachmentMarkup,
+  getEmbeddedAttachmentLimit,
+  isImageAttachment,
+} from '../lib/messageAttachments'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -136,15 +141,19 @@ export function MessagePanel({
     const file = e.target.files?.[0]
     if (!file) return
 
-    if (file.size > 40 * 1024) {
-      alert(copy.messages.imageTooLarge)
+    if (file.size > getEmbeddedAttachmentLimit()) {
+      alert(copy.messages.attachmentTooLarge)
       return
     }
 
     const reader = new FileReader()
     reader.onload = (event) => {
       const base64 = event.target?.result as string
-      editor?.chain().focus().setImage({ src: base64 }).run()
+      if (isImageAttachment(file)) {
+        editor?.chain().focus().setImage({ src: base64, alt: file.name, title: file.name }).run()
+      } else {
+        editor?.chain().focus().insertContent(createFileAttachmentMarkup(file, base64)).run()
+      }
     }
     reader.readAsDataURL(file)
     if (fileInputRef.current) {
@@ -237,11 +246,29 @@ export function MessagePanel({
                   <div 
                     className={cn(
                         "text-[15px] leading-relaxed text-foreground/80 prose prose-sm dark:prose-invert max-w-none break-words",
+                        "prose-a:text-foreground prose-a:no-underline hover:prose-a:text-foreground",
                         "prose-img:max-h-64 prose-img:rounded-lg prose-img:border prose-img:border-border/50",
                         "prose-blockquote:border-primary/50 prose-blockquote:bg-primary/5 prose-blockquote:py-1 prose-blockquote:px-3 prose-blockquote:rounded-r-lg prose-blockquote:not-italic",
                         message.emphasis === 'system' && "font-mono text-sm text-primary/80 bg-primary/5 p-4 rounded-xl border border-primary/10"
                     )}
-                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(message.body, { ADD_ATTR: ['target', 'class', 'data-reply-to'] }) }}
+                    dangerouslySetInnerHTML={{
+                      __html: DOMPurify.sanitize(message.body, {
+                        ADD_ATTR: [
+                          'target',
+                          'class',
+                          'data-reply-to',
+                          'data-attachment',
+                          'data-file-name',
+                          'data-file-size',
+                          'data-file-type',
+                          'download',
+                          'href',
+                          'title',
+                          'alt',
+                        ],
+                        ADD_DATA_URI_TAGS: ['a'],
+                      }),
+                    }}
                   />
                 </div>
 
@@ -309,14 +336,14 @@ export function MessagePanel({
                     type="file" 
                     ref={fileInputRef} 
                     className="hidden" 
-                    accept="image/*"
+                    accept="*/*"
                     onChange={handleFileChange}
                   />
                   <button
                     type="button"
                     className="p-2.5 text-foreground/40 hover:text-foreground hover:bg-foreground/5 rounded-xl transition-colors"
                     onClick={() => fileInputRef.current?.click()}
-                    title={copy.messages.attachImage}
+                    title={copy.messages.attachFile}
                   >
                       <Paperclip size={18} />
                   </button>
