@@ -124,6 +124,7 @@ pub fn run() {
             commands::load_signing_identity,
             commands::save_signing_identity,
             commands::load_room_archive,
+            commands::load_all_room_archives,
             commands::save_room_archive,
             commands::storage_overview,
             commands::export_storage_backup,

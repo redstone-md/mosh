@@ -44,6 +44,7 @@ export function OnboardingSurface({
       <ShellToaster />
       <Titlebar
         runtime={runtime}
+        onOpenGlobalSearch={() => undefined}
         onToggleRuntime={onToggleRuntime}
         isBusy={runtimeToggleBusy}
         errorNote={titlebarErrorNote}

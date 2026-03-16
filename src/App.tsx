@@ -447,6 +447,7 @@ export function App() {
         createDialogOpen={createDialogOpen}
         settingsOpen={settingsOpen}
         archiveState={archiveState}
+        archiveRefreshToken={archiveRefreshKey}
         identityFingerprint={identityFingerprint}
         mediaLabel={mediaLabel}
         activeVoiceRoom={activeVoiceRoom}

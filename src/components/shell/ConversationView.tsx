@@ -20,6 +20,7 @@ type ConversationViewProps = {
   messages: Message[]
   archiveFingerprint?: string
   archiveVerified?: boolean
+  externalFocusMessageId?: string
   draft: string
   isSending: boolean
   mediaLive: boolean
@@ -32,6 +33,7 @@ type ConversationViewProps = {
   onDraftChange: (value: string) => void
   onSend: () => void
   onTogglePinMessage: (messageId: string) => void
+  onResolveExternalFocus: () => void
   onOpenSettings: () => void
   onStartVoice: () => void
   onStartScreenShare: () => void
@@ -42,6 +44,7 @@ export function ConversationView({
   messages,
   archiveFingerprint,
   archiveVerified,
+  externalFocusMessageId,
   draft,
   isSending,
   mediaLive,
@@ -54,6 +57,7 @@ export function ConversationView({
   onDraftChange,
   onSend,
   onTogglePinMessage,
+  onResolveExternalFocus,
   onOpenSettings,
   onStartVoice,
   onStartScreenShare,
@@ -238,12 +242,14 @@ export function ConversationView({
         matchedMessageIds={matchedMessageIds}
         activeSearchMessageId={activeSearchResult?.messageId}
         activeSearchPreview={activeSearchResult?.preview}
+        externalFocusMessageId={externalFocusMessageId}
         draft={draft}
         peerNames={peerNames}
         pinnedMessageIds={pinnedMessageIds}
         onDraftChange={onDraftChange}
         onSend={onSend}
         onTogglePinMessage={onTogglePinMessage}
+        onResolveExternalFocus={onResolveExternalFocus}
         isSending={isSending}
         errorNote={errorNote}
       />

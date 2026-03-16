@@ -132,6 +132,11 @@ pub fn save_room_archive<R: tauri::Runtime>(
     write_json(&paths.archive_path(room_id), &payload)
 }
 
+pub fn load_all_room_archives<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<Value>, String> {
+    let paths = StoragePaths::resolve(app)?;
+    read_archives(&paths.archives_dir)
+}
+
 pub fn storage_overview<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<StorageOverview, String> {
     let paths = StoragePaths::resolve(app)?;
     Ok(paths.overview())
@@ -328,7 +333,7 @@ mod tests {
 
     use super::{
         archive_file_name, build_backup, clear_existing_storage, import_backup_from_path,
-        read_json, write_json, ImportedStorageBackup, StoragePaths,
+        read_archives, read_json, write_json, ImportedStorageBackup, StoragePaths,
     };
     use serde_json::json;
 
@@ -520,6 +525,34 @@ mod tests {
             read_json(&paths.archive_path("lobby")).expect("archive read should succeed"),
             Some(json!({ "roomId": "lobby", "signature": "sig" }))
         );
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn read_archives_returns_sorted_archives() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("mosh-all-archives-test-{unique}"));
+        let paths = StoragePaths::for_base_dir(base_dir.clone());
+        write_json(
+            &paths.archive_path("room-b"),
+            &json!({ "roomId": "room-b", "signature": "sig-b" }),
+        )
+        .expect("archive write should succeed");
+        write_json(
+            &paths.archive_path("room-a"),
+            &json!({ "roomId": "room-a", "signature": "sig-a" }),
+        )
+        .expect("archive write should succeed");
+
+        let archives = read_archives(&paths.archives_dir).expect("archive load should succeed");
+
+        assert_eq!(archives.len(), 2);
+        assert_eq!(archives[0]["roomId"], json!("room-a"));
+        assert_eq!(archives[1]["roomId"], json!("room-b"));
 
         let _ = fs::remove_dir_all(base_dir);
     }

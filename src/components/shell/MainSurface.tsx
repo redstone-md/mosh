@@ -1,8 +1,12 @@
+import { useEffect, useMemo, useState } from 'react'
+
 import type { ChannelType, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
 import { describeArchiveStateLabel } from '../../lib/i18n'
 import { formatRoomTitle } from '../../lib/chatPresentation'
+import { useGlobalSearchArchives } from '../../hooks/useGlobalSearchArchives'
 import type { MediaSessionState } from '../../hooks/useMediaSession'
 import type { VerifiedArchive } from '../../lib/appShellStorage'
+import { buildGlobalSearchEntries, type GlobalSearchResult } from '../../lib/globalMessageSearch'
 import type {
   DesktopSnapshot,
   Message,
@@ -18,10 +22,12 @@ import { CallDock } from './CallDock'
 import { ConversationSidebar } from './ConversationSidebar'
 import { ConversationView } from './ConversationView'
 import { CreateSpaceDialog } from './CreateSpaceDialog'
+import { GlobalSearchDialog } from './GlobalSearchDialog'
 import { MemberSidebar } from './MemberSidebar'
 import { ServerRail } from './ServerRail'
 import { SettingsDialog } from './SettingsDialog'
 import { getChannelType } from '../../lib/appShellStorage'
+
 type MediaSessionController = {
   state: MediaSessionState
   joinVoiceRoom: (roomId: string, withScreenShare: boolean) => Promise<void>
@@ -52,6 +58,7 @@ type MainSurfaceProps = {
     archive: VerifiedArchive | null
     mergedMessages: DesktopSnapshot['messages']
   }
+  archiveRefreshToken: number
   identityFingerprint: string
   mediaLabel: string
   activeVoiceRoom: VoiceRoom | null
@@ -104,6 +111,7 @@ export function MainSurface({
   createDialogOpen,
   settingsOpen,
   archiveState,
+  archiveRefreshToken,
   identityFingerprint,
   mediaLabel,
   activeVoiceRoom,
@@ -140,17 +148,48 @@ export function MainSurface({
   onResetOnboarding,
 }: MainSurfaceProps) {
   const { copy } = useI18n()
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
+  const [focusTarget, setFocusTarget] = useState<{ roomId: string; messageId: string } | null>(null)
+  const globalArchives = useGlobalSearchArchives(archiveRefreshToken)
   const archiveLabel = describeArchiveStateLabel(
     copy,
     archiveState.archive?.signerFingerprint ?? identityFingerprint,
     archiveState.archive?.verified,
   )
+  const globalSearchEntries = useMemo(
+    () => buildGlobalSearchEntries(data.messages, globalArchives.data ?? [], data.rooms),
+    [data.messages, data.rooms, globalArchives.data],
+  )
+
+  useEffect(() => {
+    function handleGlobalSearchHotkey(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') {
+        return
+      }
+
+      event.preventDefault()
+      setGlobalSearchOpen(true)
+    }
+
+    window.addEventListener('keydown', handleGlobalSearchHotkey)
+    return () => window.removeEventListener('keydown', handleGlobalSearchHotkey)
+  }, [])
+
+  function handleGlobalSearchResult(result: GlobalSearchResult) {
+    setGlobalSearchOpen(false)
+    setFocusTarget({
+      roomId: result.roomId,
+      messageId: result.messageId,
+    })
+    onSelectRoom(result.roomId)
+  }
 
   return (
     <main className="flex h-screen flex-col bg-[var(--app)] text-foreground">
       <ShellToaster />
       <Titlebar
         runtime={data.runtime}
+        onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
         onToggleRuntime={onToggleRuntime}
         isBusy={runtimeTogglePending}
         errorNote={runtimeToggleError}
@@ -186,6 +225,9 @@ export function MainSurface({
           messages={archiveState.mergedMessages}
           archiveFingerprint={archiveState.archive?.signerFingerprint}
           archiveVerified={archiveState.archive?.verified}
+          externalFocusMessageId={
+            focusTarget?.roomId === activeRoom.id ? focusTarget.messageId : undefined
+          }
           draft={messageDraft}
           isSending={publishPending}
           mediaLive={mediaSession.state.status === 'live'}
@@ -198,6 +240,7 @@ export function MainSurface({
           onDraftChange={onDraftChange}
           onSend={onSendMessage}
           onTogglePinMessage={onTogglePinMessage}
+          onResolveExternalFocus={() => setFocusTarget(null)}
           onOpenSettings={() => onOpenSettings(true)}
           onStartVoice={() => {
             if (mediaSession.state.activeRoomId === activeRoom.id) {
@@ -259,6 +302,12 @@ export function MainSurface({
         onSaveWorkspace={onSaveWorkspace}
         onRestoreStorage={onRestoreStorage}
         onResetOnboarding={onResetOnboarding}
+      />
+      <GlobalSearchDialog
+        open={globalSearchOpen}
+        entries={globalSearchEntries}
+        onOpenChange={setGlobalSearchOpen}
+        onSelectResult={handleGlobalSearchResult}
       />
       <CallDock
         roomLabel={formatRoomTitle(activeRoom, copy.common.unknownRoom)}
