@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BootstrapErrorScreen, LoadingScreen } from './components/AppBootstrapState'
 import { I18nProvider } from './components/I18nProvider'
@@ -7,6 +7,7 @@ import { MainSurface } from './components/shell/MainSurface'
 import { OnboardingSurface } from './components/shell/OnboardingSurface'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
+import { useDeepLinkInvites } from './hooks/useDeepLinkInvites'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
 import { usePeerTrustState } from './hooks/usePeerTrustState'
@@ -255,6 +256,39 @@ export function App() {
     }))
   }, [preferences.roomTypes, reconciledRoomTypes])
 
+  const handleApplyInvite = useCallback(
+    async (invite: MeshInvitePayload) => {
+      const invitePatch = buildInviteShellStatePatch(preferences.runtimeDraft, invite)
+
+      setPreferences((current) => ({
+        ...current,
+        ...invitePatch,
+      }))
+
+      if (!data || data.runtime.state !== 'Runtime online') {
+        return
+      }
+
+      const updatedSnapshot = sameRuntimeDraft(data.settings, invitePatch.runtimeDraft)
+        ? data
+        : await updateRuntimeSettings.mutateAsync(invitePatch.runtimeDraft)
+
+      const startupPeer = resolveInviteStartupPeer(invite, updatedSnapshot.settings.startupPeer)
+      if (startupPeer) {
+        await connectPeer.mutateAsync(startupPeer)
+      }
+
+      await subscribeRoom.mutateAsync(invite.runtime.initialRoom)
+    },
+    [connectPeer, data, preferences.runtimeDraft, setPreferences, subscribeRoom, updateRuntimeSettings],
+  )
+
+  useDeepLinkInvites({
+    successMessage: activeCopy.createSpace.inviteApplied,
+    invalidMessage: activeCopy.createSpace.inviteInvalid,
+    onApplyInvite: handleApplyInvite,
+  })
+
   if (shellPreferences.isPending || snapshot.isPending) {
     return renderWithI18n(<LoadingScreen />)
   }
@@ -355,30 +389,6 @@ export function App() {
     await shellPreferences.reload()
     await queryClient.invalidateQueries({ queryKey: ['desktop-snapshot'] })
     setArchiveRefreshKey((current) => current + 1)
-  }
-
-  async function handleApplyInvite(invite: MeshInvitePayload) {
-    const invitePatch = buildInviteShellStatePatch(preferences.runtimeDraft, invite)
-
-    setPreferences((current) => ({
-      ...current,
-      ...invitePatch,
-    }))
-
-    if (!data || data.runtime.state !== 'Runtime online') {
-      return
-    }
-
-    const updatedSnapshot = sameRuntimeDraft(data.settings, invitePatch.runtimeDraft)
-      ? data
-      : await updateRuntimeSettings.mutateAsync(invitePatch.runtimeDraft)
-
-    const startupPeer = resolveInviteStartupPeer(invite, updatedSnapshot.settings.startupPeer)
-    if (startupPeer) {
-      await connectPeer.mutateAsync(startupPeer)
-    }
-
-    await subscribeRoom.mutateAsync(invite.runtime.initialRoom)
   }
 
   const mediaLabel =

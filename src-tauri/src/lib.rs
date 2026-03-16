@@ -11,6 +11,7 @@ mod storage;
 use std::env;
 
 use crate::ffi::library_file_name;
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::path::BaseDirectory;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -50,6 +51,7 @@ fn configure_bundled_runtime_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) 
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
@@ -60,6 +62,8 @@ pub fn run() {
         })
         .setup(|app| {
             configure_bundled_runtime_path(&app.handle());
+            #[cfg(all(debug_assertions, any(target_os = "windows", target_os = "linux")))]
+            let _ = app.deep_link().register("mosh");
             app.manage(state::SharedDesktopState::new(
                 state::DesktopShellState::new(),
             ));

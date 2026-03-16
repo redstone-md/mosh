@@ -23,6 +23,13 @@
       }
     ]
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["mosh"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
