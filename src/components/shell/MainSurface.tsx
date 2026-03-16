@@ -185,6 +185,7 @@ export function MainSurface({
   )
   const { inviteCode, applyInviteCode } = useMeshInviteActions({
     currentUser: runtimeDraft.nickname,
+    inviterFingerprint: identityFingerprint,
     runtimeDraft,
     activeRoom,
     onApplyInvite,

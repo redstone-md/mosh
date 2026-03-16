@@ -197,6 +197,18 @@ export async function ensureSigningIdentity() {
   return identity
 }
 
+export async function regenerateSigningIdentity() {
+  const identity = await createSigningIdentity()
+
+  if (isTauriEnvironment()) {
+    await desktopStorageClient.saveSigningIdentity(identity)
+  } else {
+    getLocalStorage()?.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(identity))
+  }
+
+  return identity
+}
+
 export async function readVerifiedArchive(roomId: string): Promise<VerifiedArchive | null> {
   const archive = await loadRoomArchive(roomId)
   if (!archive) {

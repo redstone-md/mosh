@@ -30,7 +30,7 @@ export function App() {
   const settingsHydratedRef = useRef(false)
   const runtimeAutoStartRef = useRef(false)
   const shellPreferences = useShellPreferences()
-  const { preferences, setPreferences, identityFingerprint } = shellPreferences
+  const { preferences, setPreferences, identityFingerprint, regenerateIdentity } = shellPreferences
   const [messageDraft, setMessageDraft] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -127,6 +127,9 @@ export function App() {
           <InviteReviewDialog
             pendingInvite={inviteFlow.pendingInvite}
             isBusy={inviteFlow.reviewPending}
+            currentIdentityFingerprint={inviteFlow.currentIdentityFingerprint}
+            identityMode={inviteFlow.identityMode}
+            onIdentityModeChange={inviteFlow.setIdentityMode}
             onApprove={() => void inviteFlow.approvePendingInvite()}
             onDismiss={inviteFlow.dismissPendingInvite}
           />
@@ -269,6 +272,8 @@ export function App() {
     },
     data,
     runtimeDraft: preferences.runtimeDraft,
+    currentIdentityFingerprint: identityFingerprint,
+    regenerateIdentity,
     setPreferences,
     updateRuntimeSettings,
     connectPeer,

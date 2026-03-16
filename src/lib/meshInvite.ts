@@ -5,6 +5,7 @@ import { updateRuntimeSettingsInputSchema } from './schemas'
 const meshInvitePayloadSchema = z.object({
   version: z.literal(1),
   inviterName: z.string().trim().min(1).max(128),
+  inviterFingerprint: z.string().min(1).optional(),
   runtime: updateRuntimeSettingsInputSchema,
 })
 
@@ -13,10 +14,12 @@ export type MeshInvitePayload = z.infer<typeof meshInvitePayloadSchema>
 export function buildMeshInvite(
   inviterName: string,
   runtime: z.input<typeof updateRuntimeSettingsInputSchema>,
+  inviterFingerprint?: string,
 ): MeshInvitePayload {
   return meshInvitePayloadSchema.parse({
     version: 1,
     inviterName,
+    inviterFingerprint,
     runtime,
   })
 }

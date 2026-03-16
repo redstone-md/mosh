@@ -14,12 +14,21 @@ const desktopStorageClient = {
   saveRoomArchive: vi.fn(),
 }
 
+const createSigningIdentity = vi.fn()
+
 vi.mock('./desktopStorageClient', () => ({
   desktopStorageClient,
 }))
 
 vi.mock('./tauriEnv', () => ({
   isTauriEnvironment: () => tauriEnvironment,
+}))
+
+vi.mock('./cryptoIdentity', () => ({
+  createSigningIdentity,
+  parseSigningIdentity: (value: unknown) => value,
+  signSerializedPayload: vi.fn(),
+  verifySerializedPayload: vi.fn(),
 }))
 
 class MemoryStorage implements Storage {
@@ -128,6 +137,7 @@ describe('appShellStorage', () => {
     tauriEnvironment = false
     localStorage.clear()
     Object.values(desktopStorageClient).forEach((mock) => mock.mockReset())
+    createSigningIdentity.mockReset()
   })
 
   it('loads persisted preferences from localStorage outside Tauri', async () => {
@@ -169,5 +179,21 @@ describe('appShellStorage', () => {
 
     expect(desktopStorageClient.saveSigningIdentity).toHaveBeenCalledWith(storedIdentity)
     expect(identity).toEqual(storedIdentity)
+  })
+
+  it('can regenerate a fresh signing identity and persist it', async () => {
+    tauriEnvironment = true
+    const freshIdentity = {
+      ...createStoredIdentity(),
+      fingerprint: 'ff:ee:dd:cc:bb:aa',
+    }
+    createSigningIdentity.mockResolvedValue(freshIdentity)
+
+    const { regenerateSigningIdentity } = await loadModule()
+    const identity = await regenerateSigningIdentity()
+
+    expect(createSigningIdentity).toHaveBeenCalledTimes(1)
+    expect(desktopStorageClient.saveSigningIdentity).toHaveBeenCalledWith(freshIdentity)
+    expect(identity).toEqual(freshIdentity)
   })
 })
