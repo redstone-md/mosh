@@ -92,6 +92,7 @@ function createStoredPreferences() {
     roomTypes: {
       lobby: 'text',
     },
+    pinnedMessages: {},
   } as const
 }
 

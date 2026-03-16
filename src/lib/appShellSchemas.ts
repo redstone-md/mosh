@@ -32,6 +32,7 @@ export const shellPreferencesSchema = z.object({
   runtimeDraft: updateRuntimeSettingsInputSchema,
   groups: z.array(roomGroupSchema).max(32),
   roomTypes: z.record(z.string(), channelTypeSchema).default({}),
+  pinnedMessages: z.record(z.string(), z.array(z.string().min(1)).max(12)).default({}),
 })
 
 export const storedMessageSchema = messageSchema.extend({
