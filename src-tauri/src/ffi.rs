@@ -398,7 +398,9 @@ fn error_message(code: i32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::MeshInfo;
+    use std::path::PathBuf;
+
+    use super::{shared_candidates, MeshInfo};
 
     #[test]
     fn mesh_info_allows_null_collections() {
@@ -417,5 +419,16 @@ mod tests {
         assert!(parsed.peers.is_empty());
         assert!(parsed.channels.is_empty());
         assert_eq!(parsed.mesh_id, "mosh-chat");
+    }
+
+    #[test]
+    fn explicit_runtime_path_is_prioritized() {
+        let explicit = PathBuf::from(r"C:\bundle\moss.dll");
+        std::env::set_var("MOSS_SHARED_PATH", &explicit);
+
+        let candidates = shared_candidates();
+
+        std::env::remove_var("MOSS_SHARED_PATH");
+        assert_eq!(candidates.first(), Some(&explicit));
     }
 }
