@@ -68,6 +68,7 @@ type MainSurfaceProps = {
   mentionablePeerNames: string[]
   createDialogOpen: boolean
   settingsOpen: boolean
+  draftPreviews: Record<string, string>
   archiveState: {
     archive: VerifiedArchive | null
   }
@@ -142,6 +143,7 @@ export function MainSurface({
   mentionablePeerNames,
   createDialogOpen,
   settingsOpen,
+  draftPreviews,
   archiveState,
   displayMessages,
   archiveRefreshToken,
@@ -269,6 +271,7 @@ export function MainSurface({
           peers={data.peers}
           selectedRoomId={activeRoom.id}
           unreadCounts={unreadCounts}
+          draftPreviews={draftPreviews}
           mutedRoomIds={mutedRoomIds}
           mediaLabel={mediaLabel}
           roomTypes={roomTypes}

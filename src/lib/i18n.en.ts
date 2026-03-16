@@ -11,6 +11,7 @@ export const enTranslations = {
       theme: 'Theme',
       trust: 'Trust',
       invite: 'Invite',
+      draft: 'Draft',
       group: 'Group',
       groups: 'Groups',
       channel: 'Channel',
