@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
@@ -72,6 +72,14 @@ impl StoragePaths {
 struct StorageBackup {
     schema_version: u8,
     exported_at_unix_ms: u128,
+    settings: Option<Value>,
+    signing_identity: Option<Value>,
+    archives: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct ImportedStorageBackup {
+    schema_version: u8,
     settings: Option<Value>,
     signing_identity: Option<Value>,
     archives: Vec<Value>,
@@ -145,6 +153,14 @@ pub fn export_storage_backup<R: tauri::Runtime>(
     write_json(&output_path, &payload)
 }
 
+pub fn import_storage_backup<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    input_path: &str,
+) -> Result<(), String> {
+    let paths = StoragePaths::resolve(app)?;
+    import_backup_from_path(&paths, &PathBuf::from(input_path))
+}
+
 fn read_json(path: &Path) -> Result<Option<Value>, String> {
     if !path.exists() {
         return Ok(None);
@@ -170,6 +186,74 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
         .ok_or_else(|| format!("storage path {} has no parent directory", path.display()))?;
     fs::create_dir_all(parent)
         .map_err(|err| format!("failed to create {}: {err}", parent.display()))
+}
+
+fn clear_existing_storage(paths: &StoragePaths) -> Result<(), String> {
+    if paths.settings_path.exists() {
+        fs::remove_file(&paths.settings_path)
+            .map_err(|err| format!("failed to remove {}: {err}", paths.settings_path.display()))?;
+    }
+    if paths.identity_path.exists() {
+        fs::remove_file(&paths.identity_path)
+            .map_err(|err| format!("failed to remove {}: {err}", paths.identity_path.display()))?;
+    }
+    if paths.archives_dir.exists() {
+        fs::remove_dir_all(&paths.archives_dir)
+            .map_err(|err| format!("failed to clear {}: {err}", paths.archives_dir.display()))?;
+    }
+    Ok(())
+}
+
+fn import_backup_from_path(paths: &StoragePaths, input_path: &Path) -> Result<(), String> {
+    if input_path.as_os_str().is_empty() {
+        return Err("backup path is required".to_string());
+    }
+
+    let raw = fs::read_to_string(input_path)
+        .map_err(|err| format!("failed to read {}: {err}", input_path.display()))?;
+    let backup: ImportedStorageBackup = serde_json::from_str(&raw)
+        .map_err(|err| format!("failed to parse {}: {err}", input_path.display()))?;
+
+    if backup.schema_version != 1 {
+        return Err(format!(
+            "unsupported backup schema version: {}",
+            backup.schema_version
+        ));
+    }
+
+    for archive in &backup.archives {
+        let room_id = archive
+            .get("roomId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "backup archive room id is required".to_string())?
+            .trim();
+        if room_id.is_empty() {
+            return Err("backup archive room id is required".to_string());
+        }
+        if !archive.is_object() {
+            return Err("backup archive payload must be an object".to_string());
+        }
+    }
+
+    clear_existing_storage(paths)?;
+
+    if let Some(settings) = backup.settings {
+        write_json(&paths.settings_path, &settings)?;
+    }
+
+    if let Some(identity) = backup.signing_identity {
+        write_json(&paths.identity_path, &identity)?;
+    }
+
+    for archive in backup.archives {
+        let room_id = archive
+            .get("roomId")
+            .and_then(Value::as_str)
+            .expect("validated above");
+        write_json(&paths.archive_path(room_id), &archive)?;
+    }
+
+    Ok(())
 }
 
 fn build_backup(paths: &StoragePaths) -> Result<StorageBackup, String> {
@@ -242,7 +326,10 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{archive_file_name, build_backup, read_json, write_json, StoragePaths};
+    use super::{
+        archive_file_name, build_backup, clear_existing_storage, import_backup_from_path,
+        read_json, write_json, ImportedStorageBackup, StoragePaths,
+    };
     use serde_json::json;
 
     #[test]
@@ -323,6 +410,115 @@ mod tests {
         assert_eq!(
             backup.archives[0],
             json!({ "roomId": "lobby", "signature": "sig" })
+        );
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn clearing_storage_removes_existing_files() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("mosh-clear-test-{unique}"));
+        let paths = StoragePaths::for_base_dir(base_dir.clone());
+
+        write_json(&paths.settings_path, &json!({ "theme": "moss" }))
+            .expect("settings write should succeed");
+        write_json(&paths.identity_path, &json!({ "fingerprint": "aa:bb" }))
+            .expect("identity write should succeed");
+        write_json(&paths.archive_path("lobby"), &json!({ "roomId": "lobby" }))
+            .expect("archive write should succeed");
+
+        clear_existing_storage(&paths).expect("clear should succeed");
+
+        assert!(!paths.settings_path.exists());
+        assert!(!paths.identity_path.exists());
+        assert!(!paths.archives_dir.exists());
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn imported_backup_requires_supported_schema_version() {
+        let imported = serde_json::from_value::<ImportedStorageBackup>(json!({
+            "schema_version": 2,
+            "settings": null,
+            "signing_identity": null,
+            "archives": []
+        }))
+        .expect("payload should deserialize");
+
+        assert_eq!(imported.schema_version, 2);
+    }
+
+    #[test]
+    fn imported_backup_keeps_archive_payloads_as_json_objects() {
+        let imported = serde_json::from_value::<ImportedStorageBackup>(json!({
+            "schema_version": 1,
+            "settings": null,
+            "signing_identity": null,
+            "archives": [
+                {
+                    "roomId": "lobby",
+                    "signature": "sig"
+                }
+            ]
+        }))
+        .expect("payload should deserialize");
+
+        assert_eq!(imported.archives.len(), 1);
+        assert_eq!(imported.archives[0]["roomId"], json!("lobby"));
+    }
+
+    #[test]
+    fn import_backup_replaces_existing_storage_contents() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("mosh-import-test-{unique}"));
+        let paths = StoragePaths::for_base_dir(base_dir.clone());
+        let backup_path = base_dir.join("backup.json");
+
+        write_json(&paths.settings_path, &json!({ "theme": "ember" }))
+            .expect("stale settings write should succeed");
+        write_json(&paths.identity_path, &json!({ "fingerprint": "stale" }))
+            .expect("stale identity write should succeed");
+        write_json(
+            &paths.archive_path("old-room"),
+            &json!({ "roomId": "old-room" }),
+        )
+        .expect("stale archive write should succeed");
+        write_json(
+            &backup_path,
+            &json!({
+                "schema_version": 1,
+                "exported_at_unix_ms": 1,
+                "settings": { "theme": "moss" },
+                "signing_identity": { "fingerprint": "fresh" },
+                "archives": [
+                    { "roomId": "lobby", "signature": "sig" }
+                ]
+            }),
+        )
+        .expect("backup file write should succeed");
+
+        import_backup_from_path(&paths, &backup_path).expect("backup import should succeed");
+
+        assert_eq!(
+            read_json(&paths.settings_path).expect("settings read should succeed"),
+            Some(json!({ "theme": "moss" }))
+        );
+        assert_eq!(
+            read_json(&paths.identity_path).expect("identity read should succeed"),
+            Some(json!({ "fingerprint": "fresh" }))
+        );
+        assert!(!paths.archive_path("old-room").exists());
+        assert_eq!(
+            read_json(&paths.archive_path("lobby")).expect("archive read should succeed"),
+            Some(json!({ "roomId": "lobby", "signature": "sig" }))
         );
 
         let _ = fs::remove_dir_all(base_dir);

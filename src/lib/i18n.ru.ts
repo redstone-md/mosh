@@ -212,8 +212,12 @@ export const ruTranslations = {
       backupNote: 'Экспортирует настройки, signing identity и все подписанные архивы комнат в один JSON-файл.',
       archiveCount: (count: number) => `${count} архивированных комнат`,
       exportBackup: 'Экспортировать backup',
+      importBackup: 'Импортировать backup',
       exporting: 'Экспорт...',
+      importing: 'Импорт...',
+      importNote: 'Импорт заменит текущие настройки, identity и подписанные архивы данными из выбранного backup.',
       backupSaved: 'Backup экспортирован.',
+      backupImported: 'Backup импортирован и применён.',
     },
     workspace: {
       addGroup: 'Добавить группу',

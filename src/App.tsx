@@ -27,6 +27,7 @@ export function App() {
   const [messageDraft, setMessageDraft] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [archiveRefreshKey, setArchiveRefreshKey] = useState(0)
   const systemLanguage = useMemo(() => detectSystemLanguage(), [])
 
   const snapshot = useQuery({
@@ -208,7 +209,11 @@ export function App() {
         : [],
     [activeRoom.id, data?.messages],
   )
-  const archiveState = useSignedChatArchive(showOnboarding ? '__inactive__' : activeRoom.id, showOnboarding ? [] : liveMessages)
+  const archiveState = useSignedChatArchive(
+    showOnboarding ? '__inactive__' : activeRoom.id,
+    showOnboarding ? [] : liveMessages,
+    archiveRefreshKey,
+  )
 
   useEffect(() => {
     if (JSON.stringify(reconciledGroups) === JSON.stringify(preferences.groups)) {
@@ -362,6 +367,14 @@ export function App() {
     }))
   }
 
+  async function handleRestoreStorage() {
+    settingsHydratedRef.current = false
+    runtimeAutoStartRef.current = false
+    await shellPreferences.reload()
+    await queryClient.invalidateQueries({ queryKey: ['desktop-snapshot'] })
+    setArchiveRefreshKey((current) => current + 1)
+  }
+
   const mediaLabel =
     mediaSession.state.activeRoomId
       ? activeCopy.runtime.roomLiveLabel(
@@ -487,6 +500,7 @@ export function App() {
         onRuntimeDraftChange={handleRuntimeDraftChange}
         onSaveRuntime={() => void handleSaveRuntime()}
         onSaveWorkspace={handleSaveWorkspace}
+        onRestoreStorage={() => void handleRestoreStorage()}
         onResetOnboarding={() =>
           setPreferences((current) => ({
             ...current,

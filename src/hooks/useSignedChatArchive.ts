@@ -13,7 +13,7 @@ type ArchiveState = {
   mergedMessages: Message[]
 }
 
-export function useSignedChatArchive(roomId: string, liveMessages: Message[]) {
+export function useSignedChatArchive(roomId: string, liveMessages: Message[], refreshToken = 0) {
   const [archiveState, setArchiveState] = useState<ArchiveState>({
     archive: null,
     mergedMessages: liveMessages,
@@ -54,7 +54,7 @@ export function useSignedChatArchive(roomId: string, liveMessages: Message[]) {
     return () => {
       cancelled = true
     }
-  }, [liveMessagesKey, roomId])
+  }, [liveMessagesKey, refreshToken, roomId])
 
   const serializedMessages = useMemo(
     () =>
@@ -94,7 +94,7 @@ export function useSignedChatArchive(roomId: string, liveMessages: Message[]) {
     return () => {
       cancelled = true
     }
-  }, [archiveState.mergedMessages, roomId, serializedMessages])
+  }, [archiveState.mergedMessages, refreshToken, roomId, serializedMessages])
 
   return archiveState
 }

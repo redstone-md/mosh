@@ -40,6 +40,7 @@ type SettingsDialogProps = {
     roomTypes: Record<string, ChannelType>,
     selectedGroupId: string,
   ) => void
+  onRestoreStorage: () => void
   onResetOnboarding: () => void
 }
 
@@ -63,6 +64,7 @@ export function SettingsDialog({
   onRuntimeDraftChange,
   onSaveRuntime,
   onSaveWorkspace,
+  onRestoreStorage,
   onResetOnboarding,
 }: SettingsDialogProps) {
   const { copy, getLanguageLabel } = useI18n()
@@ -185,7 +187,7 @@ export function SettingsDialog({
           </TabsContent>
 
           <TabsContent value="storage">
-            <StoragePanel />
+            <StoragePanel onRestore={onRestoreStorage} />
           </TabsContent>
         </Tabs>
       </DialogContent>

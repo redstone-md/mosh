@@ -42,4 +42,17 @@ describe('desktopStorageClient', () => {
       },
     })
   })
+
+  it('sends validated backup import payloads', async () => {
+    invoke.mockResolvedValue(undefined)
+
+    const { desktopStorageClient } = await import('./desktopStorageClient')
+    await desktopStorageClient.importBackup('C:/backups/mosh.json')
+
+    expect(invoke).toHaveBeenCalledWith('import_storage_backup', {
+      payload: {
+        path: 'C:/backups/mosh.json',
+      },
+    })
+  })
 })

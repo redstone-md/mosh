@@ -79,6 +79,7 @@ type MainSurfaceProps = {
     roomTypes: Record<string, ChannelType>,
     selectedGroupId: string,
   ) => void
+  onRestoreStorage: () => void
   onResetOnboarding: () => void
 }
 
@@ -123,6 +124,7 @@ export function MainSurface({
   onRuntimeDraftChange,
   onSaveRuntime,
   onSaveWorkspace,
+  onRestoreStorage,
   onResetOnboarding,
 }: MainSurfaceProps) {
   const { copy } = useI18n()
@@ -240,6 +242,7 @@ export function MainSurface({
         onRuntimeDraftChange={onRuntimeDraftChange}
         onSaveRuntime={onSaveRuntime}
         onSaveWorkspace={onSaveWorkspace}
+        onRestoreStorage={onRestoreStorage}
         onResetOnboarding={onResetOnboarding}
       />
       <CallDock

@@ -1,5 +1,5 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { save } from '@tauri-apps/plugin-dialog'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import toast from 'react-hot-toast'
 
 import { desktopStorageClient } from '../../lib/desktopStorageClient'
@@ -12,9 +12,14 @@ function createBackupFileName() {
   return `mosh-backup-${timestamp}.json`
 }
 
-export function StoragePanel() {
+type StoragePanelProps = {
+  onRestore: () => void | Promise<void>
+}
+
+export function StoragePanel({ onRestore }: StoragePanelProps) {
   const { copy } = useI18n()
   const desktopOnly = isTauriEnvironment()
+  const queryClient = useQueryClient()
   const overviewQuery = useQuery({
     queryKey: ['storage-overview'],
     queryFn: () => desktopStorageClient.getStorageOverview(),
@@ -41,8 +46,41 @@ export function StoragePanel() {
     },
     onSuccess: (written) => {
       if (written) {
+        void queryClient.invalidateQueries({ queryKey: ['storage-overview'] })
         toast.success(copy.storage.backupSaved)
       }
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : copy.storage.unavailable)
+    },
+  })
+  const importBackup = useMutation({
+    mutationFn: async () => {
+      const path = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: 'JSON',
+            extensions: ['json'],
+          },
+        ],
+      })
+
+      if (!path || Array.isArray(path)) {
+        return false
+      }
+
+      await desktopStorageClient.importBackup(path)
+      return true
+    },
+    onSuccess: async (restored) => {
+      if (!restored) {
+        return
+      }
+      await queryClient.invalidateQueries({ queryKey: ['storage-overview'] })
+      await onRestore()
+      toast.success(copy.storage.backupImported)
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : copy.storage.unavailable)
@@ -99,7 +137,7 @@ export function StoragePanel() {
         <p className="mt-2 break-all font-mono text-xs text-[var(--muted-foreground)]">{overview.baseDir}</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_240px]">
         <div className="rounded-md border border-border bg-[var(--panel-strong)]">
           <div className="border-b border-border px-4 py-3 text-sm font-medium">{copy.storage.files}</div>
           <div className="divide-y divide-border">
@@ -126,11 +164,20 @@ export function StoragePanel() {
           <Button
             className="mt-4 w-full"
             variant="secondary"
-            disabled={exportBackup.isPending}
+            disabled={exportBackup.isPending || importBackup.isPending}
             onClick={() => exportBackup.mutate()}
           >
             {exportBackup.isPending ? copy.storage.exporting : copy.storage.exportBackup}
           </Button>
+          <Button
+            className="mt-2 w-full"
+            variant="outline"
+            disabled={exportBackup.isPending || importBackup.isPending}
+            onClick={() => importBackup.mutate()}
+          >
+            {importBackup.isPending ? copy.storage.importing : copy.storage.importBackup}
+          </Button>
+          <p className="mt-3 text-xs text-[var(--muted-foreground)]">{copy.storage.importNote}</p>
         </div>
       </div>
     </div>

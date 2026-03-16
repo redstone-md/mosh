@@ -65,6 +65,15 @@ export class DesktopStorageClient {
       },
     })
   }
+
+  async importBackup(path: string): Promise<void> {
+    const parsedPath = z.string().trim().min(1).parse(path)
+    await invoke('import_storage_backup', {
+      payload: {
+        path: parsedPath,
+      },
+    })
+  }
 }
 
 export const desktopStorageClient = new DesktopStorageClient()
