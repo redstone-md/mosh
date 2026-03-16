@@ -8,12 +8,14 @@ import { notifyDesktop } from '../lib/desktopNotifications'
 type UseDesktopNotificationsOptions = {
   snapshot?: DesktopSnapshot
   selectedRoomId: string
+  mutedRoomIds: string[]
   language: AppLanguage
 }
 
 export function useDesktopNotifications({
   snapshot,
   selectedRoomId,
+  mutedRoomIds,
   language,
 }: UseDesktopNotificationsOptions) {
   const copy = getI18nCopy(language)
@@ -69,10 +71,15 @@ export function useDesktopNotifications({
         const room = roomsById.get(message.roomId)
         const mention = message.body.toLowerCase().includes(`@${nickname}`)
         const directRoom = message.roomId.startsWith('dm-') || room?.kind === 'dm'
+        const mutedRoom = mutedRoomIds.includes(message.roomId)
         const activeVisibleRoom =
           windowState.focused && windowState.visible && message.roomId === selectedRoomId
 
         if (activeVisibleRoom && !mention) {
+          continue
+        }
+
+        if (mutedRoom && !mention) {
           continue
         }
 
@@ -88,5 +95,5 @@ export function useDesktopNotifications({
     return () => {
       cancelled = true
     }
-  }, [copy, selectedRoomId, snapshot])
+  }, [copy, mutedRoomIds, selectedRoomId, snapshot])
 }

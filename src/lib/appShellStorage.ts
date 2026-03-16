@@ -63,6 +63,8 @@ export function createDefaultPreferences(): ShellPreferences {
       lobby: 'text',
     },
     pinnedMessages: {},
+    mutedRooms: [],
+    lastReadMessageIds: {},
   }
 }
 

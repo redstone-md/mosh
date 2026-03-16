@@ -210,6 +210,8 @@ export const ruTranslations = {
       globalSearchLive: 'Live',
       globalSearchArchive: 'Архив',
       globalSearchResultCount: (count: number) => `${count} совпадений`,
+      muteRoom: 'Отключить уведомления в комнате',
+      unmuteRoom: 'Включить уведомления в комнате',
       reply: 'Ответить',
       copy: 'Скопировать текст',
       attachFile: 'Прикрепить файл (<40KB)',

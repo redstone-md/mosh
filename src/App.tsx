@@ -7,6 +7,8 @@ import { OnboardingSurface } from './components/shell/OnboardingSurface'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
 import { useMediaSession } from './hooks/useMediaSession'
+import { useDocumentAppearance } from './hooks/useDocumentAppearance'
+import { useRoomActivityState } from './hooks/useRoomActivityState'
 import { useShellPreferences } from './hooks/useShellPreferences'
 import { useSignedChatArchive } from './hooks/useSignedChatArchive'
 import { findRoomById, getVisiblePeers, sameRuntimeDraft, selectRoomFallback, toRuntimeDraft } from './lib/appShellSelectors'
@@ -14,7 +16,7 @@ import { reconcileGroups, reconcileRoomTypes } from './lib/appShellStorage'
 import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
-import { detectSystemLanguage, getI18nCopy, resolveAppLanguage } from './lib/i18n'
+import { detectSystemLanguage, getI18nCopy } from './lib/i18n'
 import { resolvePinnedMessages, togglePinnedMessage } from './lib/messagePins'
 import type { ChannelType, RoomGroup, ThemeId } from './lib/appShellSchemas'
 import type { UpdateRuntimeSettingsInput } from './lib/schemas'
@@ -98,15 +100,8 @@ export function App() {
   })
 
   const mediaSession = useMediaSession(snapshot.data)
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = preferences.theme
-  }, [preferences.theme])
-  const activeLanguage = resolveAppLanguage(preferences.languagePreference, systemLanguage)
+  const activeLanguage = useDocumentAppearance(preferences.theme, preferences.languagePreference, systemLanguage)
   const activeCopy = getI18nCopy(activeLanguage)
-  useEffect(() => {
-    document.documentElement.lang = activeLanguage
-  }, [activeLanguage])
 
   useEffect(() => {
     if (shellPreferences.isPending || !snapshot.data || settingsHydratedRef.current) {
@@ -139,6 +134,7 @@ export function App() {
   useDesktopNotifications({
     snapshot: snapshot.data,
     selectedRoomId: preferences.selectedRoomId,
+    mutedRoomIds: preferences.mutedRooms,
     language: activeLanguage,
   })
 
@@ -157,8 +153,7 @@ export function App() {
 
   const data = snapshot.data
   const runtimeDraft = preferences.runtimeDraft
-  const showOnboarding =
-    data?.runtime.state !== 'Runtime online' && !preferences.onboardingCompleted
+  const showOnboarding = data?.runtime.state !== 'Runtime online' && !preferences.onboardingCompleted
   const mentionablePeerNames = useMemo(
     () =>
       (data?.peers ?? [])
@@ -220,6 +215,13 @@ export function App() {
     () => resolvePinnedMessages(preferences.pinnedMessages, activeRoom.id, archiveState.mergedMessages),
     [activeRoom.id, archiveState.mergedMessages, preferences.pinnedMessages],
   )
+  const roomActivity = useRoomActivityState({
+    snapshot: data,
+    selectedRoomId: preferences.selectedRoomId,
+    lastReadMessageIds: preferences.lastReadMessageIds,
+    mutedRooms: preferences.mutedRooms,
+    setPreferences,
+  })
 
   useEffect(() => {
     if (JSON.stringify(reconciledGroups) === JSON.stringify(preferences.groups)) {
@@ -454,6 +456,8 @@ export function App() {
         mediaSession={mediaSession}
         messageDraft={messageDraft}
         roomTypes={reconciledRoomTypes}
+        unreadCounts={roomActivity.unreadCounts}
+        mutedRoomIds={roomActivity.mutedRooms}
         pinnedMessages={pinnedMessages}
         pinnedMessageIds={activePinnedMessageIds}
         publishPending={publishMessage.isPending}
@@ -510,6 +514,7 @@ export function App() {
             pinnedMessages: togglePinnedMessage(current.pinnedMessages, activeRoom.id, messageId),
           }))
         }
+        onToggleMuteRoom={roomActivity.toggleRoomMute}
         onThemeChange={handleThemeChange}
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
         onRuntimeDraftChange={handleRuntimeDraftChange}
