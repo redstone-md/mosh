@@ -1,4 +1,12 @@
-import type { ChannelType, IdentityTransferEvent, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
+import type {
+  ChannelType,
+  IdentityRollbackSnapshot,
+  IdentityTransferEvent,
+  LanguagePreference,
+  RoomGroup,
+  SigningIdentity,
+  ThemeId,
+} from '../../lib/appShellSchemas'
 import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
 import { languagePreferenceOptions } from '../../lib/i18n'
 import type { TrustedPeerEntry } from '../../lib/peerTrust'
@@ -29,6 +37,8 @@ type SettingsDialogProps = {
   roomTypes: Record<string, ChannelType>
   selectedGroupId: string
   identityTransferHistory: IdentityTransferEvent[]
+  identityRollbackSnapshots: IdentityRollbackSnapshot[]
+  activeIdentityFingerprint: string
   trustedPeers: TrustedPeerEntry[]
   trustedCount: number
   reviewCount: number
@@ -49,6 +59,8 @@ type SettingsDialogProps = {
   ) => void
   onForgetPeer: (peerId: string) => void
   onRecordTransferEvent: (event: IdentityTransferEventInput) => void
+  onSaveRollbackSnapshot: (identity: SigningIdentity, source: 'import' | 'rollback') => void
+  onRestoreRollbackSnapshot: (snapshotId: string) => Promise<void>
   onRestoreStorage: () => void
   onResetOnboarding: () => void
 }
@@ -63,6 +75,8 @@ export function SettingsDialog({
   roomTypes,
   selectedGroupId,
   identityTransferHistory,
+  identityRollbackSnapshots,
+  activeIdentityFingerprint,
   trustedPeers,
   trustedCount,
   reviewCount,
@@ -79,6 +93,8 @@ export function SettingsDialog({
   onSaveWorkspace,
   onForgetPeer,
   onRecordTransferEvent,
+  onSaveRollbackSnapshot,
+  onRestoreRollbackSnapshot,
   onRestoreStorage,
   onResetOnboarding,
 }: SettingsDialogProps) {
@@ -214,7 +230,11 @@ export function SettingsDialog({
           <TabsContent value="storage">
             <StoragePanel
               identityTransferHistory={identityTransferHistory}
+              identityRollbackSnapshots={identityRollbackSnapshots}
+              activeIdentityFingerprint={activeIdentityFingerprint}
               onRecordTransferEvent={onRecordTransferEvent}
+              onSaveRollbackSnapshot={onSaveRollbackSnapshot}
+              onRestoreRollbackSnapshot={onRestoreRollbackSnapshot}
               onRestore={onRestoreStorage}
             />
           </TabsContent>

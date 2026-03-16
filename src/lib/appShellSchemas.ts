@@ -23,13 +23,28 @@ export const roomGroupSchema = z.object({
 
 export const identityTransferEventSchema = z.object({
   id: z.string().min(1),
-  action: z.enum(['export', 'import']),
+  action: z.enum(['export', 'import', 'rollback']),
   channel: z.enum(['manual', 'deep-link']),
   occurredAt: z.string().min(1),
   activeFingerprint: z.string().min(1),
   replacedFingerprint: z.string().min(1).optional(),
   packageSourceFingerprint: z.string().min(1),
   packageExportedAt: z.string().min(1).optional(),
+})
+
+export const signingIdentitySchema = z.object({
+  algorithm: z.literal('ECDSA-P256'),
+  fingerprint: z.string().min(1),
+  publicKeyJwk: z.record(z.string(), z.unknown()),
+  privateKeyJwk: z.record(z.string(), z.unknown()),
+})
+
+export const identityRollbackSnapshotSchema = z.object({
+  id: z.string().min(1),
+  source: z.enum(['import', 'rollback']),
+  capturedAt: z.string().min(1),
+  fingerprint: z.string().min(1),
+  identity: signingIdentitySchema,
 })
 
 export const shellPreferencesSchema = z.object({
@@ -47,6 +62,7 @@ export const shellPreferencesSchema = z.object({
   mutedRooms: z.array(z.string().min(1)).max(256).default([]),
   lastReadMessageIds: z.record(z.string(), z.string().min(1)).default({}),
   identityTransferHistory: z.array(identityTransferEventSchema).max(16).default([]),
+  identityRollbackSnapshots: z.array(identityRollbackSnapshotSchema).max(5).default([]),
   trustedPeers: z
     .record(
       z.string(),
@@ -60,13 +76,6 @@ export const shellPreferencesSchema = z.object({
 
 export const storedMessageSchema = messageSchema.extend({
   storedAt: z.string().min(1),
-})
-
-export const signingIdentitySchema = z.object({
-  algorithm: z.literal('ECDSA-P256'),
-  fingerprint: z.string().min(1),
-  publicKeyJwk: z.record(z.string(), z.unknown()),
-  privateKeyJwk: z.record(z.string(), z.unknown()),
 })
 
 export const signedRoomArchiveSchema = z.object({
@@ -99,5 +108,6 @@ export type StoredMessage = z.infer<typeof storedMessageSchema>
 export type TrustedPeerRecord = NonNullable<ShellPreferences['trustedPeers'][string]>
 export type SigningIdentity = z.infer<typeof signingIdentitySchema>
 export type IdentityTransferEvent = z.infer<typeof identityTransferEventSchema>
+export type IdentityRollbackSnapshot = z.infer<typeof identityRollbackSnapshotSchema>
 export type SignedRoomArchive = z.infer<typeof signedRoomArchiveSchema>
 export type StorageOverview = z.infer<typeof storageOverviewSchema>

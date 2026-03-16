@@ -29,7 +29,7 @@ export function App() {
   const settingsHydratedRef = useRef(false)
   const runtimeAutoStartRef = useRef(false)
   const shellPreferences = useShellPreferences()
-  const { preferences, setPreferences, identityFingerprint, regenerateIdentity, recordIdentityTransferEvent, reload } = shellPreferences
+  const { preferences, setPreferences, identityFingerprint, regenerateIdentity, saveIdentityRollbackSnapshot, restoreIdentityRollbackSnapshot, recordIdentityTransferEvent, reload } = shellPreferences
   const [messageDraft, setMessageDraft] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -263,6 +263,7 @@ export function App() {
     currentIdentityFingerprint: identityFingerprint,
     onImported: reload,
     onRecordEvent: recordIdentityTransferEvent,
+    onSaveRollbackSnapshot: saveIdentityRollbackSnapshot,
   })
   const shellFrameProps = {
     language: activeLanguage,
@@ -316,18 +317,7 @@ export function App() {
 
   function handleCreateGroup(group: Omit<RoomGroup, 'id'>) {
     const nextId = `group-${Date.now().toString(36)}`
-    setPreferences((current) => ({
-      ...current,
-      selectedDock: 'group',
-      selectedGroupId: nextId,
-      groups: [
-        ...current.groups,
-        {
-          id: nextId,
-          ...group,
-        },
-      ],
-    }))
+    setPreferences((current) => ({ ...current, selectedDock: 'group', selectedGroupId: nextId, groups: [...current.groups, { id: nextId, ...group }] }))
   }
 
   async function handleSendMessage() {
@@ -376,6 +366,15 @@ export function App() {
     setArchiveRefreshKey((current) => current + 1)
   }
 
+  async function handleRestoreRollbackSnapshot(snapshotId: string) {
+    const selectedSnapshot = preferences.identityRollbackSnapshots.find((snapshot) => snapshot.id === snapshotId)
+    if (!selectedSnapshot) throw new Error('Rollback snapshot not found.')
+
+    const previousFingerprint = identityFingerprint
+    const restoredSnapshot = await restoreIdentityRollbackSnapshot(snapshotId)
+    recordIdentityTransferEvent({ action: 'rollback', channel: 'manual', activeFingerprint: restoredSnapshot.fingerprint, replacedFingerprint: previousFingerprint, packageSourceFingerprint: restoredSnapshot.fingerprint, packageExportedAt: restoredSnapshot.capturedAt })
+  }
+
   const mediaLabel =
     mediaSession.state.activeRoomId
       ? activeCopy.runtime.roomLiveLabel(
@@ -392,21 +391,21 @@ export function App() {
     return (
       <ShellI18nFrame {...shellFrameProps}>
         <OnboardingSurface
-        runtime={data.runtime}
-        theme={preferences.theme}
-        languagePreference={preferences.languagePreference}
-        playIntro={!shellPreferences.hasPersistedPreferences}
-        runtimeDraft={runtimeDraft}
-        isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
-        formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
-        titlebarErrorNote={toggleRuntime.error?.message}
-        onThemeChange={handleThemeChange}
-        onLanguagePreferenceChange={handleLanguagePreferenceChange}
-        onRuntimeDraftChange={handleRuntimeDraftChange}
-        onStart={() => void handleStartFromOnboarding()}
-        onSkip={handleSkipOnboarding}
-        onToggleRuntime={() => toggleRuntime.mutate()}
-        runtimeToggleBusy={toggleRuntime.isPending}
+          runtime={data.runtime}
+          theme={preferences.theme}
+          languagePreference={preferences.languagePreference}
+          playIntro={!shellPreferences.hasPersistedPreferences}
+          runtimeDraft={runtimeDraft}
+          isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
+          formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
+          titlebarErrorNote={toggleRuntime.error?.message}
+          onThemeChange={handleThemeChange}
+          onLanguagePreferenceChange={handleLanguagePreferenceChange}
+          onRuntimeDraftChange={handleRuntimeDraftChange}
+          onStart={() => void handleStartFromOnboarding()}
+          onSkip={handleSkipOnboarding}
+          onToggleRuntime={() => toggleRuntime.mutate()}
+          runtimeToggleBusy={toggleRuntime.isPending}
         />
       </ShellI18nFrame>
     )
@@ -446,6 +445,7 @@ export function App() {
         trustedCount={peerTrust.trustedCount}
         reviewCount={peerTrust.reviewCount}
         identityTransferHistory={preferences.identityTransferHistory}
+        identityRollbackSnapshots={preferences.identityRollbackSnapshots}
         pinnedMessages={pinnedMessages}
         pinnedMessageIds={activePinnedMessageIds}
         publishPending={publishMessage.isPending}
@@ -507,6 +507,8 @@ export function App() {
         onTogglePeerTrust={peerTrust.togglePeerTrust}
         onForgetPeer={peerTrust.removeTrustedPeer}
         onRecordTransferEvent={recordIdentityTransferEvent}
+        onSaveRollbackSnapshot={saveIdentityRollbackSnapshot}
+        onRestoreRollbackSnapshot={handleRestoreRollbackSnapshot}
         onThemeChange={handleThemeChange}
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
         onRuntimeDraftChange={handleRuntimeDraftChange}

@@ -23,7 +23,11 @@ export function IdentityTransferHistoryPanel({ history }: IdentityTransferHistor
             <div key={event.id} className="grid gap-3 px-4 py-4 md:grid-cols-[140px_minmax(0,1fr)_160px]">
               <div className="space-y-1">
                 <div className="text-sm font-medium text-foreground">
-                  {event.action === 'export' ? copy.identityTransfer.historyExport : copy.identityTransfer.historyImport}
+                  {event.action === 'export'
+                    ? copy.identityTransfer.historyExport
+                    : event.action === 'rollback'
+                      ? copy.identityTransfer.historyRollback
+                      : copy.identityTransfer.historyImport}
                 </div>
                 <div className="text-xs text-[var(--muted-foreground)]">
                   {event.channel === 'deep-link'
