@@ -63,7 +63,10 @@ pub fn run() {
         .setup(|app| {
             configure_bundled_runtime_path(&app.handle());
             #[cfg(all(debug_assertions, any(target_os = "windows", target_os = "linux")))]
-            let _ = app.deep_link().register("mosh");
+            {
+                let _ = app.deep_link().register("mosh");
+                let _ = app.deep_link().register("mosh-identity");
+            }
             app.manage(state::SharedDesktopState::new(
                 state::DesktopShellState::new(),
             ));

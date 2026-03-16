@@ -26,7 +26,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["mosh"]
+        "schemes": ["mosh", "mosh-identity"]
       }
     }
   },

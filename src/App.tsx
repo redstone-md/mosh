@@ -1,13 +1,12 @@
-import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BootstrapErrorScreen, LoadingScreen } from './components/AppBootstrapState'
-import { I18nProvider } from './components/I18nProvider'
-import { InviteReviewDialog } from './components/shell/InviteReviewDialog'
 import { MainSurface } from './components/shell/MainSurface'
+import { ShellI18nFrame } from './components/shell/ShellI18nFrame'
 import { OnboardingSurface } from './components/shell/OnboardingSurface'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
+import { useIdentityTransferFlow } from './hooks/useIdentityTransferFlow'
 import { useInviteFlow } from './hooks/useInviteFlow'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
@@ -30,7 +29,7 @@ export function App() {
   const settingsHydratedRef = useRef(false)
   const runtimeAutoStartRef = useRef(false)
   const shellPreferences = useShellPreferences()
-  const { preferences, setPreferences, identityFingerprint, regenerateIdentity } = shellPreferences
+  const { preferences, setPreferences, identityFingerprint, regenerateIdentity, reload } = shellPreferences
   const [messageDraft, setMessageDraft] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -113,30 +112,6 @@ export function App() {
   const mediaSession = useMediaSession(snapshot.data)
   const activeLanguage = useDocumentAppearance(preferences.theme, preferences.languagePreference, systemLanguage)
   const activeCopy = getI18nCopy(activeLanguage)
-
-  function renderWithI18n(content: ReactNode) {
-    return (
-      <I18nProvider
-        language={activeLanguage}
-        systemLanguage={systemLanguage}
-        languagePreference={preferences.languagePreference}
-        onLanguagePreferenceChange={handleLanguagePreferenceChange}
-      >
-        <>
-          {content}
-          <InviteReviewDialog
-            pendingInvite={inviteFlow.pendingInvite}
-            isBusy={inviteFlow.reviewPending}
-            currentIdentityFingerprint={inviteFlow.currentIdentityFingerprint}
-            identityMode={inviteFlow.identityMode}
-            onIdentityModeChange={inviteFlow.setIdentityMode}
-            onApprove={() => void inviteFlow.approvePendingInvite()}
-            onDismiss={inviteFlow.dismissPendingInvite}
-          />
-        </>
-      </I18nProvider>
-    )
-  }
 
   useEffect(() => {
     if (shellPreferences.isPending || !snapshot.data || settingsHydratedRef.current) {
@@ -279,18 +254,44 @@ export function App() {
     connectPeer,
     subscribeRoom,
   })
-
-  if (shellPreferences.isPending || snapshot.isPending) {
-    return renderWithI18n(<LoadingScreen />)
+  const identityTransferFlow = useIdentityTransferFlow({
+    copy: {
+      invalidLink: activeCopy.identityTransfer.deepLinkInvalid,
+      imported: activeCopy.identityTransfer.deepLinkImported,
+      importFailed: activeCopy.identityTransfer.importFailed,
+    },
+    currentIdentityFingerprint: identityFingerprint,
+    onImported: reload,
+  })
+  const shellFrameProps = {
+    language: activeLanguage,
+    systemLanguage,
+    languagePreference: preferences.languagePreference,
+    onLanguagePreferenceChange: handleLanguagePreferenceChange,
+    invite: {
+      pendingInvite: inviteFlow.pendingInvite,
+      isBusy: inviteFlow.reviewPending,
+      currentIdentityFingerprint: inviteFlow.currentIdentityFingerprint,
+      identityMode: inviteFlow.identityMode,
+      onIdentityModeChange: inviteFlow.setIdentityMode,
+      onApprove: () => void inviteFlow.approvePendingInvite(),
+      onDismiss: inviteFlow.dismissPendingInvite,
+    },
+    identityTransfer: {
+      pendingTransfer: identityTransferFlow.pendingTransfer,
+      currentIdentityFingerprint: identityTransferFlow.currentIdentityFingerprint,
+      passphrase: identityTransferFlow.passphrase,
+      errorNote: identityTransferFlow.errorNote,
+      isBusy: identityTransferFlow.importPending,
+      onPassphraseChange: identityTransferFlow.setPassphrase,
+      onApprove: () => void identityTransferFlow.approvePendingTransfer(),
+      onDismiss: identityTransferFlow.dismissPendingTransfer,
+    },
   }
 
-  if (shellPreferences.error instanceof Error) {
-    return renderWithI18n(<BootstrapErrorScreen message={shellPreferences.error.message} />)
-  }
-
-  if (snapshot.isError) {
-    return renderWithI18n(<BootstrapErrorScreen message={snapshot.error.message} />)
-  }
+  if (shellPreferences.isPending || snapshot.isPending) return <ShellI18nFrame {...shellFrameProps}><LoadingScreen /></ShellI18nFrame>
+  if (shellPreferences.error instanceof Error) return <ShellI18nFrame {...shellFrameProps}><BootstrapErrorScreen message={shellPreferences.error.message} /></ShellI18nFrame>
+  if (snapshot.isError) return <ShellI18nFrame {...shellFrameProps}><BootstrapErrorScreen message={snapshot.error.message} /></ShellI18nFrame>
 
   if (!data) {
     return null
@@ -309,16 +310,8 @@ export function App() {
     }
   }
 
-  function handleSkipOnboarding() {
-    setPreferences((current) => ({
-      ...current,
-      onboardingCompleted: true,
-    }))
-  }
-
-  async function handleSaveRuntime() {
-    await updateRuntimeSettings.mutateAsync(preferences.runtimeDraft)
-  }
+  function handleSkipOnboarding() { setPreferences((current) => ({ ...current, onboardingCompleted: true })) }
+  async function handleSaveRuntime() { await updateRuntimeSettings.mutateAsync(preferences.runtimeDraft) }
 
   function handleCreateGroup(group: Omit<RoomGroup, 'id'>) {
     const nextId = `group-${Date.now().toString(36)}`
@@ -395,8 +388,9 @@ export function App() {
   const activeVoiceRoom = data.voiceRooms.find((room) => room.joined) ?? null
 
   if (showOnboarding) {
-    return renderWithI18n(
-      <OnboardingSurface
+    return (
+      <ShellI18nFrame {...shellFrameProps}>
+        <OnboardingSurface
         runtime={data.runtime}
         theme={preferences.theme}
         languagePreference={preferences.languagePreference}
@@ -412,12 +406,13 @@ export function App() {
         onSkip={handleSkipOnboarding}
         onToggleRuntime={() => toggleRuntime.mutate()}
         runtimeToggleBusy={toggleRuntime.isPending}
-      />,
+        />
+      </ShellI18nFrame>
     )
   }
 
-  return renderWithI18n(
-    <>
+  return (
+    <ShellI18nFrame {...shellFrameProps}>
       <MainSurface
         data={data}
         runtimeDraft={runtimeDraft}
@@ -522,6 +517,6 @@ export function App() {
           }))
         }
       />
-    </>,
+    </ShellI18nFrame>
   )
 }
