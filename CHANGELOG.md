@@ -22,3 +22,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Expanded CI/release coverage to include Windows ARM64 hosted runners alongside Linux ARM64 and Apple Silicon macOS targets.
 - Added desktop deep-link handling for `mosh://invite/...`, so installed builds can open invite links directly into MOSH instead of requiring manual paste/import.
 - Added an invite review dialog for deep links, so `mosh://invite/...` now shows inviter/mesh/room details and requires explicit confirmation before MOSH joins.
+- Extended mesh invites with inviter fingerprint metadata and added a current-vs-new local identity choice in the invite review flow before joining.

@@ -5,6 +5,7 @@ import {
   createDefaultPreferences,
   ensureSigningIdentity,
   loadShellBootstrap,
+  regenerateSigningIdentity,
   savePreferences,
 } from '../lib/appShellStorage'
 
@@ -57,6 +58,11 @@ export function useShellPreferences() {
     isPending: bootstrap.isPending || (bootstrap.isSuccess && !bootstrapHydratedRef.current),
     error: bootstrap.error,
     hasPersistedPreferences: bootstrap.data?.hasPersistedPreferences ?? false,
+    regenerateIdentity: async () => {
+      const identity = await regenerateSigningIdentity()
+      setIdentityFingerprint(identity.fingerprint)
+      return identity
+    },
     reload: async () => {
       const result = await bootstrap.refetch()
       if (result.data) {

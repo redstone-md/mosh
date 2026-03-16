@@ -21,6 +21,8 @@ type InviteFlowOptions = {
   }
   data?: DesktopSnapshot
   runtimeDraft: ShellPreferences['runtimeDraft']
+  currentIdentityFingerprint: string
+  regenerateIdentity: () => Promise<{ fingerprint: string }>
   setPreferences: Dispatch<SetStateAction<ShellPreferences>>
   updateRuntimeSettings: SnapshotMutation
   connectPeer: SnapshotMutation
@@ -31,12 +33,15 @@ export function useInviteFlow({
   copy,
   data,
   runtimeDraft,
+  currentIdentityFingerprint,
+  regenerateIdentity,
   setPreferences,
   updateRuntimeSettings,
   connectPeer,
   subscribeRoom,
 }: InviteFlowOptions) {
   const [reviewPending, setReviewPending] = useState(false)
+  const [identityMode, setIdentityMode] = useState<'current' | 'new'>('current')
   const { pendingInvite, dismissPendingInvite } = useDeepLinkInvites({
     invalidMessage: copy.inviteInvalid,
   })
@@ -76,21 +81,31 @@ export function useInviteFlow({
     setReviewPending(true)
 
     try {
+      if (identityMode === 'new') {
+        await regenerateIdentity()
+      }
       await applyInvite(pendingInvite.invite)
       toast.success(copy.inviteApplied)
+      setIdentityMode('current')
       dismissPendingInvite()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : copy.inviteInvalid)
     } finally {
       setReviewPending(false)
     }
-  }, [applyInvite, copy.inviteApplied, copy.inviteInvalid, dismissPendingInvite, pendingInvite])
+  }, [applyInvite, copy.inviteApplied, copy.inviteInvalid, dismissPendingInvite, identityMode, pendingInvite, regenerateIdentity])
 
   return {
     pendingInvite: pendingInvite as PendingDeepLinkInvite | null,
     reviewPending,
+    identityMode,
+    currentIdentityFingerprint,
     applyInvite,
     approvePendingInvite,
-    dismissPendingInvite,
+    dismissPendingInvite: () => {
+      setIdentityMode('current')
+      dismissPendingInvite()
+    },
+    setIdentityMode,
   }
 }

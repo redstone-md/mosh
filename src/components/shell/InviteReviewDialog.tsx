@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Link2, Network, RadioTower, UserRound } from 'lucide-react'
+import { Fingerprint, Link2, Network, RadioTower, Shield, UserRound } from 'lucide-react'
 
 import type { PendingDeepLinkInvite } from '../../lib/deepLinkInvites'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
@@ -9,6 +9,9 @@ import { useI18n } from '../I18nProvider'
 type InviteReviewDialogProps = {
   pendingInvite: PendingDeepLinkInvite | null
   isBusy: boolean
+  currentIdentityFingerprint: string
+  identityMode: 'current' | 'new'
+  onIdentityModeChange: (value: 'current' | 'new') => void
   onApprove: () => void
   onDismiss: () => void
 }
@@ -16,6 +19,9 @@ type InviteReviewDialogProps = {
 export function InviteReviewDialog({
   pendingInvite,
   isBusy,
+  currentIdentityFingerprint,
+  identityMode,
+  onIdentityModeChange,
   onApprove,
   onDismiss,
 }: InviteReviewDialogProps) {
@@ -54,6 +60,11 @@ export function InviteReviewDialog({
                 label={copy.inviteReview.startupPeer}
                 value={invite.runtime.startupPeer || copy.inviteReview.noStartupPeer}
               />
+              <InviteFact
+                icon={<Fingerprint className="h-4 w-4" />}
+                label={copy.inviteReview.inviterFingerprint}
+                value={invite.inviterFingerprint || copy.inviteReview.unavailableFingerprint}
+              />
             </div>
             <div className="border-t border-border px-5 py-3 text-sm text-[var(--muted-foreground)]">
               {copy.inviteReview.discovery(
@@ -61,6 +72,23 @@ export function InviteReviewDialog({
                   ? copy.inviteReview.discoveryLan
                   : copy.inviteReview.discoveryDirect,
               )}
+            </div>
+            <div className="grid gap-2 border-t border-border px-5 py-4">
+              <div className="text-sm font-medium text-foreground">{copy.inviteReview.identityTitle}</div>
+              <IdentityOption
+                icon={<Shield className="h-4 w-4" />}
+                label={copy.inviteReview.useCurrentIdentity}
+                detail={copy.inviteReview.currentIdentity(currentIdentityFingerprint)}
+                selected={identityMode === 'current'}
+                onSelect={() => onIdentityModeChange('current')}
+              />
+              <IdentityOption
+                icon={<Fingerprint className="h-4 w-4" />}
+                label={copy.inviteReview.createNewIdentity}
+                detail={copy.inviteReview.newIdentityDetail}
+                selected={identityMode === 'new'}
+                onSelect={() => onIdentityModeChange('new')}
+              />
             </div>
             <DialogFooter className="border-t border-border px-5 py-4">
               <Button type="button" variant="outline" onClick={onDismiss} disabled={isBusy}>
@@ -92,5 +120,33 @@ function InviteFact({ icon, label, value }: InviteFactProps) {
         <div className="truncate text-sm text-foreground">{value}</div>
       </div>
     </div>
+  )
+}
+
+type IdentityOptionProps = {
+  icon: ReactNode
+  label: string
+  detail: string
+  selected: boolean
+  onSelect: () => void
+}
+
+function IdentityOption({ icon, label, detail, selected, onSelect }: IdentityOptionProps) {
+  return (
+    <button
+      type="button"
+      className={`flex items-start gap-3 rounded-md border px-3 py-3 text-left transition-colors ${
+        selected
+          ? 'border-[var(--primary)] bg-[var(--panel)]'
+          : 'border-border/80 bg-[var(--panel-strong)] hover:border-border'
+      }`}
+      onClick={onSelect}
+    >
+      <div className="mt-0.5 text-[var(--muted-foreground)]">{icon}</div>
+      <div className="min-w-0">
+        <div className="text-sm text-foreground">{label}</div>
+        <div className="mt-1 text-xs text-[var(--muted-foreground)]">{detail}</div>
+      </div>
+    </button>
   )
 }

@@ -6,6 +6,7 @@ import type { RoomSummary, UpdateRuntimeSettingsInput } from '../lib/schemas'
 
 type UseMeshInviteActionsOptions = {
   currentUser: string
+  inviterFingerprint: string
   runtimeDraft: UpdateRuntimeSettingsInput
   activeRoom: RoomSummary
   onApplyInvite: (invite: MeshInvitePayload) => Promise<void>
@@ -13,6 +14,7 @@ type UseMeshInviteActionsOptions = {
 
 export function useMeshInviteActions({
   currentUser,
+  inviterFingerprint,
   runtimeDraft,
   activeRoom,
   onApplyInvite,
@@ -20,6 +22,7 @@ export function useMeshInviteActions({
   const inviteCode = encodeMeshInvite({
     version: 1,
     inviterName: currentUser,
+    inviterFingerprint,
     runtime: {
       ...runtimeDraft,
       initialRoom: activeRoom.id,

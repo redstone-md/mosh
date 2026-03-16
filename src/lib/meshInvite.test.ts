@@ -12,7 +12,7 @@ describe('meshInvite', () => {
       startupPeer: 'host:9000',
       trackerMode: 'default',
       lanDiscoveryEnabled: true,
-    })
+    }, 'ab:cd:ef:12:34:56')
 
     expect(decodeMeshInvite(encodeMeshInvite(payload))).toEqual(payload)
   })
@@ -34,5 +34,23 @@ describe('meshInvite', () => {
 
   it('rejects malformed invites', () => {
     expect(() => decodeMeshInvite('mosh://invite/not-real')).toThrow()
+  })
+
+  it('keeps working when invites do not include a fingerprint', () => {
+    const encoded = encodeMeshInvite({
+      version: 1,
+      inviterName: 'operator',
+      runtime: {
+        nickname: 'operator',
+        meshId: 'mosh-chat',
+        listenPort: 0,
+        initialRoom: 'lobby',
+        startupPeer: '',
+        trackerMode: 'default',
+        lanDiscoveryEnabled: true,
+      },
+    })
+
+    expect(decodeMeshInvite(encoded).inviterFingerprint).toBeUndefined()
   })
 })
