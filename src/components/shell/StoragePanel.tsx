@@ -6,6 +6,7 @@ import { desktopStorageClient } from '../../lib/desktopStorageClient'
 import { isTauriEnvironment } from '../../lib/tauriEnv'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
+import { IdentityTransferPanel } from './IdentityTransferPanel'
 
 function createBackupFileName() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -180,6 +181,8 @@ export function StoragePanel({ onRestore }: StoragePanelProps) {
           <p className="mt-3 text-xs text-[var(--muted-foreground)]">{copy.storage.importNote}</p>
         </div>
       </div>
+
+      <IdentityTransferPanel onImported={onRestore} />
     </div>
   )
 }

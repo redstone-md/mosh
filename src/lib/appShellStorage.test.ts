@@ -196,4 +196,18 @@ describe('appShellStorage', () => {
     expect(desktopStorageClient.saveSigningIdentity).toHaveBeenCalledWith(freshIdentity)
     expect(identity).toEqual(freshIdentity)
   })
+
+  it('can replace the current signing identity with an imported one', async () => {
+    tauriEnvironment = true
+    const importedIdentity = {
+      ...createStoredIdentity(),
+      fingerprint: '11:22:33:44:55:66',
+    }
+
+    const { replaceSigningIdentity } = await loadModule()
+    const identity = await replaceSigningIdentity(importedIdentity)
+
+    expect(desktopStorageClient.saveSigningIdentity).toHaveBeenCalledWith(importedIdentity)
+    expect(identity).toEqual(importedIdentity)
+  })
 })
