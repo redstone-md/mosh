@@ -16,6 +16,9 @@ import { useI18n } from './I18nProvider'
 type MessagePanelProps = {
   room: RoomSummary | undefined
   messages: Message[]
+  matchedMessageIds?: string[]
+  activeSearchMessageId?: string
+  activeSearchPreview?: string
   draft: string
   peerNames: string[]
   onDraftChange: (value: string) => void
@@ -27,6 +30,9 @@ type MessagePanelProps = {
 export function MessagePanel({
   room,
   messages,
+  matchedMessageIds = [],
+  activeSearchMessageId,
+  activeSearchPreview,
   draft,
   peerNames,
   onDraftChange,
@@ -107,6 +113,22 @@ export function MessagePanel({
     })
   }, [messages.length, room?.id])
 
+  useEffect(() => {
+    if (!activeSearchMessageId) {
+      return
+    }
+
+    const target = document.getElementById(activeSearchMessageId)
+    if (!target) {
+      return
+    }
+
+    target.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    })
+  }, [activeSearchMessageId])
+
   // Removed redundant DOM event listener since we handle it in editorProps now
 
 
@@ -175,11 +197,26 @@ export function MessagePanel({
 
   return (
     <section className="flex-1 flex flex-col min-h-0 bg-background relative">
+      {activeSearchMessageId && activeSearchPreview ? (
+        <div className="border-b border-border bg-[var(--panel-strong)] px-6 py-2">
+          <div className="mx-auto max-w-4xl text-xs text-[var(--muted-foreground)]">
+            {activeSearchPreview}
+          </div>
+        </div>
+      ) : null}
       <div className="flex-1 overflow-y-auto scroll-smooth px-6 custom-scrollbar" ref={scrollRef}>
         <div className="max-w-4xl mx-auto py-8 space-y-8" onClick={handleMessageClick}>
           {messages.length > 0 ? (
             messages.map((message) => (
-              <article className="flex gap-4 group relative" key={message.id} id={message.id}>
+              <article
+                className={cn(
+                  'flex gap-4 group relative rounded-xl px-2 py-1 transition-colors',
+                  matchedMessageIds.includes(message.id) && 'bg-[var(--panel-strong)]/70',
+                  activeSearchMessageId === message.id && 'ring-1 ring-[var(--ring)] bg-[var(--panel-strong)]',
+                )}
+                key={message.id}
+                id={message.id}
+              >
                 <div className={cn(
                   "flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shadow-sm",
                   message.emphasis === 'system' ? "bg-primary/20 text-primary border border-primary/20" : "bg-secondary text-foreground/80 border border-border/20"

@@ -11,3 +11,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Moved desktop persistence out of WebView `localStorage` into structured files under the app local data directory, with migration for existing preferences, signing identity, and signed chat archives.
 - Added a storage tab in settings that shows the live app data layout and exports a portable JSON backup of settings, signing identity, and signed room archives.
 - Added backup import and live restore flow in settings so a desktop user can bring settings, identity, and signed archives onto a new machine without manual file copying.
+- Added in-room message search with result navigation over the merged live transcript and signed archive history.
