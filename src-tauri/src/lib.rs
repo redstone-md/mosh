@@ -53,6 +53,7 @@ pub fn run() {
         })
         .setup(|app| {
             configure_bundled_runtime_path(&app.handle());
+            app.manage(state::SharedDesktopState::new(state::DesktopShellState::new()));
 
             let open = MenuItemBuilder::with_id("tray-open", "Open MOSH").build(app)?;
             let hide = MenuItemBuilder::with_id("tray-hide", "Hide to tray").build(app)?;
@@ -96,7 +97,6 @@ pub fn run() {
             let _tray = tray.build(app)?;
             Ok(())
         })
-        .manage(state::SharedDesktopState::new(state::DesktopShellState::new()))
         .invoke_handler(tauri::generate_handler![
             commands::desktop_snapshot,
             commands::toggle_runtime,
