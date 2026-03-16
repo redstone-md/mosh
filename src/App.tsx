@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BootstrapErrorScreen, LoadingScreen } from './components/AppBootstrapState'
 import { I18nProvider } from './components/I18nProvider'
+import { InviteReviewDialog } from './components/shell/InviteReviewDialog'
 import { MainSurface } from './components/shell/MainSurface'
 import { OnboardingSurface } from './components/shell/OnboardingSurface'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
-import { useDeepLinkInvites } from './hooks/useDeepLinkInvites'
+import { useInviteFlow } from './hooks/useInviteFlow'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
 import { usePeerTrustState } from './hooks/usePeerTrustState'
@@ -20,8 +21,6 @@ import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
 import { detectSystemLanguage, getI18nCopy } from './lib/i18n'
-import type { MeshInvitePayload } from './lib/meshInvite'
-import { buildInviteShellStatePatch, resolveInviteStartupPeer } from './lib/meshInviteFlow'
 import { resolvePinnedMessages, togglePinnedMessage } from './lib/messagePins'
 import type { ChannelType, RoomGroup, ThemeId } from './lib/appShellSchemas'
 import type { UpdateRuntimeSettingsInput } from './lib/schemas'
@@ -123,7 +122,15 @@ export function App() {
         languagePreference={preferences.languagePreference}
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
       >
-        {content}
+        <>
+          {content}
+          <InviteReviewDialog
+            pendingInvite={inviteFlow.pendingInvite}
+            isBusy={inviteFlow.reviewPending}
+            onApprove={() => void inviteFlow.approvePendingInvite()}
+            onDismiss={inviteFlow.dismissPendingInvite}
+          />
+        </>
       </I18nProvider>
     )
   }
@@ -255,38 +262,17 @@ export function App() {
       roomTypes: reconciledRoomTypes,
     }))
   }, [preferences.roomTypes, reconciledRoomTypes])
-
-  const handleApplyInvite = useCallback(
-    async (invite: MeshInvitePayload) => {
-      const invitePatch = buildInviteShellStatePatch(preferences.runtimeDraft, invite)
-
-      setPreferences((current) => ({
-        ...current,
-        ...invitePatch,
-      }))
-
-      if (!data || data.runtime.state !== 'Runtime online') {
-        return
-      }
-
-      const updatedSnapshot = sameRuntimeDraft(data.settings, invitePatch.runtimeDraft)
-        ? data
-        : await updateRuntimeSettings.mutateAsync(invitePatch.runtimeDraft)
-
-      const startupPeer = resolveInviteStartupPeer(invite, updatedSnapshot.settings.startupPeer)
-      if (startupPeer) {
-        await connectPeer.mutateAsync(startupPeer)
-      }
-
-      await subscribeRoom.mutateAsync(invite.runtime.initialRoom)
+  const inviteFlow = useInviteFlow({
+    copy: {
+      inviteApplied: activeCopy.createSpace.inviteApplied,
+      inviteInvalid: activeCopy.createSpace.inviteInvalid,
     },
-    [connectPeer, data, preferences.runtimeDraft, setPreferences, subscribeRoom, updateRuntimeSettings],
-  )
-
-  useDeepLinkInvites({
-    successMessage: activeCopy.createSpace.inviteApplied,
-    invalidMessage: activeCopy.createSpace.inviteInvalid,
-    onApplyInvite: handleApplyInvite,
+    data,
+    runtimeDraft: preferences.runtimeDraft,
+    setPreferences,
+    updateRuntimeSettings,
+    connectPeer,
+    subscribeRoom,
   })
 
   if (shellPreferences.isPending || snapshot.isPending) {
@@ -506,7 +492,7 @@ export function App() {
           subscribeRoom.mutate(room)
         }}
         onCreateGroup={handleCreateGroup}
-        onApplyInvite={handleApplyInvite}
+        onApplyInvite={inviteFlow.applyInvite}
         onDraftChange={setMessageDraft}
         onSendMessage={() => void handleSendMessage()}
         onTogglePinMessage={(messageId) =>

@@ -21,3 +21,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Reworked desktop packaging so builds now sync `moss` from `origin/main`, bundle the platform runtime into MOSH automatically, and produce cross-platform release artifacts with embedded `MOSS` libraries.
 - Expanded CI/release coverage to include Windows ARM64 hosted runners alongside Linux ARM64 and Apple Silicon macOS targets.
 - Added desktop deep-link handling for `mosh://invite/...`, so installed builds can open invite links directly into MOSH instead of requiring manual paste/import.
+- Added an invite review dialog for deep links, so `mosh://invite/...` now shows inviter/mesh/room details and requires explicit confirmation before MOSH joins.
