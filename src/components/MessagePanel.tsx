@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import type { Message, RoomSummary } from '../lib/schemas'
-import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply } from 'lucide-react'
+import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply, Pin } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { formatRoomTitle } from '../lib/chatPresentation'
 import {
@@ -8,6 +8,7 @@ import {
   getEmbeddedAttachmentLimit,
   isImageAttachment,
 } from '../lib/messageAttachments'
+import { focusMessageElement } from '../lib/messageFocus'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -26,8 +27,10 @@ type MessagePanelProps = {
   activeSearchPreview?: string
   draft: string
   peerNames: string[]
+  pinnedMessageIds: string[]
   onDraftChange: (value: string) => void
   onSend: () => void
+  onTogglePinMessage: (messageId: string) => void
   isSending: boolean
   errorNote?: string
 }
@@ -40,8 +43,10 @@ export function MessagePanel({
   activeSearchPreview,
   draft,
   peerNames,
+  pinnedMessageIds,
   onDraftChange,
   onSend,
+  onTogglePinMessage,
   isSending,
   errorNote,
 }: MessagePanelProps) {
@@ -49,6 +54,7 @@ export function MessagePanel({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const pinnedMessageSet = useMemo(() => new Set(pinnedMessageIds), [pinnedMessageIds])
 
   const handleSendRef = useRef(onSend)
   handleSendRef.current = onSend
@@ -123,15 +129,7 @@ export function MessagePanel({
       return
     }
 
-    const target = document.getElementById(activeSearchMessageId)
-    if (!target) {
-      return
-    }
-
-    target.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center',
-    })
+    focusMessageElement(activeSearchMessageId)
   }, [activeSearchMessageId])
 
   // Removed redundant DOM event listener since we handle it in editorProps now
@@ -182,9 +180,9 @@ export function MessagePanel({
     const text = tempDiv.textContent || tempDiv.innerText || ""
     
     // Create a styled blockquote for reply
-    const replyHtml = `<blockquote data-reply-to="${message.id}" class="cursor-pointer hover:bg-primary/10 transition-colors" title="Click to go to original message"><strong>${message.author}:</strong> ${text}</blockquote><p></p>`
+    const replyHtml = `<blockquote data-reply-to="${message.id}" class="cursor-pointer hover:bg-primary/10 transition-colors" title="${copy.messages.jumpToOriginal}"><strong>${message.author}:</strong> ${text}</blockquote><p></p>`
     editor?.chain().focus().insertContent(replyHtml).run()
-  }, [editor])
+  }, [copy.messages.jumpToOriginal, editor])
 
   const handleMessageClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -192,14 +190,7 @@ export function MessagePanel({
     if (blockquote) {
       const replyToId = blockquote.getAttribute('data-reply-to');
       if (replyToId) {
-        const el = document.getElementById(replyToId);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          el.classList.add('ring-2', 'ring-primary', 'ring-offset-2', 'ring-offset-background', 'transition-all', 'duration-500');
-          setTimeout(() => {
-            el.classList.remove('ring-2', 'ring-primary', 'ring-offset-2', 'ring-offset-background');
-          }, 1500);
-        }
+        focusMessageElement(replyToId, true)
       }
     }
   }, []);
@@ -217,9 +208,10 @@ export function MessagePanel({
         <div className="max-w-4xl mx-auto py-8 space-y-8" onClick={handleMessageClick}>
           {messages.length > 0 ? (
             messages.map((message) => (
-              <article
-                className={cn(
+                <article
+                  className={cn(
                   'flex gap-4 group relative rounded-xl px-2 py-1 transition-colors',
+                  pinnedMessageSet.has(message.id) && 'bg-primary/5 ring-1 ring-primary/15',
                   matchedMessageIds.includes(message.id) && 'bg-[var(--panel-strong)]/70',
                   activeSearchMessageId === message.id && 'ring-1 ring-[var(--ring)] bg-[var(--panel-strong)]',
                 )}
@@ -237,6 +229,12 @@ export function MessagePanel({
                     <span className="font-bold text-[15px] tracking-tight text-foreground/90">
                       {message.author}
                     </span>
+                    {pinnedMessageSet.has(message.id) ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-primary/85">
+                        <Pin size={10} />
+                        {copy.messages.pinned}
+                      </span>
+                    ) : null}
                     <span className="text-[10px] uppercase tracking-widest font-bold text-foreground/30">
                       {message.timestamp}
                     </span>
@@ -274,6 +272,18 @@ export function MessagePanel({
 
                 {/* Hover Actions */}
                 <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 bg-background/90 backdrop-blur-sm border border-border/50 rounded-lg shadow-sm p-1 -mt-2 z-10">
+                    <button 
+                        onClick={() => onTogglePinMessage(message.id)}
+                        className={cn(
+                          'p-1.5 rounded-md transition-colors',
+                          pinnedMessageSet.has(message.id)
+                            ? 'text-primary hover:bg-primary/10'
+                            : 'text-foreground/50 hover:text-foreground hover:bg-muted',
+                        )}
+                        title={pinnedMessageSet.has(message.id) ? copy.messages.unpin : copy.messages.pin}
+                    >
+                        <Pin size={14} />
+                    </button>
                     <button 
                         onClick={() => handleReply(message)}
                         className="p-1.5 text-foreground/50 hover:text-foreground hover:bg-muted rounded-md transition-colors"

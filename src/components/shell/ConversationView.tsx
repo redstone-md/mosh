@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronUp, MonitorUp, Phone, Search, Settings2, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, MonitorUp, Phone, Pin, Search, Settings2, X } from 'lucide-react'
 
 import { formatRoomTitle } from '../../lib/chatPresentation'
 import { describeArchiveStateLabel } from '../../lib/i18n'
+import { focusMessageElement } from '../../lib/messageFocus'
+import { extractPlainText } from '../../lib/messageSearch'
 import type { ChannelType } from '../../lib/appShellSchemas'
 import { searchMessages } from '../../lib/messageSearch'
 import type { Message, PeerSummary, RoomSummary } from '../../lib/schemas'
@@ -24,9 +26,12 @@ type ConversationViewProps = {
   mediaRoomId: string | null
   channelType: ChannelType
   peerNames: string[]
+  pinnedMessages: Message[]
+  pinnedMessageIds: string[]
   errorNote?: string
   onDraftChange: (value: string) => void
   onSend: () => void
+  onTogglePinMessage: (messageId: string) => void
   onOpenSettings: () => void
   onStartVoice: () => void
   onStartScreenShare: () => void
@@ -43,15 +48,19 @@ export function ConversationView({
   mediaRoomId,
   channelType,
   peerNames,
+  pinnedMessages,
+  pinnedMessageIds,
   errorNote,
   onDraftChange,
   onSend,
+  onTogglePinMessage,
   onOpenSettings,
   onStartVoice,
   onStartScreenShare,
 }: ConversationViewProps) {
   const { copy, language } = useI18n()
   const [searchOpen, setSearchOpen] = useState(false)
+  const [pinsOpen, setPinsOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchIndex, setSearchIndex] = useState(0)
   const archiveLabel = describeArchiveStateLabel(copy, archiveFingerprint, archiveVerified)
@@ -155,6 +164,17 @@ export function ConversationView({
             <Search className="h-4 w-4" />
           </Button>
           <Button
+            variant={pinsOpen ? 'secondary' : 'ghost'}
+            className="h-9 gap-2 px-3"
+            onClick={() => setPinsOpen((current) => !current)}
+            title={copy.messages.pinnedMessages}
+          >
+            <Pin className="h-4 w-4" />
+            <span className="rounded-md bg-[var(--panel-strong)] px-1.5 py-0.5 text-[11px] font-semibold">
+              {pinnedMessages.length}
+            </span>
+          </Button>
+          <Button
             variant={inCurrentCall ? 'default' : 'ghost'}
             size="icon"
             onClick={onStartVoice}
@@ -184,6 +204,32 @@ export function ConversationView({
           </Button>
         </div>
       </header>
+      {pinsOpen ? (
+        <div className="border-b border-border bg-[var(--panel)]/80 px-4 py-3">
+          {pinnedMessages.length > 0 ? (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {pinnedMessages.map((message) => (
+                <button
+                  key={message.id}
+                  type="button"
+                  className="min-w-0 shrink-0 rounded-xl border border-border bg-[var(--panel-strong)] px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+                  onClick={() => focusMessageElement(message.id, true)}
+                >
+                  <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
+                    <Pin className="h-3.5 w-3.5" />
+                    <span>{message.author}</span>
+                  </div>
+                  <p className="mt-1 max-w-64 truncate text-sm text-foreground/85">
+                    {extractPlainText(message.body) || copy.messages.pinnedEmpty}
+                  </p>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-[var(--muted-foreground)]">{copy.messages.pinnedEmpty}</p>
+          )}
+        </div>
+      ) : null}
 
       <MessagePanel
         key={`${room?.id ?? 'room'}:${language}`}
@@ -194,8 +240,10 @@ export function ConversationView({
         activeSearchPreview={activeSearchResult?.preview}
         draft={draft}
         peerNames={peerNames}
+        pinnedMessageIds={pinnedMessageIds}
         onDraftChange={onDraftChange}
         onSend={onSend}
+        onTogglePinMessage={onTogglePinMessage}
         isSending={isSending}
         errorNote={errorNote}
       />

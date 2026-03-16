@@ -62,6 +62,7 @@ export function createDefaultPreferences(): ShellPreferences {
     roomTypes: {
       lobby: 'text',
     },
+    pinnedMessages: {},
   }
 }
 

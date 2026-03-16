@@ -15,6 +15,7 @@ import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
 import { detectSystemLanguage, getI18nCopy, resolveAppLanguage } from './lib/i18n'
+import { resolvePinnedMessages, togglePinnedMessage } from './lib/messagePins'
 import type { ChannelType, RoomGroup, ThemeId } from './lib/appShellSchemas'
 import type { UpdateRuntimeSettingsInput } from './lib/schemas'
 
@@ -213,6 +214,11 @@ export function App() {
     showOnboarding ? '__inactive__' : activeRoom.id,
     showOnboarding ? [] : liveMessages,
     archiveRefreshKey,
+  )
+  const activePinnedMessageIds = preferences.pinnedMessages[activeRoom.id] ?? []
+  const pinnedMessages = useMemo(
+    () => resolvePinnedMessages(preferences.pinnedMessages, activeRoom.id, archiveState.mergedMessages),
+    [activeRoom.id, archiveState.mergedMessages, preferences.pinnedMessages],
   )
 
   useEffect(() => {
@@ -447,6 +453,8 @@ export function App() {
         mediaSession={mediaSession}
         messageDraft={messageDraft}
         roomTypes={reconciledRoomTypes}
+        pinnedMessages={pinnedMessages}
+        pinnedMessageIds={activePinnedMessageIds}
         publishPending={publishMessage.isPending}
         publishError={publishMessage.error?.message}
         runtimeTogglePending={toggleRuntime.isPending}
@@ -495,6 +503,12 @@ export function App() {
         onCreateGroup={handleCreateGroup}
         onDraftChange={setMessageDraft}
         onSendMessage={() => void handleSendMessage()}
+        onTogglePinMessage={(messageId) =>
+          setPreferences((current) => ({
+            ...current,
+            pinnedMessages: togglePinnedMessage(current.pinnedMessages, activeRoom.id, messageId),
+          }))
+        }
         onThemeChange={handleThemeChange}
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
         onRuntimeDraftChange={handleRuntimeDraftChange}

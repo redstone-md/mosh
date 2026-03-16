@@ -3,7 +3,14 @@ import { describeArchiveStateLabel } from '../../lib/i18n'
 import { formatRoomTitle } from '../../lib/chatPresentation'
 import type { MediaSessionState } from '../../hooks/useMediaSession'
 import type { VerifiedArchive } from '../../lib/appShellStorage'
-import type { DesktopSnapshot, PeerSummary, RoomSummary, VoiceRoom, UpdateRuntimeSettingsInput } from '../../lib/schemas'
+import type {
+  DesktopSnapshot,
+  Message,
+  PeerSummary,
+  RoomSummary,
+  VoiceRoom,
+  UpdateRuntimeSettingsInput,
+} from '../../lib/schemas'
 import { useI18n } from '../I18nProvider'
 import { Titlebar } from '../Titlebar'
 import { ShellToaster } from '../ShellToaster'
@@ -15,7 +22,6 @@ import { MemberSidebar } from './MemberSidebar'
 import { ServerRail } from './ServerRail'
 import { SettingsDialog } from './SettingsDialog'
 import { getChannelType } from '../../lib/appShellStorage'
-
 type MediaSessionController = {
   state: MediaSessionState
   joinVoiceRoom: (roomId: string, withScreenShare: boolean) => Promise<void>
@@ -52,6 +58,8 @@ type MainSurfaceProps = {
   mediaSession: MediaSessionController
   messageDraft: string
   roomTypes: Record<string, ChannelType>
+  pinnedMessages: Message[]
+  pinnedMessageIds: string[]
   publishPending: boolean
   publishError?: string
   runtimeTogglePending: boolean
@@ -70,6 +78,7 @@ type MainSurfaceProps = {
   onCreateGroup: (group: Omit<RoomGroup, 'id'>) => void
   onDraftChange: (value: string) => void
   onSendMessage: () => void
+  onTogglePinMessage: (messageId: string) => void
   onThemeChange: (theme: ThemeId) => void
   onLanguagePreferenceChange: (value: 'system' | 'en' | 'ru') => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
@@ -101,6 +110,8 @@ export function MainSurface({
   mediaSession,
   messageDraft,
   roomTypes,
+  pinnedMessages,
+  pinnedMessageIds,
   publishPending,
   publishError,
   runtimeTogglePending,
@@ -119,6 +130,7 @@ export function MainSurface({
   onCreateGroup,
   onDraftChange,
   onSendMessage,
+  onTogglePinMessage,
   onThemeChange,
   onLanguagePreferenceChange,
   onRuntimeDraftChange,
@@ -180,9 +192,12 @@ export function MainSurface({
           mediaRoomId={mediaSession.state.activeRoomId}
           channelType={getChannelType(activeRoom, roomTypes)}
           peerNames={mentionablePeerNames}
+          pinnedMessages={pinnedMessages}
+          pinnedMessageIds={pinnedMessageIds}
           errorNote={publishError}
           onDraftChange={onDraftChange}
           onSend={onSendMessage}
+          onTogglePinMessage={onTogglePinMessage}
           onOpenSettings={() => onOpenSettings(true)}
           onStartVoice={() => {
             if (mediaSession.state.activeRoomId === activeRoom.id) {
