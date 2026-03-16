@@ -1,12 +1,15 @@
 import { invoke } from '@tauri-apps/api/core'
+import { z } from 'zod'
 
 import {
   shellPreferencesSchema,
   signedRoomArchiveSchema,
   signingIdentitySchema,
+  storageOverviewSchema,
   type ShellPreferences,
   type SignedRoomArchive,
   type SigningIdentity,
+  type StorageOverview,
 } from './appShellSchemas'
 
 export class DesktopStorageClient {
@@ -47,6 +50,20 @@ export class DesktopStorageClient {
   async saveRoomArchive(room: string, value: SignedRoomArchive): Promise<void> {
     const payload = signedRoomArchiveSchema.parse(value)
     await invoke('save_room_archive', { room, payload })
+  }
+
+  async getStorageOverview(): Promise<StorageOverview> {
+    const payload = await invoke('storage_overview')
+    return storageOverviewSchema.parse(payload)
+  }
+
+  async exportBackup(path: string): Promise<void> {
+    const parsedPath = z.string().trim().min(1).parse(path)
+    await invoke('export_storage_backup', {
+      payload: {
+        path: parsedPath,
+      },
+    })
   }
 }
 

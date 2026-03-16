@@ -33,6 +33,12 @@ pub struct StoragePayloadInput {
     pub payload: Value,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportStorageBackupInput {
+    pub path: String,
+}
+
 #[tauri::command]
 pub fn desktop_snapshot(state: State<'_, SharedDesktopState>) -> Result<DesktopSnapshot, String> {
     let mut state = state
@@ -279,6 +285,18 @@ pub fn save_room_archive(
 #[tauri::command]
 pub fn storage_overview(app: AppHandle) -> Result<StorageOverview, String> {
     storage::storage_overview(&app)
+}
+
+#[tauri::command]
+pub fn export_storage_backup(
+    app: AppHandle,
+    payload: ExportStorageBackupInput,
+) -> Result<(), String> {
+    let path = payload.path.trim();
+    if path.is_empty() {
+        return Err("backup path is required".to_string());
+    }
+    storage::export_storage_backup(&app, path)
 }
 
 #[tauri::command]
