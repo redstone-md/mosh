@@ -18,7 +18,7 @@ export function useShellPreferences() {
   })
 
   useEffect(() => {
-    if (!bootstrap.data || bootstrapHydratedRef.current) {
+    if (!bootstrap.data) {
       return
     }
 
@@ -57,5 +57,14 @@ export function useShellPreferences() {
     isPending: bootstrap.isPending || (bootstrap.isSuccess && !bootstrapHydratedRef.current),
     error: bootstrap.error,
     hasPersistedPreferences: bootstrap.data?.hasPersistedPreferences ?? false,
+    reload: async () => {
+      const result = await bootstrap.refetch()
+      if (result.data) {
+        bootstrapHydratedRef.current = true
+        setPreferences(result.data.preferences)
+        const identity = await ensureSigningIdentity()
+        setIdentityFingerprint(identity.fingerprint)
+      }
+    },
   }
 }

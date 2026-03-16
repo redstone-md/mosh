@@ -216,8 +216,12 @@ export const enTranslations = {
       backupNote: 'Exports settings, signing identity, and every signed room archive into one JSON file.',
       archiveCount: (count: number) => `${count} archived rooms`,
       exportBackup: 'Export backup',
+      importBackup: 'Import backup',
       exporting: 'Exporting...',
+      importing: 'Importing...',
+      importNote: 'Import replaces the current settings, identity, and signed archives with the selected backup.',
       backupSaved: 'Backup exported.',
+      backupImported: 'Backup imported and applied.',
     },
     workspace: {
       addGroup: 'Add group',

@@ -127,6 +127,7 @@ pub fn run() {
             commands::save_room_archive,
             commands::storage_overview,
             commands::export_storage_backup,
+            commands::import_storage_backup,
             commands::window_minimize,
             commands::window_toggle_maximize,
             commands::window_start_drag,
