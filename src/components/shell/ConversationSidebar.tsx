@@ -1,4 +1,4 @@
-import { BellOff, Hash, Plus, Search, Settings, UserRound, Volume2 } from 'lucide-react'
+import { BellOff, Hash, PenSquare, Plus, Search, Settings, UserRound, Volume2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -23,6 +23,7 @@ type ConversationSidebarProps = {
   peers: PeerSummary[]
   selectedRoomId: string
   unreadCounts: Record<string, number>
+  draftPreviews: Record<string, string>
   mutedRoomIds: string[]
   mediaLabel: string
   roomTypes: Record<string, ChannelType>
@@ -42,6 +43,7 @@ export function ConversationSidebar({
   peers,
   selectedRoomId,
   unreadCounts,
+  draftPreviews,
   mutedRoomIds,
   mediaLabel,
   roomTypes,
@@ -108,6 +110,8 @@ export function ConversationSidebar({
                       channelType="text"
                       selected={room.id === selectedRoomId}
                       unreadCount={unreadCounts[room.id] ?? room.unread}
+                      draftPreview={draftPreviews[room.id]}
+                      draftLabel={copy.common.draft}
                       muted={mutedRoomIds.includes(room.id)}
                       activeVoiceRoom={activeVoiceRoom}
                       onClick={() => onSelectRoom(room.id)}
@@ -146,6 +150,8 @@ export function ConversationSidebar({
                       channelType={roomTypes[room.id] ?? 'text'}
                       selected={room.id === selectedRoomId}
                       unreadCount={unreadCounts[room.id] ?? room.unread}
+                      draftPreview={draftPreviews[room.id]}
+                      draftLabel={copy.common.draft}
                       muted={mutedRoomIds.includes(room.id)}
                       activeVoiceRoom={activeVoiceRoom}
                       onClick={() => onSelectRoom(room.id)}
@@ -164,6 +170,8 @@ export function ConversationSidebar({
                       channelType="voice"
                       selected={room.id === selectedRoomId}
                       unreadCount={unreadCounts[room.id] ?? room.unread}
+                      draftPreview={draftPreviews[room.id]}
+                      draftLabel={copy.common.draft}
                       muted={mutedRoomIds.includes(room.id)}
                       activeVoiceRoom={activeVoiceRoom}
                       onClick={() => onSelectRoom(room.id)}
@@ -183,6 +191,8 @@ export function ConversationSidebar({
                       channelType="text"
                       selected={room.id === selectedRoomId}
                       unreadCount={unreadCounts[room.id] ?? room.unread}
+                      draftPreview={draftPreviews[room.id]}
+                      draftLabel={copy.common.draft}
                       muted={mutedRoomIds.includes(room.id)}
                       activeVoiceRoom={activeVoiceRoom}
                       onClick={() => onSelectRoom(room.id)}
@@ -236,6 +246,8 @@ function RoomButton({
   channelType,
   selected,
   unreadCount,
+  draftPreview,
+  draftLabel,
   muted,
   activeVoiceRoom,
   onClick,
@@ -244,6 +256,8 @@ function RoomButton({
   channelType: ChannelType
   selected: boolean
   unreadCount: number
+  draftPreview?: string
+  draftLabel: string
   muted: boolean
   activeVoiceRoom: VoiceRoom | null
   onClick: () => void
@@ -263,20 +277,24 @@ function RoomButton({
       onClick={onClick}
     >
       <span className="flex min-w-0 items-center gap-2">
-        {room.kind === 'dm' ? (
-          <UserRound className="h-4 w-4 shrink-0" />
-        ) : channelType === 'voice' ? (
-          <Volume2 className="h-4 w-4 shrink-0" />
-        ) : (
-          <Hash className="h-4 w-4 shrink-0" />
-        )}
-        <span className="truncate">{formatRoomTitle(room)}</span>
+        {room.kind === 'dm' ? <UserRound className="h-4 w-4 shrink-0" /> : channelType === 'voice' ? <Volume2 className="h-4 w-4 shrink-0" /> : <Hash className="h-4 w-4 shrink-0" />}
+        <span className="min-w-0">
+          <span className="block truncate">{formatRoomTitle(room)}</span>
+          {draftPreview ? (
+            <span className={cn('mt-0.5 flex items-center gap-1 truncate text-[11px]', selected ? 'text-[var(--primary-foreground)]/75' : 'text-[var(--muted-foreground)]')}>
+              <PenSquare className="h-3 w-3 shrink-0" />
+              {draftPreview}
+            </span>
+          ) : null}
+        </span>
         {muted ? <BellOff className="h-3.5 w-3.5 shrink-0 opacity-70" /> : null}
       </span>
       {voiceCount > 0 ? (
         <Badge variant="default">{voiceCount}</Badge>
       ) : unreadCount > 0 ? (
         <Badge variant="secondary">{unreadCount}</Badge>
+      ) : draftPreview ? (
+        <Badge variant="outline">{draftLabel}</Badge>
       ) : null}
     </button>
   )

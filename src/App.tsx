@@ -12,6 +12,7 @@ import { useMessageOutbox } from './hooks/useMessageOutbox'
 import { useMediaSession } from './hooks/useMediaSession'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
 import { usePeerTrustState } from './hooks/usePeerTrustState'
+import { useRoomDraftState } from './hooks/useRoomDraftState'
 import { useRoomActivityState } from './hooks/useRoomActivityState'
 import { useShellPreferences } from './hooks/useShellPreferences'
 import { useSignedChatArchive } from './hooks/useSignedChatArchive'
@@ -31,7 +32,6 @@ export function App() {
   const runtimeAutoStartRef = useRef(false)
   const shellPreferences = useShellPreferences()
   const { preferences, setPreferences, identityFingerprint, regenerateIdentity, saveIdentityRollbackSnapshot, restoreIdentityRollbackSnapshot, recordIdentityTransferEvent, reload } = shellPreferences
-  const [messageDraft, setMessageDraft] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archiveRefreshKey, setArchiveRefreshKey] = useState(0)
@@ -208,18 +208,9 @@ export function App() {
     () => resolvePinnedMessages(preferences.pinnedMessages, activeRoom.id, archiveState.mergedMessages),
     [activeRoom.id, archiveState.mergedMessages, preferences.pinnedMessages],
   )
-  const roomActivity = useRoomActivityState({
-    snapshot: data,
-    selectedRoomId: preferences.selectedRoomId,
-    lastReadMessageIds: preferences.lastReadMessageIds,
-    mutedRooms: preferences.mutedRooms,
-    setPreferences,
-  })
-  const peerTrust = usePeerTrustState({
-    peers: data?.peers ?? [],
-    trustedPeers: preferences.trustedPeers,
-    setPreferences,
-  })
+  const roomActivity = useRoomActivityState({ snapshot: data, selectedRoomId: preferences.selectedRoomId, lastReadMessageIds: preferences.lastReadMessageIds, mutedRooms: preferences.mutedRooms, setPreferences })
+  const peerTrust = usePeerTrustState({ peers: data?.peers ?? [], trustedPeers: preferences.trustedPeers, setPreferences })
+  const roomDraftState = useRoomDraftState({ roomDrafts: preferences.roomDrafts, setPreferences })
   const messageOutbox = useMessageOutbox({
     currentUser: runtimeDraft.nickname,
     liveMessages: data?.messages ?? [],
@@ -231,6 +222,7 @@ export function App() {
     () => messageOutbox.buildDisplayMessages(activeRoom.id, archiveState.mergedMessages, archiveState.archive?.messages.map((message) => message.id) ?? []),
     [activeRoom.id, archiveState.archive?.messages, archiveState.mergedMessages, messageOutbox.buildDisplayMessages],
   )
+  const messageDraft = roomDraftState.getDraft(activeRoom.id)
 
   useEffect(() => {
     if (JSON.stringify(reconciledGroups) === JSON.stringify(preferences.groups)) {
@@ -325,11 +317,9 @@ export function App() {
   }
 
   async function handleSendMessage() {
-    if (!activeRoom || messageDraft.trim().length === 0) {
-      return
-    }
+    if (!activeRoom || messageDraft.trim().length === 0) return
     const nextDraft = messageDraft.trim()
-    setMessageDraft('')
+    roomDraftState.clearDraft(activeRoom.id)
     await messageOutbox.sendMessage(activeRoom.id, nextDraft)
   }
 
@@ -434,6 +424,7 @@ export function App() {
         mentionablePeerNames={mentionablePeerNames}
         createDialogOpen={createDialogOpen}
         settingsOpen={settingsOpen}
+        draftPreviews={roomDraftState.draftPreviews}
         archiveState={archiveState}
         displayMessages={displayMessages}
         archiveRefreshToken={archiveRefreshKey}
@@ -500,7 +491,7 @@ export function App() {
         }}
         onCreateGroup={handleCreateGroup}
         onApplyInvite={inviteFlow.applyInvite}
-        onDraftChange={setMessageDraft}
+        onDraftChange={(value) => roomDraftState.setDraft(activeRoom.id, value)}
         onSendMessage={() => void handleSendMessage()}
         onRetryMessage={(clientId) => void messageOutbox.retryMessage(clientId)}
         onDismissMessage={messageOutbox.dismissMessage}

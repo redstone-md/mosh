@@ -11,6 +11,7 @@ export const ruTranslations = {
       theme: 'Тема',
       trust: 'Доверие',
       invite: 'Инвайт',
+      draft: 'Черновик',
       group: 'Группа',
       groups: 'Группы',
       channel: 'Канал',
