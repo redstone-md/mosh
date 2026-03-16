@@ -24,3 +24,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added an invite review dialog for deep links, so `mosh://invite/...` now shows inviter/mesh/room details and requires explicit confirmation before MOSH joins.
 - Extended mesh invites with inviter fingerprint metadata and added a current-vs-new local identity choice in the invite review flow before joining.
 - Added an encrypted identity transfer tool in storage settings so users can move their local signing identity between MOSH devices with a passphrase-protected `mosh-identity://transfer/...` package.
+- Added a dedicated identity handoff view with QR rendering, a short verification code, and package preview so device-to-device identity transfer is clearer than a raw textarea alone.

@@ -19,6 +19,7 @@ const identityTransferPayloadSchema = z.object({
 })
 
 export type IdentityTransferEnvelope = z.infer<typeof identityTransferEnvelopeSchema>
+export const IDENTITY_TRANSFER_PREFIX = 'mosh-identity://transfer/'
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength)
@@ -47,7 +48,7 @@ export async function exportIdentityTransferPackage(
     encoder.encode(JSON.stringify(payload)),
   )
 
-  return `mosh-identity://transfer/${encodeBytesToBase64Url(
+  return `${IDENTITY_TRANSFER_PREFIX}${encodeBytesToBase64Url(
     encoder.encode(
       JSON.stringify({
         version: 1,
@@ -65,9 +66,7 @@ export async function importIdentityTransferPackage(
   passphrase: string,
 ): Promise<SigningIdentity> {
   const normalizedPassphrase = normalizePassphrase(passphrase)
-  const encodedEnvelope = transferPackage.trim().startsWith('mosh-identity://transfer/')
-    ? transferPackage.trim().slice('mosh-identity://transfer/'.length)
-    : transferPackage.trim()
+  const encodedEnvelope = normalizeIdentityTransferPackage(transferPackage).slice(IDENTITY_TRANSFER_PREFIX.length)
   const envelope = identityTransferEnvelopeSchema.parse(
     JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope))),
   )
@@ -125,4 +124,15 @@ async function deriveTransferKey(passphrase: string, salt: Uint8Array) {
     false,
     ['encrypt', 'decrypt'],
   )
+}
+
+export function normalizeIdentityTransferPackage(value: string) {
+  const normalized = value.trim()
+  if (!normalized) {
+    throw new Error('Identity transfer package is empty.')
+  }
+
+  return normalized.startsWith(IDENTITY_TRANSFER_PREFIX)
+    ? normalized
+    : `${IDENTITY_TRANSFER_PREFIX}${normalized}`
 }
