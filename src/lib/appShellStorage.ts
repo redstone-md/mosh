@@ -64,6 +64,7 @@ export function createDefaultPreferences(): ShellPreferences {
       lobby: 'text',
     },
     roomDrafts: {},
+    messageOverlays: {},
     pinnedMessages: {},
     mutedRooms: [],
     lastReadMessageIds: {},

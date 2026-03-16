@@ -31,3 +31,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added identity rollback recovery in storage settings, so MOSH now preserves the previous signing identity before imports, lets users restore it locally, and records rollback events in the device handoff history.
 - Added an outgoing message delivery pipeline with optimistic local outbox, failed-send recovery, and `sending / delivered / archived` states in the chat timeline.
 - Added persisted per-room draft recovery, so composer content now survives room switches and app restarts, with draft previews visible directly in the conversation sidebar.
+- Added local message overlays for your own messages, including per-device edit and hide/restore actions without mutating the underlying signed room history.

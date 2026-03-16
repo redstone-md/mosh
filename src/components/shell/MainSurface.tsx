@@ -111,6 +111,8 @@ type MainSurfaceProps = {
   onSendMessage: () => void
   onRetryMessage: (clientId: string) => void
   onDismissMessage: (clientId: string) => void
+  onEditMessage: (messageId: string, roomId: string, body: string) => void
+  onToggleMessageHidden: (messageId: string, roomId: string) => void
   onTogglePinMessage: (messageId: string) => void
   onToggleMuteRoom: (roomId: string) => void
   onTogglePeerTrust: (peer: PeerSummary) => void
@@ -184,6 +186,8 @@ export function MainSurface({
   onSendMessage,
   onRetryMessage,
   onDismissMessage,
+  onEditMessage,
+  onToggleMessageHidden,
   onTogglePinMessage,
   onToggleMuteRoom,
   onTogglePeerTrust,
@@ -305,6 +309,8 @@ export function MainSurface({
           onSend={onSendMessage}
           onRetryMessage={onRetryMessage}
           onDismissMessage={onDismissMessage}
+          onEditMessage={onEditMessage}
+          onToggleMessageHidden={onToggleMessageHidden}
           onTogglePinMessage={onTogglePinMessage}
           onToggleMute={() => onToggleMuteRoom(activeRoom.id)}
           onResolveExternalFocus={() => setFocusTarget(null)}

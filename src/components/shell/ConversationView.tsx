@@ -38,6 +38,8 @@ type ConversationViewProps = {
   onTogglePinMessage: (messageId: string) => void
   onRetryMessage: (clientId: string) => void
   onDismissMessage: (clientId: string) => void
+  onEditMessage: (messageId: string, roomId: string, body: string) => void
+  onToggleMessageHidden: (messageId: string, roomId: string) => void
   onToggleMute: () => void
   onResolveExternalFocus: () => void
   onOpenSettings: () => void
@@ -67,6 +69,8 @@ export function ConversationView({
   onTogglePinMessage,
   onRetryMessage,
   onDismissMessage,
+  onEditMessage,
+  onToggleMessageHidden,
   onToggleMute,
   onResolveExternalFocus,
   onOpenSettings,
@@ -271,6 +275,8 @@ export function ConversationView({
         onTogglePinMessage={onTogglePinMessage}
         onRetryMessage={onRetryMessage}
         onDismissMessage={onDismissMessage}
+        onEditMessage={onEditMessage}
+        onToggleMessageHidden={onToggleMessageHidden}
         onResolveExternalFocus={onResolveExternalFocus}
         isSending={isSending}
         errorNote={errorNote}

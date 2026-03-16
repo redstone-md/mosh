@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import type { RoomSummary } from '../lib/schemas'
-import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply, Pin, RotateCcw, X } from 'lucide-react'
+import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply, Pin, RotateCcw, X, Pencil, Trash2 } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { formatRoomTitle } from '../lib/chatPresentation'
 import {
@@ -10,6 +10,8 @@ import {
 } from '../lib/messageAttachments'
 import { focusMessageElement } from '../lib/messageFocus'
 import type { DisplayMessage } from '../lib/messageDelivery'
+import { serializeEditedMessageBody } from '../lib/messageOverlays'
+import { extractPlainText } from '../lib/messageSearch'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -19,6 +21,7 @@ import DOMPurify from 'dompurify'
 import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
 import makeSuggestion from '../lib/suggestion'
 import { useI18n } from './I18nProvider'
+import { MessageEditDialog } from './MessageEditDialog'
 
 type MessagePanelProps = {
   room: RoomSummary | undefined
@@ -36,6 +39,8 @@ type MessagePanelProps = {
   onTogglePinMessage: (messageId: string) => void
   onRetryMessage: (clientId: string) => void
   onDismissMessage: (clientId: string) => void
+  onEditMessage: (messageId: string, roomId: string, body: string) => void
+  onToggleMessageHidden: (messageId: string, roomId: string) => void
   onResolveExternalFocus?: () => void
   isSending: boolean
   errorNote?: string
@@ -57,6 +62,8 @@ export function MessagePanel({
   onTogglePinMessage,
   onRetryMessage,
   onDismissMessage,
+  onEditMessage,
+  onToggleMessageHidden,
   onResolveExternalFocus,
   isSending,
   errorNote,
@@ -65,6 +72,7 @@ export function MessagePanel({
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+  const [editingMessage, setEditingMessage] = useState<DisplayMessage | null>(null)
   const pinnedMessageSet = useMemo(() => new Set(pinnedMessageIds), [pinnedMessageIds])
 
   const handleSendRef = useRef(onSend)
@@ -196,11 +204,7 @@ export function MessagePanel({
   }, [])
 
   const handleReply = useCallback((message: DisplayMessage) => {
-    const tempDiv = document.createElement("div")
-    tempDiv.innerHTML = message.body
-    const text = tempDiv.textContent || tempDiv.innerText || ""
-    
-    // Create a styled blockquote for reply
+    const text = extractPlainText(message.body)
     const replyHtml = `<blockquote data-reply-to="${message.id}" class="cursor-pointer hover:bg-primary/10 transition-colors" title="${copy.messages.jumpToOriginal}"><strong>${message.author}:</strong> ${text}</blockquote><p></p>`
     editor?.chain().focus().insertContent(replyHtml).run()
   }, [copy.messages.jumpToOriginal, editor])
@@ -299,6 +303,26 @@ export function MessagePanel({
 
                 {/* Hover Actions */}
                 <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 bg-background/90 backdrop-blur-sm border border-border/50 rounded-lg shadow-sm p-1 -mt-2 z-10">
+                    {canManageMessage(message, currentUser) ? (
+                      <>
+                        {message.overlayState !== 'hidden' ? (
+                          <button
+                            onClick={() => setEditingMessage(message)}
+                            className="p-1.5 text-foreground/50 hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                            title={copy.messages.edit}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        ) : null}
+                        <button
+                          onClick={() => onToggleMessageHidden(message.id, message.roomId)}
+                          className="p-1.5 text-foreground/50 hover:text-foreground hover:bg-muted rounded-md transition-colors"
+                          title={message.overlayState === 'hidden' ? copy.messages.restoreMessage : copy.messages.hideMessage}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </>
+                    ) : null}
                     <button 
                         onClick={() => onTogglePinMessage(message.id)}
                         className={cn(
@@ -415,6 +439,22 @@ export function MessagePanel({
           ) : null}
         </div>
       </div>
+      <MessageEditDialog
+        open={Boolean(editingMessage)}
+        initialValue={editingMessage ? extractPlainText(editingMessage.body) : ''}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingMessage(null)
+          }
+        }}
+        onSave={(value) => {
+          if (!editingMessage) {
+            return
+          }
+          onEditMessage(editingMessage.id, editingMessage.roomId, serializeEditedMessageBody(value))
+          setEditingMessage(null)
+        }}
+      />
     </section>
   )
 }
@@ -442,6 +482,8 @@ function renderDeliveryState(
   return (
     <div className="flex items-center gap-2 pt-1 text-[11px] text-[var(--muted-foreground)]">
       <span>{label}</span>
+      {message.overlayState === 'edited' ? <span>{copy.messages.editedLocally}</span> : null}
+      {message.overlayState === 'hidden' ? <span>{copy.messages.hiddenLocally}</span> : null}
       {message.deliveryState === 'failed' && message.pendingClientId ? (
         <>
           <button
@@ -464,6 +506,10 @@ function renderDeliveryState(
       ) : null}
     </div>
   )
+}
+
+function canManageMessage(message: DisplayMessage, currentUser: string) {
+  return message.author.trim().toLowerCase() === currentUser.trim().toLowerCase() && message.emphasis !== 'system'
 }
 
 function avatarLabel(author: string): string {
