@@ -104,6 +104,7 @@ function createStoredPreferences() {
     pinnedMessages: {},
     mutedRooms: [],
     lastReadMessageIds: {},
+    identityTransferHistory: [],
     trustedPeers: {},
   } as const
 }

@@ -8,6 +8,7 @@ import {
   regenerateSigningIdentity,
   savePreferences,
 } from '../lib/appShellStorage'
+import { appendIdentityTransferEvent, type IdentityTransferEventInput } from '../lib/identityTransferHistory'
 
 export function useShellPreferences() {
   const bootstrapHydratedRef = useRef(false)
@@ -62,6 +63,12 @@ export function useShellPreferences() {
       const identity = await regenerateSigningIdentity()
       setIdentityFingerprint(identity.fingerprint)
       return identity
+    },
+    recordIdentityTransferEvent: (event: IdentityTransferEventInput) => {
+      setPreferences((current) => ({
+        ...current,
+        identityTransferHistory: appendIdentityTransferEvent(current.identityTransferHistory, event),
+      }))
     },
     reload: async () => {
       const result = await bootstrap.refetch()

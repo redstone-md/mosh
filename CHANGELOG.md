@@ -27,3 +27,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added a dedicated identity handoff view with QR rendering, a short verification code, and package preview so device-to-device identity transfer is clearer than a raw textarea alone.
 - Added deep-link import for `mosh-identity://transfer/...`, so an installed MOSH client can receive an identity handoff from the OS and finish the import with a passphrase prompt.
 - Added trust-aware identity transfer metadata, so handoff and import screens now show the source fingerprint, export time, and a direct current-to-incoming identity replacement summary.
+- Added a persisted device handoff history in storage settings, so MOSH now records recent identity exports/imports, the transfer source, replaced fingerprint, and the last accepted handoff on this machine.
