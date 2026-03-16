@@ -201,8 +201,10 @@ export const enTranslations = {
       searchClose: 'Close search',
       reply: 'Reply',
       copy: 'Copy text',
+      attachFile: 'Attach file (<40KB)',
       attachImage: 'Attach image (<40KB)',
       insertEmoji: 'Insert emoji',
+      attachmentTooLarge: 'File is too large. Embedded attachments are limited to 40KB in this build.',
       imageTooLarge: 'File is too large. Base64 attachments are limited to 40KB in this demo.',
     },
     settings: {
