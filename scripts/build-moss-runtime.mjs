@@ -58,6 +58,7 @@ async function main() {
 
   await fs.rm(bundleDir, { recursive: true, force: true });
   await fs.mkdir(bundleDir, { recursive: true });
+  await fs.writeFile(path.join(bundleDir, '.gitkeep'), '');
 
   console.log(`[moss:bundle] target=${plan.targetTriple} host=${plan.hostPlatform}/${plan.hostArch}`);
   run(
@@ -70,6 +71,8 @@ async function main() {
         CGO_ENABLED: '1',
         GOOS: plan.goos,
         GOARCH: plan.goarch,
+        ...(process.env.MOSS_CC ? { CC: process.env.MOSS_CC } : {}),
+        ...(process.env.MOSS_CXX ? { CXX: process.env.MOSS_CXX } : {}),
       },
     },
   );

@@ -68,7 +68,7 @@ npm run moss:bundle
 Release artifacts are built only from tags. The release workflow packages:
 
 - bundled MOSH installers/packages with the matching `MOSS` runtime already embedded
-- build artifacts for Linux x64/arm64, Windows x64, macOS Intel, and macOS Apple Silicon
+- build artifacts for Linux x64/arm64, Windows x64/arm64, macOS Intel, and macOS Apple Silicon
 
 ## Desktop contract
 
