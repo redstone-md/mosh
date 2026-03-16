@@ -1,4 +1,5 @@
-import type { ChannelType, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
+import type { ChannelType, IdentityTransferEvent, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
+import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
 import { languagePreferenceOptions } from '../../lib/i18n'
 import type { TrustedPeerEntry } from '../../lib/peerTrust'
 import type { RoomSummary, UpdateRuntimeSettingsInput } from '../../lib/schemas'
@@ -27,6 +28,7 @@ type SettingsDialogProps = {
   rooms: RoomSummary[]
   roomTypes: Record<string, ChannelType>
   selectedGroupId: string
+  identityTransferHistory: IdentityTransferEvent[]
   trustedPeers: TrustedPeerEntry[]
   trustedCount: number
   reviewCount: number
@@ -46,6 +48,7 @@ type SettingsDialogProps = {
     selectedGroupId: string,
   ) => void
   onForgetPeer: (peerId: string) => void
+  onRecordTransferEvent: (event: IdentityTransferEventInput) => void
   onRestoreStorage: () => void
   onResetOnboarding: () => void
 }
@@ -59,6 +62,7 @@ export function SettingsDialog({
   rooms,
   roomTypes,
   selectedGroupId,
+  identityTransferHistory,
   trustedPeers,
   trustedCount,
   reviewCount,
@@ -74,6 +78,7 @@ export function SettingsDialog({
   onSaveRuntime,
   onSaveWorkspace,
   onForgetPeer,
+  onRecordTransferEvent,
   onRestoreStorage,
   onResetOnboarding,
 }: SettingsDialogProps) {
@@ -207,7 +212,11 @@ export function SettingsDialog({
           </TabsContent>
 
           <TabsContent value="storage">
-            <StoragePanel onRestore={onRestoreStorage} />
+            <StoragePanel
+              identityTransferHistory={identityTransferHistory}
+              onRecordTransferEvent={onRecordTransferEvent}
+              onRestore={onRestoreStorage}
+            />
           </TabsContent>
         </Tabs>
       </DialogContent>

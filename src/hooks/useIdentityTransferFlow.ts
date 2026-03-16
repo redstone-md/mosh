@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { replaceSigningIdentity } from '../lib/appShellStorage'
 import { importIdentityTransferPackage } from '../lib/identityTransfer'
 import { useDeepLinkIdentityTransfers } from './useDeepLinkIdentityTransfers'
+import type { IdentityTransferEventInput } from '../lib/identityTransferHistory'
 
 type IdentityTransferFlowOptions = {
   copy: {
@@ -14,12 +15,14 @@ type IdentityTransferFlowOptions = {
   }
   currentIdentityFingerprint: string
   onImported: () => Promise<void>
+  onRecordEvent: (event: IdentityTransferEventInput) => void
 }
 
 export function useIdentityTransferFlow({
   copy,
   currentIdentityFingerprint,
   onImported,
+  onRecordEvent,
 }: IdentityTransferFlowOptions) {
   const queryClient = useQueryClient()
   const [passphrase, setPassphrase] = useState('')
@@ -37,8 +40,19 @@ export function useIdentityTransferFlow({
       await replaceSigningIdentity(identity)
     },
     onSuccess: async () => {
+      if (!pendingTransfer) {
+        return
+      }
       setErrorNote(null)
       setPassphrase('')
+      onRecordEvent({
+        action: 'import',
+        channel: 'deep-link',
+        activeFingerprint: pendingTransfer.handoff.summary.sourceFingerprint,
+        replacedFingerprint: currentIdentityFingerprint,
+        packageSourceFingerprint: pendingTransfer.handoff.summary.sourceFingerprint,
+        packageExportedAt: pendingTransfer.handoff.summary.exportedAt,
+      })
       dismissPendingTransfer()
       await queryClient.invalidateQueries({ queryKey: ['signing-identity-summary'] })
       await onImported()

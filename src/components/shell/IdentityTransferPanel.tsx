@@ -8,7 +8,9 @@ import { buildIdentityTransferHandoff } from '../../lib/identityTransferHandoff'
 import {
   exportIdentityTransferPackage,
   importIdentityTransferPackage,
+  readIdentityTransferSummary,
 } from '../../lib/identityTransfer'
+import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -18,9 +20,10 @@ import { IdentityTransferHandoffDialog } from './IdentityTransferHandoffDialog'
 
 type IdentityTransferPanelProps = {
   onImported: () => void | Promise<void>
+  onRecordEvent: (event: IdentityTransferEventInput) => void
 }
 
-export function IdentityTransferPanel({ onImported }: IdentityTransferPanelProps) {
+export function IdentityTransferPanel({ onImported, onRecordEvent }: IdentityTransferPanelProps) {
   const { copy } = useI18n()
   const [passphrase, setPassphrase] = useState('')
   const [transferPackage, setTransferPackage] = useState('')
@@ -33,12 +36,21 @@ export function IdentityTransferPanel({ onImported }: IdentityTransferPanelProps
   const exportTransfer = useMutation({
     mutationFn: async () => {
       const identity = await ensureSigningIdentity()
-      return exportIdentityTransferPackage(identity, passphrase)
+      return {
+        identity,
+        transferPackage: await exportIdentityTransferPackage(identity, passphrase),
+      }
     },
-    onSuccess: (value) => {
-      setTransferPackage(value)
+    onSuccess: ({ identity, transferPackage }) => {
+      setTransferPackage(transferPackage)
       setHandoffOpen(true)
       setErrorNote(null)
+      onRecordEvent({
+        action: 'export',
+        channel: 'manual',
+        activeFingerprint: identity.fingerprint,
+        packageSourceFingerprint: identity.fingerprint,
+      })
       toast.success(copy.identityTransfer.exported)
     },
     onError: () => {
@@ -47,11 +59,25 @@ export function IdentityTransferPanel({ onImported }: IdentityTransferPanelProps
   })
   const importTransfer = useMutation({
     mutationFn: async () => {
+      const previousIdentity = await ensureSigningIdentity()
       const identity = await importIdentityTransferPackage(transferPackage, passphrase)
       await replaceSigningIdentity(identity)
+      return {
+        previousFingerprint: previousIdentity.fingerprint,
+        importedFingerprint: identity.fingerprint,
+        summary: readIdentityTransferSummary(transferPackage),
+      }
     },
-    onSuccess: async () => {
+    onSuccess: async ({ previousFingerprint, importedFingerprint, summary }) => {
       setErrorNote(null)
+      onRecordEvent({
+        action: 'import',
+        channel: 'manual',
+        activeFingerprint: importedFingerprint,
+        replacedFingerprint: previousFingerprint,
+        packageSourceFingerprint: summary.sourceFingerprint,
+        packageExportedAt: summary.exportedAt,
+      })
       await onImported()
       await identityQuery.refetch()
       toast.success(copy.identityTransfer.imported)

@@ -2,10 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import toast from 'react-hot-toast'
 
+import type { IdentityTransferEvent } from '../../lib/appShellSchemas'
+import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
 import { desktopStorageClient } from '../../lib/desktopStorageClient'
 import { isTauriEnvironment } from '../../lib/tauriEnv'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
+import { IdentityTransferHistoryPanel } from './IdentityTransferHistoryPanel'
 import { IdentityTransferPanel } from './IdentityTransferPanel'
 
 function createBackupFileName() {
@@ -14,10 +17,12 @@ function createBackupFileName() {
 }
 
 type StoragePanelProps = {
+  identityTransferHistory: IdentityTransferEvent[]
+  onRecordTransferEvent: (event: IdentityTransferEventInput) => void
   onRestore: () => void | Promise<void>
 }
 
-export function StoragePanel({ onRestore }: StoragePanelProps) {
+export function StoragePanel({ identityTransferHistory, onRecordTransferEvent, onRestore }: StoragePanelProps) {
   const { copy } = useI18n()
   const desktopOnly = isTauriEnvironment()
   const queryClient = useQueryClient()
@@ -182,7 +187,8 @@ export function StoragePanel({ onRestore }: StoragePanelProps) {
         </div>
       </div>
 
-      <IdentityTransferPanel onImported={onRestore} />
+      <IdentityTransferPanel onImported={onRestore} onRecordEvent={onRecordTransferEvent} />
+      <IdentityTransferHistoryPanel history={identityTransferHistory} />
     </div>
   )
 }

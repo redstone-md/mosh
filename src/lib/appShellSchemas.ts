@@ -21,6 +21,17 @@ export const roomGroupSchema = z.object({
   roomIds: z.array(z.string().min(1)).max(256),
 })
 
+export const identityTransferEventSchema = z.object({
+  id: z.string().min(1),
+  action: z.enum(['export', 'import']),
+  channel: z.enum(['manual', 'deep-link']),
+  occurredAt: z.string().min(1),
+  activeFingerprint: z.string().min(1),
+  replacedFingerprint: z.string().min(1).optional(),
+  packageSourceFingerprint: z.string().min(1),
+  packageExportedAt: z.string().min(1).optional(),
+})
+
 export const shellPreferencesSchema = z.object({
   theme: themeIdSchema,
   languagePreference: languagePreferenceSchema.default('system'),
@@ -35,6 +46,7 @@ export const shellPreferencesSchema = z.object({
   pinnedMessages: z.record(z.string(), z.array(z.string().min(1)).max(12)).default({}),
   mutedRooms: z.array(z.string().min(1)).max(256).default([]),
   lastReadMessageIds: z.record(z.string(), z.string().min(1)).default({}),
+  identityTransferHistory: z.array(identityTransferEventSchema).max(16).default([]),
   trustedPeers: z
     .record(
       z.string(),
@@ -86,5 +98,6 @@ export type ShellPreferences = z.infer<typeof shellPreferencesSchema>
 export type StoredMessage = z.infer<typeof storedMessageSchema>
 export type TrustedPeerRecord = NonNullable<ShellPreferences['trustedPeers'][string]>
 export type SigningIdentity = z.infer<typeof signingIdentitySchema>
+export type IdentityTransferEvent = z.infer<typeof identityTransferEventSchema>
 export type SignedRoomArchive = z.infer<typeof signedRoomArchiveSchema>
 export type StorageOverview = z.infer<typeof storageOverviewSchema>

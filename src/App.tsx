@@ -29,7 +29,7 @@ export function App() {
   const settingsHydratedRef = useRef(false)
   const runtimeAutoStartRef = useRef(false)
   const shellPreferences = useShellPreferences()
-  const { preferences, setPreferences, identityFingerprint, regenerateIdentity, reload } = shellPreferences
+  const { preferences, setPreferences, identityFingerprint, regenerateIdentity, recordIdentityTransferEvent, reload } = shellPreferences
   const [messageDraft, setMessageDraft] = useState('')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -262,6 +262,7 @@ export function App() {
     },
     currentIdentityFingerprint: identityFingerprint,
     onImported: reload,
+    onRecordEvent: recordIdentityTransferEvent,
   })
   const shellFrameProps = {
     language: activeLanguage,
@@ -444,6 +445,7 @@ export function App() {
         trustedPeerEntries={peerTrust.trustedPeerEntries}
         trustedCount={peerTrust.trustedCount}
         reviewCount={peerTrust.reviewCount}
+        identityTransferHistory={preferences.identityTransferHistory}
         pinnedMessages={pinnedMessages}
         pinnedMessageIds={activePinnedMessageIds}
         publishPending={publishMessage.isPending}
@@ -504,6 +506,7 @@ export function App() {
         onToggleMuteRoom={roomActivity.toggleRoomMute}
         onTogglePeerTrust={peerTrust.togglePeerTrust}
         onForgetPeer={peerTrust.removeTrustedPeer}
+        onRecordTransferEvent={recordIdentityTransferEvent}
         onThemeChange={handleThemeChange}
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
         onRuntimeDraftChange={handleRuntimeDraftChange}

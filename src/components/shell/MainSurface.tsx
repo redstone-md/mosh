@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import type { ChannelType, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
+import type { ChannelType, IdentityTransferEvent, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
+import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
 import { describeArchiveStateLabel } from '../../lib/i18n'
 import type { MeshInvitePayload } from '../../lib/meshInvite'
 import type { PeerTrustState, TrustedPeerEntry } from '../../lib/peerTrust'
@@ -74,6 +75,7 @@ type MainSurfaceProps = {
   trustedPeerEntries: TrustedPeerEntry[]
   trustedCount: number
   reviewCount: number
+  identityTransferHistory: IdentityTransferEvent[]
   pinnedMessages: Message[]
   pinnedMessageIds: string[]
   publishPending: boolean
@@ -99,6 +101,7 @@ type MainSurfaceProps = {
   onToggleMuteRoom: (roomId: string) => void
   onTogglePeerTrust: (peer: PeerSummary) => void
   onForgetPeer: (peerId: string) => void
+  onRecordTransferEvent: (event: IdentityTransferEventInput) => void
   onThemeChange: (theme: ThemeId) => void
   onLanguagePreferenceChange: (value: 'system' | 'en' | 'ru') => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
@@ -137,6 +140,7 @@ export function MainSurface({
   trustedPeerEntries,
   trustedCount,
   reviewCount,
+  identityTransferHistory,
   pinnedMessages,
   pinnedMessageIds,
   publishPending,
@@ -162,6 +166,7 @@ export function MainSurface({
   onToggleMuteRoom,
   onTogglePeerTrust,
   onForgetPeer,
+  onRecordTransferEvent,
   onThemeChange,
   onLanguagePreferenceChange,
   onRuntimeDraftChange,
@@ -331,6 +336,7 @@ export function MainSurface({
         rooms={visibleRooms}
         roomTypes={roomTypes}
         selectedGroupId={preferences.selectedGroupId}
+        identityTransferHistory={identityTransferHistory}
         runtimeError={runtimeSettingsError}
         archiveLabel={archiveLabel}
         archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
@@ -346,6 +352,7 @@ export function MainSurface({
         onSaveRuntime={onSaveRuntime}
         onSaveWorkspace={onSaveWorkspace}
         onForgetPeer={onForgetPeer}
+        onRecordTransferEvent={onRecordTransferEvent}
         onRestoreStorage={onRestoreStorage}
         onResetOnboarding={onResetOnboarding}
       />
