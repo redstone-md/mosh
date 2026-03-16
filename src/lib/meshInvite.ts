@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { decodeBase64UrlToBytes, encodeBytesToBase64Url } from './base64Url'
 import { updateRuntimeSettingsInputSchema } from './schemas'
 
 const meshInvitePayloadSchema = z.object({
@@ -28,7 +29,7 @@ export function encodeMeshInvite(payload: MeshInvitePayload): string {
   const normalized = meshInvitePayloadSchema.parse(payload)
   const json = JSON.stringify(normalized)
   const bytes = new TextEncoder().encode(json)
-  return `mosh://invite/${toBase64Url(bytes)}`
+  return `mosh://invite/${encodeBytesToBase64Url(bytes)}`
 }
 
 export function decodeMeshInvite(value: string): MeshInvitePayload {
@@ -42,30 +43,9 @@ export function decodeMeshInvite(value: string): MeshInvitePayload {
   }
 
   try {
-    const json = new TextDecoder().decode(fromBase64Url(encoded))
+    const json = new TextDecoder().decode(decodeBase64UrlToBytes(encoded))
     return meshInvitePayloadSchema.parse(JSON.parse(json))
   } catch (error) {
     throw new Error(error instanceof Error ? error.message : 'Invite is invalid.')
   }
-}
-
-function toBase64Url(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte)
-  }
-
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
-}
-
-function fromBase64Url(value: string): Uint8Array {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
-  const binary = atob(padded)
-  const bytes = new Uint8Array(binary.length)
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-
-  return bytes
 }

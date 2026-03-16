@@ -5,6 +5,7 @@ import {
   type ChannelType,
   type RoomGroup,
   type ShellPreferences,
+  type SigningIdentity,
   type SignedRoomArchive,
   type StoredMessage,
 } from './appShellSchemas'
@@ -200,13 +201,23 @@ export async function ensureSigningIdentity() {
 export async function regenerateSigningIdentity() {
   const identity = await createSigningIdentity()
 
-  if (isTauriEnvironment()) {
-    await desktopStorageClient.saveSigningIdentity(identity)
-  } else {
-    getLocalStorage()?.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(identity))
+  await replaceSigningIdentity(identity)
+  return identity
+}
+
+export async function replaceSigningIdentity(identity: SigningIdentity) {
+  const normalized = parseSigningIdentity(identity)
+  if (!normalized) {
+    throw new Error('Imported signing identity is invalid.')
   }
 
-  return identity
+  if (isTauriEnvironment()) {
+    await desktopStorageClient.saveSigningIdentity(normalized)
+  } else {
+    getLocalStorage()?.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(normalized))
+  }
+
+  return normalized
 }
 
 export async function readVerifiedArchive(roomId: string): Promise<VerifiedArchive | null> {
