@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 
 import type { ChannelType, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
 import { describeArchiveStateLabel } from '../../lib/i18n'
+import type { MeshInvitePayload } from '../../lib/meshInvite'
 import type { PeerTrustState, TrustedPeerEntry } from '../../lib/peerTrust'
 import { formatRoomTitle } from '../../lib/chatPresentation'
 import { useGlobalSearchArchives } from '../../hooks/useGlobalSearchArchives'
+import { useMeshInviteActions } from '../../hooks/useMeshInviteActions'
 import type { MediaSessionState } from '../../hooks/useMediaSession'
 import type { VerifiedArchive } from '../../lib/appShellStorage'
 import { buildGlobalSearchEntries, type GlobalSearchResult } from '../../lib/globalMessageSearch'
@@ -90,6 +92,7 @@ type MainSurfaceProps = {
   onOpenDirectRoom: (target: string) => void
   onCreateChannel: (room: string, channelType: ChannelType) => void
   onCreateGroup: (group: Omit<RoomGroup, 'id'>) => void
+  onApplyInvite: (invite: MeshInvitePayload) => Promise<void>
   onDraftChange: (value: string) => void
   onSendMessage: () => void
   onTogglePinMessage: (messageId: string) => void
@@ -152,6 +155,7 @@ export function MainSurface({
   onOpenDirectRoom,
   onCreateChannel,
   onCreateGroup,
+  onApplyInvite,
   onDraftChange,
   onSendMessage,
   onTogglePinMessage,
@@ -179,6 +183,12 @@ export function MainSurface({
     () => buildGlobalSearchEntries(data.messages, globalArchives.data ?? [], data.rooms),
     [data.messages, data.rooms, globalArchives.data],
   )
+  const { inviteCode, applyInviteCode } = useMeshInviteActions({
+    currentUser: runtimeDraft.nickname,
+    runtimeDraft,
+    activeRoom,
+    onApplyInvite,
+  })
 
   useEffect(() => {
     function handleGlobalSearchHotkey(event: KeyboardEvent) {
@@ -302,10 +312,14 @@ export function MainSurface({
         open={createDialogOpen}
         availableChannels={visibleRooms.filter((room) => room.kind === 'channel')}
         peers={data.peers}
+        runtimeDraft={runtimeDraft}
+        activeRoom={activeRoom}
+        inviteCode={inviteCode}
         onOpenChange={onCloseCreate}
         onCreateChannel={onCreateChannel}
         onCreateGroup={onCreateGroup}
         onCreateDirect={onOpenDirectRoom}
+        onApplyInvite={applyInviteCode}
       />
       <SettingsDialog
         open={settingsOpen}

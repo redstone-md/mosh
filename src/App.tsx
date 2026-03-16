@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BootstrapErrorScreen, LoadingScreen } from './components/AppBootstrapState'
@@ -18,6 +19,8 @@ import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
 import { detectSystemLanguage, getI18nCopy } from './lib/i18n'
+import type { MeshInvitePayload } from './lib/meshInvite'
+import { buildInviteShellStatePatch, resolveInviteStartupPeer } from './lib/meshInviteFlow'
 import { resolvePinnedMessages, togglePinnedMessage } from './lib/messagePins'
 import type { ChannelType, RoomGroup, ThemeId } from './lib/appShellSchemas'
 import type { UpdateRuntimeSettingsInput } from './lib/schemas'
@@ -100,9 +103,29 @@ export function App() {
     },
   })
 
+  const connectPeer = useMutation({
+    mutationFn: (addr: string) => desktopStatusClient.connectPeer({ addr }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['desktop-snapshot'], data)
+    },
+  })
+
   const mediaSession = useMediaSession(snapshot.data)
   const activeLanguage = useDocumentAppearance(preferences.theme, preferences.languagePreference, systemLanguage)
   const activeCopy = getI18nCopy(activeLanguage)
+
+  function renderWithI18n(content: ReactNode) {
+    return (
+      <I18nProvider
+        language={activeLanguage}
+        systemLanguage={systemLanguage}
+        languagePreference={preferences.languagePreference}
+        onLanguagePreferenceChange={handleLanguagePreferenceChange}
+      >
+        {content}
+      </I18nProvider>
+    )
+  }
 
   useEffect(() => {
     if (shellPreferences.isPending || !snapshot.data || settingsHydratedRef.current) {
@@ -148,6 +171,7 @@ export function App() {
       subscribeRoom.error?.message,
       openDirectRoom.error?.message,
       publishMessage.error?.message,
+      connectPeer.error?.message,
       mediaSession.state.error ?? undefined,
     ].filter((value): value is string => Boolean(value)),
   })
@@ -232,42 +256,15 @@ export function App() {
   }, [preferences.roomTypes, reconciledRoomTypes])
 
   if (shellPreferences.isPending || snapshot.isPending) {
-    return (
-      <I18nProvider
-        language={activeLanguage}
-        systemLanguage={systemLanguage}
-        languagePreference={preferences.languagePreference}
-        onLanguagePreferenceChange={handleLanguagePreferenceChange}
-      >
-        <LoadingScreen />
-      </I18nProvider>
-    )
+    return renderWithI18n(<LoadingScreen />)
   }
 
   if (shellPreferences.error instanceof Error) {
-    return (
-      <I18nProvider
-        language={activeLanguage}
-        systemLanguage={systemLanguage}
-        languagePreference={preferences.languagePreference}
-        onLanguagePreferenceChange={handleLanguagePreferenceChange}
-      >
-        <BootstrapErrorScreen message={shellPreferences.error.message} />
-      </I18nProvider>
-    )
+    return renderWithI18n(<BootstrapErrorScreen message={shellPreferences.error.message} />)
   }
 
   if (snapshot.isError) {
-    return (
-      <I18nProvider
-        language={activeLanguage}
-        systemLanguage={systemLanguage}
-        languagePreference={preferences.languagePreference}
-        onLanguagePreferenceChange={handleLanguagePreferenceChange}
-      >
-        <BootstrapErrorScreen message={snapshot.error.message} />
-      </I18nProvider>
-    )
+    return renderWithI18n(<BootstrapErrorScreen message={snapshot.error.message} />)
   }
 
   if (!data) {
@@ -360,6 +357,30 @@ export function App() {
     setArchiveRefreshKey((current) => current + 1)
   }
 
+  async function handleApplyInvite(invite: MeshInvitePayload) {
+    const invitePatch = buildInviteShellStatePatch(preferences.runtimeDraft, invite)
+
+    setPreferences((current) => ({
+      ...current,
+      ...invitePatch,
+    }))
+
+    if (!data || data.runtime.state !== 'Runtime online') {
+      return
+    }
+
+    const updatedSnapshot = sameRuntimeDraft(data.settings, invitePatch.runtimeDraft)
+      ? data
+      : await updateRuntimeSettings.mutateAsync(invitePatch.runtimeDraft)
+
+    const startupPeer = resolveInviteStartupPeer(invite, updatedSnapshot.settings.startupPeer)
+    if (startupPeer) {
+      await connectPeer.mutateAsync(startupPeer)
+    }
+
+    await subscribeRoom.mutateAsync(invite.runtime.initialRoom)
+  }
+
   const mediaLabel =
     mediaSession.state.activeRoomId
       ? activeCopy.runtime.roomLiveLabel(
@@ -373,41 +394,29 @@ export function App() {
   const activeVoiceRoom = data.voiceRooms.find((room) => room.joined) ?? null
 
   if (showOnboarding) {
-    return (
-      <I18nProvider
-        language={activeLanguage}
-        systemLanguage={systemLanguage}
+    return renderWithI18n(
+      <OnboardingSurface
+        runtime={data.runtime}
+        theme={preferences.theme}
         languagePreference={preferences.languagePreference}
+        playIntro={!shellPreferences.hasPersistedPreferences}
+        runtimeDraft={runtimeDraft}
+        isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
+        formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
+        titlebarErrorNote={toggleRuntime.error?.message}
+        onThemeChange={handleThemeChange}
         onLanguagePreferenceChange={handleLanguagePreferenceChange}
-      >
-        <OnboardingSurface
-          runtime={data.runtime}
-          theme={preferences.theme}
-          languagePreference={preferences.languagePreference}
-          playIntro={!shellPreferences.hasPersistedPreferences}
-          runtimeDraft={runtimeDraft}
-          isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
-          formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
-          titlebarErrorNote={toggleRuntime.error?.message}
-          onThemeChange={handleThemeChange}
-          onLanguagePreferenceChange={handleLanguagePreferenceChange}
-          onRuntimeDraftChange={handleRuntimeDraftChange}
-          onStart={() => void handleStartFromOnboarding()}
-          onSkip={handleSkipOnboarding}
-          onToggleRuntime={() => toggleRuntime.mutate()}
-          runtimeToggleBusy={toggleRuntime.isPending}
-        />
-      </I18nProvider>
+        onRuntimeDraftChange={handleRuntimeDraftChange}
+        onStart={() => void handleStartFromOnboarding()}
+        onSkip={handleSkipOnboarding}
+        onToggleRuntime={() => toggleRuntime.mutate()}
+        runtimeToggleBusy={toggleRuntime.isPending}
+      />,
     )
   }
 
-  return (
-    <I18nProvider
-      language={activeLanguage}
-      systemLanguage={systemLanguage}
-      languagePreference={preferences.languagePreference}
-      onLanguagePreferenceChange={handleLanguagePreferenceChange}
-    >
+  return renderWithI18n(
+    <>
       <MainSurface
         data={data}
         runtimeDraft={runtimeDraft}
@@ -487,6 +496,7 @@ export function App() {
           subscribeRoom.mutate(room)
         }}
         onCreateGroup={handleCreateGroup}
+        onApplyInvite={handleApplyInvite}
         onDraftChange={setMessageDraft}
         onSendMessage={() => void handleSendMessage()}
         onTogglePinMessage={(messageId) =>
@@ -511,6 +521,6 @@ export function App() {
           }))
         }
       />
-    </I18nProvider>
+    </>,
   )
 }

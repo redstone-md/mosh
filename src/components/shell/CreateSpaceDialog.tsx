@@ -1,8 +1,9 @@
 import { z } from 'zod'
 import { useMemo, useState } from 'react'
+import { Copy, Link2 } from 'lucide-react'
 
 import { channelTypeSchema, groupAccentSchema, roomGroupSchema } from '../../lib/appShellSchemas'
-import type { PeerSummary, RoomSummary } from '../../lib/schemas'
+import type { PeerSummary, RoomSummary, UpdateRuntimeSettingsInput } from '../../lib/schemas'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 import {
@@ -17,6 +18,7 @@ import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
+import { Textarea } from '../ui/textarea'
 
 const createChannelSchema = z.object({
   room: z
@@ -42,20 +44,28 @@ type CreateSpaceDialogProps = {
   open: boolean
   availableChannels: RoomSummary[]
   peers: PeerSummary[]
+  runtimeDraft: UpdateRuntimeSettingsInput
+  activeRoom: RoomSummary
+  inviteCode: string
   onOpenChange: (open: boolean) => void
   onCreateChannel: (room: string, channelType: z.infer<typeof channelTypeSchema>) => void
   onCreateGroup: (group: z.infer<typeof createGroupSchema>) => void
   onCreateDirect: (target: string) => void
+  onApplyInvite: (value: string) => Promise<void>
 }
 
 export function CreateSpaceDialog({
   open,
   availableChannels,
   peers,
+  runtimeDraft,
+  activeRoom,
+  inviteCode,
   onOpenChange,
   onCreateChannel,
   onCreateGroup,
   onCreateDirect,
+  onApplyInvite,
 }: CreateSpaceDialogProps) {
   const { copy } = useI18n()
   const [channelName, setChannelName] = useState('')
@@ -65,6 +75,7 @@ export function CreateSpaceDialog({
   const [groupIcon, setGroupIcon] = useState('GR')
   const [groupAccent, setGroupAccent] = useState<z.infer<typeof groupAccentSchema>>('forest')
   const [groupRoomIds, setGroupRoomIds] = useState<string[]>([])
+  const [inviteInput, setInviteInput] = useState('')
   const [errorNote, setErrorNote] = useState<string | null>(null)
 
   const peerPlaceholders = useMemo(
@@ -125,6 +136,22 @@ export function CreateSpaceDialog({
     onOpenChange(false)
   }
 
+  async function handleCopyInvite() {
+    await navigator.clipboard.writeText(inviteCode)
+    setErrorNote(copy.createSpace.inviteCopied)
+  }
+
+  async function handleApplyInvite() {
+    try {
+      await onApplyInvite(inviteInput)
+      setErrorNote(copy.createSpace.inviteApplied)
+      setInviteInput('')
+      onOpenChange(false)
+    } catch {
+      setErrorNote(copy.createSpace.inviteInvalid)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -138,6 +165,7 @@ export function CreateSpaceDialog({
             <TabsTrigger value="channel">{copy.common.channel}</TabsTrigger>
             <TabsTrigger value="direct">{copy.common.direct}</TabsTrigger>
             <TabsTrigger value="group">{copy.common.group}</TabsTrigger>
+            <TabsTrigger value="invite">{copy.common.invite}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="channel" className="space-y-4">
@@ -256,6 +284,47 @@ export function CreateSpaceDialog({
             <DialogFooter>
               <Button onClick={handleCreateGroup}>{copy.createSpace.createGroup}</Button>
             </DialogFooter>
+          </TabsContent>
+
+          <TabsContent value="invite" className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="invite-export">{copy.createSpace.shareInvite}</Label>
+              <Textarea
+                id="invite-export"
+                value={inviteCode}
+                readOnly
+                className="min-h-28 font-mono text-xs"
+              />
+              <div className="rounded-md border border-border bg-[var(--panel-strong)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
+                {copy.createSpace.invitePreview(runtimeDraft.meshId, activeRoom.id)}
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setInviteInput(inviteCode)}>
+                  <Link2 className="mr-2 h-4 w-4" />
+                  {copy.createSpace.useCurrentInvite}
+                </Button>
+                <Button type="button" onClick={() => void handleCopyInvite()}>
+                  <Copy className="mr-2 h-4 w-4" />
+                  {copy.createSpace.copyInvite}
+                </Button>
+              </DialogFooter>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="invite-import">{copy.createSpace.pasteInvite}</Label>
+              <Textarea
+                id="invite-import"
+                value={inviteInput}
+                onChange={(event) => setInviteInput(event.target.value)}
+                placeholder={copy.createSpace.invitePlaceholder}
+                className="min-h-28 font-mono text-xs"
+              />
+              <DialogFooter>
+                <Button type="button" onClick={() => void handleApplyInvite()}>
+                  {copy.createSpace.applyInvite}
+                </Button>
+              </DialogFooter>
+            </div>
           </TabsContent>
         </Tabs>
 
