@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BootstrapErrorScreen, LoadingScreen } from './components/AppBootstrapState'
 import { I18nProvider } from './components/I18nProvider'
-import { IntroSurface } from './components/shell/IntroSurface'
 import { MainSurface } from './components/shell/MainSurface'
 import { OnboardingSurface } from './components/shell/OnboardingSurface'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
@@ -28,7 +27,7 @@ export function App() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [identityFingerprint, setIdentityFingerprint] = useState<string>('')
-  const [introComplete, setIntroComplete] = useState(() => hasPersistedPreferences())
+  const [playOnboardingIntro] = useState(() => !hasPersistedPreferences())
   const systemLanguage = useMemo(() => detectSystemLanguage(), [])
 
   const snapshot = useQuery({
@@ -378,25 +377,6 @@ export function App() {
       : activeCopy.runtime.offlineLabel
   const activeVoiceRoom = data.voiceRooms.find((room) => room.joined) ?? null
 
-  if (!introComplete) {
-    return (
-      <I18nProvider
-        language={activeLanguage}
-        systemLanguage={systemLanguage}
-        languagePreference={preferences.languagePreference}
-        onLanguagePreferenceChange={handleLanguagePreferenceChange}
-      >
-        <IntroSurface
-          runtime={data.runtime}
-          isBusy={toggleRuntime.isPending}
-          errorNote={toggleRuntime.error?.message}
-          onToggleRuntime={() => toggleRuntime.mutate()}
-          onComplete={() => setIntroComplete(true)}
-        />
-      </I18nProvider>
-    )
-  }
-
   if (showOnboarding) {
     return (
       <I18nProvider
@@ -409,6 +389,7 @@ export function App() {
           runtime={data.runtime}
           theme={preferences.theme}
           languagePreference={preferences.languagePreference}
+          playIntro={playOnboardingIntro}
           runtimeDraft={runtimeDraft}
           isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
           formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}

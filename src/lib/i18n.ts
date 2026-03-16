@@ -75,6 +75,34 @@ const translations = {
     onboarding: {
       title: 'MOSH Desktop',
       description: 'Persist your mesh identity once and reopen directly into the shell.',
+      splashTagline: 'E2E P2P Mesh Network by MOSS',
+      controls: {
+        back: 'Back',
+        next: 'Continue',
+        finish: 'Initialize node',
+        busy: 'Connecting...',
+      },
+      steps: {
+        identity: {
+          title: 'Welcome to MOSH',
+          subtitle: "Let's start by setting up your identity on the network.",
+        },
+        topology: {
+          title: 'Mesh topology',
+          subtitle: 'Configure your core network parameters.',
+        },
+        ports: {
+          title: 'Connection ports',
+          subtitle: 'Define how peers will connect to your node.',
+        },
+        discovery: {
+          title: 'Network discovery',
+          subtitle: 'Choose how MOSH should find other nodes.',
+        },
+      },
+      validation: {
+        nicknameRequired: 'Please enter a nickname to continue.',
+      },
     },
     intro: {
       summary:
@@ -303,6 +331,34 @@ const translations = {
     onboarding: {
       title: 'MOSH Desktop',
       description: 'Один раз сохрани mesh identity и затем открывайся сразу в shell.',
+      splashTagline: 'E2E P2P Mesh Network by MOSS',
+      controls: {
+        back: 'Назад',
+        next: 'Далее',
+        finish: 'Инициализировать узел',
+        busy: 'Подключение...',
+      },
+      steps: {
+        identity: {
+          title: 'Добро пожаловать в MOSH',
+          subtitle: 'Начнём с настройки твоей identity в сети.',
+        },
+        topology: {
+          title: 'Топология mesh',
+          subtitle: 'Настрой основные параметры сети.',
+        },
+        ports: {
+          title: 'Порты подключения',
+          subtitle: 'Определи, как другие пиры будут подключаться к твоему узлу.',
+        },
+        discovery: {
+          title: 'Обнаружение сети',
+          subtitle: 'Выбери, как MOSH должен находить другие узлы.',
+        },
+      },
+      validation: {
+        nicknameRequired: 'Введи никнейм, чтобы продолжить.',
+      },
     },
     intro: {
       summary:

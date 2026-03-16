@@ -8,6 +8,7 @@ type OnboardingSurfaceProps = {
   runtime: RuntimeStatus
   theme: ThemeId
   languagePreference: LanguagePreference
+  playIntro: boolean
   runtimeDraft: UpdateRuntimeSettingsInput
   isBusy: boolean
   formErrorNote?: string
@@ -25,6 +26,7 @@ export function OnboardingSurface({
   runtime,
   theme,
   languagePreference,
+  playIntro,
   runtimeDraft,
   isBusy,
   formErrorNote,
@@ -50,6 +52,7 @@ export function OnboardingSurface({
         runtime={runtime}
         theme={theme}
         languagePreference={languagePreference}
+        playIntro={playIntro}
         runtimeDraft={runtimeDraft}
         isBusy={isBusy}
         errorNote={formErrorNote}
