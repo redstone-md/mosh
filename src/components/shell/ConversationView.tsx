@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronUp, MonitorUp, Phone, Pin, Search, Settings2, X } from 'lucide-react'
+import { BellOff, ChevronDown, ChevronUp, MonitorUp, Phone, Pin, Search, Settings2, X } from 'lucide-react'
 
 import { formatRoomTitle } from '../../lib/chatPresentation'
 import { describeArchiveStateLabel } from '../../lib/i18n'
@@ -21,6 +21,7 @@ type ConversationViewProps = {
   archiveFingerprint?: string
   archiveVerified?: boolean
   externalFocusMessageId?: string
+  muted: boolean
   draft: string
   isSending: boolean
   mediaLive: boolean
@@ -33,6 +34,7 @@ type ConversationViewProps = {
   onDraftChange: (value: string) => void
   onSend: () => void
   onTogglePinMessage: (messageId: string) => void
+  onToggleMute: () => void
   onResolveExternalFocus: () => void
   onOpenSettings: () => void
   onStartVoice: () => void
@@ -45,6 +47,7 @@ export function ConversationView({
   archiveFingerprint,
   archiveVerified,
   externalFocusMessageId,
+  muted,
   draft,
   isSending,
   mediaLive,
@@ -57,6 +60,7 @@ export function ConversationView({
   onDraftChange,
   onSend,
   onTogglePinMessage,
+  onToggleMute,
   onResolveExternalFocus,
   onOpenSettings,
   onStartVoice,
@@ -166,6 +170,14 @@ export function ConversationView({
             title={copy.messages.search}
           >
             <Search className="h-4 w-4" />
+          </Button>
+          <Button
+            variant={muted ? 'secondary' : 'ghost'}
+            size="icon"
+            onClick={onToggleMute}
+            title={muted ? copy.messages.unmuteRoom : copy.messages.muteRoom}
+          >
+            <BellOff className="h-4 w-4" />
           </Button>
           <Button
             variant={pinsOpen ? 'secondary' : 'ghost'}

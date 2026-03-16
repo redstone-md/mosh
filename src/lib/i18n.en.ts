@@ -214,6 +214,8 @@ export const enTranslations = {
       globalSearchLive: 'Live',
       globalSearchArchive: 'Archive',
       globalSearchResultCount: (count: number) => `${count} matches`,
+      muteRoom: 'Mute this room',
+      unmuteRoom: 'Unmute this room',
       reply: 'Reply',
       copy: 'Copy text',
       attachFile: 'Attach file (<40KB)',

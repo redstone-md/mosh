@@ -65,6 +65,8 @@ type MainSurfaceProps = {
   mediaSession: MediaSessionController
   messageDraft: string
   roomTypes: Record<string, ChannelType>
+  unreadCounts: Record<string, number>
+  mutedRoomIds: string[]
   pinnedMessages: Message[]
   pinnedMessageIds: string[]
   publishPending: boolean
@@ -86,6 +88,7 @@ type MainSurfaceProps = {
   onDraftChange: (value: string) => void
   onSendMessage: () => void
   onTogglePinMessage: (messageId: string) => void
+  onToggleMuteRoom: (roomId: string) => void
   onThemeChange: (theme: ThemeId) => void
   onLanguagePreferenceChange: (value: 'system' | 'en' | 'ru') => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
@@ -118,6 +121,8 @@ export function MainSurface({
   mediaSession,
   messageDraft,
   roomTypes,
+  unreadCounts,
+  mutedRoomIds,
   pinnedMessages,
   pinnedMessageIds,
   publishPending,
@@ -139,6 +144,7 @@ export function MainSurface({
   onDraftChange,
   onSendMessage,
   onTogglePinMessage,
+  onToggleMuteRoom,
   onThemeChange,
   onLanguagePreferenceChange,
   onRuntimeDraftChange,
@@ -211,6 +217,8 @@ export function MainSurface({
           rooms={visibleRooms}
           peers={data.peers}
           selectedRoomId={activeRoom.id}
+          unreadCounts={unreadCounts}
+          mutedRoomIds={mutedRoomIds}
           mediaLabel={mediaLabel}
           roomTypes={roomTypes}
           activeVoiceRoom={activeVoiceRoom}
@@ -228,6 +236,7 @@ export function MainSurface({
           externalFocusMessageId={
             focusTarget?.roomId === activeRoom.id ? focusTarget.messageId : undefined
           }
+          muted={mutedRoomIds.includes(activeRoom.id)}
           draft={messageDraft}
           isSending={publishPending}
           mediaLive={mediaSession.state.status === 'live'}
@@ -240,6 +249,7 @@ export function MainSurface({
           onDraftChange={onDraftChange}
           onSend={onSendMessage}
           onTogglePinMessage={onTogglePinMessage}
+          onToggleMute={() => onToggleMuteRoom(activeRoom.id)}
           onResolveExternalFocus={() => setFocusTarget(null)}
           onOpenSettings={() => onOpenSettings(true)}
           onStartVoice={() => {

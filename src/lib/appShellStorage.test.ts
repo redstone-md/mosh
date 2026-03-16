@@ -93,6 +93,8 @@ function createStoredPreferences() {
       lobby: 'text',
     },
     pinnedMessages: {},
+    mutedRooms: [],
+    lastReadMessageIds: {},
   } as const
 }
 
