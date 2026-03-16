@@ -47,10 +47,26 @@ export function IdentityTransferImportDialog({
                   <div className="mt-2 font-mono text-xs text-foreground">{currentIdentityFingerprint}</div>
                 </div>
                 <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4">
+                  <div className="text-xs text-[var(--muted-foreground)]">{copy.identityTransfer.incomingIdentity}</div>
+                  <div className="mt-2 font-mono text-xs text-foreground">
+                    {pendingTransfer.handoff.summary.sourceFingerprint}
+                  </div>
+                  <p className="mt-3 text-sm text-[var(--muted-foreground)]">
+                    {pendingTransfer.handoff.summary.sourceFingerprint === currentIdentityFingerprint
+                      ? copy.identityTransfer.sameIdentity
+                      : copy.identityTransfer.replaceIdentity(
+                          currentIdentityFingerprint,
+                          pendingTransfer.handoff.summary.sourceFingerprint,
+                        )}
+                  </p>
+                </div>
+                <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4">
                   <div className="text-xs text-[var(--muted-foreground)]">{copy.identityTransfer.verificationCode}</div>
                   <div className="mt-2 font-mono text-lg tracking-[0.2em] text-foreground">
                     {pendingTransfer.handoff.shortCode}
                   </div>
+                  <div className="mt-3 text-xs text-[var(--muted-foreground)]">{copy.identityTransfer.exportedAt}</div>
+                  <div className="mt-1 text-xs text-foreground">{pendingTransfer.handoff.summary.exportedAt}</div>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="identity-transfer-link-passphrase">{copy.identityTransfer.passphrase}</Label>

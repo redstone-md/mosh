@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { exportIdentityTransferPackage, importIdentityTransferPackage } from './identityTransfer'
+import {
+  exportIdentityTransferPackage,
+  importIdentityTransferPackage,
+  readIdentityTransferSummary,
+} from './identityTransfer'
 
 const identity = {
   algorithm: 'ECDSA-P256' as const,
@@ -43,5 +47,13 @@ describe('identityTransfer', () => {
 
   it('rejects too-short passphrases at export time', async () => {
     await expect(exportIdentityTransferPackage(identity, 'short')).rejects.toThrow(/at least 8 characters/)
+  })
+
+  it('reads summary metadata without decrypting the package', async () => {
+    const transferPackage = await exportIdentityTransferPackage(identity, 'top-secret-passphrase')
+
+    expect(readIdentityTransferSummary(transferPackage)).toMatchObject({
+      sourceFingerprint: identity.fingerprint,
+    })
   })
 })

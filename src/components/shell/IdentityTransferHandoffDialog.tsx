@@ -49,6 +49,12 @@ export function IdentityTransferHandoffDialog({
                 <div className="text-xs text-[var(--muted-foreground)]">{copy.identityTransfer.verificationCode}</div>
                 <div className="mt-2 font-mono text-lg tracking-[0.2em] text-foreground">{handoff.shortCode}</div>
               </div>
+              <div className="mt-4 rounded-md border border-border bg-[var(--panel-strong)] p-3 text-sm">
+                <div className="text-xs text-[var(--muted-foreground)]">{copy.identityTransfer.sourceFingerprint}</div>
+                <div className="mt-2 font-mono text-xs text-foreground">{handoff.summary.sourceFingerprint}</div>
+                <div className="mt-3 text-xs text-[var(--muted-foreground)]">{copy.identityTransfer.exportedAt}</div>
+                <div className="mt-1 text-xs text-foreground">{handoff.summary.exportedAt}</div>
+              </div>
             </section>
 
             <section className="px-5 py-5">

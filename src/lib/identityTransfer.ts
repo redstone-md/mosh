@@ -8,6 +8,7 @@ const encoder = new TextEncoder()
 const identityTransferEnvelopeSchema = z.object({
   version: z.literal(1),
   exportedAt: z.string().min(1),
+  sourceFingerprint: z.string().min(1),
   salt: z.string().min(1),
   iv: z.string().min(1),
   cipherText: z.string().min(1),
@@ -20,6 +21,7 @@ const identityTransferPayloadSchema = z.object({
 
 export type IdentityTransferEnvelope = z.infer<typeof identityTransferEnvelopeSchema>
 export const IDENTITY_TRANSFER_PREFIX = 'mosh-identity://transfer/'
+export type IdentityTransferSummary = Pick<IdentityTransferEnvelope, 'exportedAt' | 'sourceFingerprint'>
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength)
@@ -53,6 +55,7 @@ export async function exportIdentityTransferPackage(
       JSON.stringify({
         version: 1,
         exportedAt: new Date().toISOString(),
+        sourceFingerprint: identity.fingerprint,
         salt: encodeBytesToBase64Url(salt),
         iv: encodeBytesToBase64Url(iv),
         cipherText: encodeBytesToBase64Url(new Uint8Array(cipherText)),
@@ -135,4 +138,16 @@ export function normalizeIdentityTransferPackage(value: string) {
   return normalized.startsWith(IDENTITY_TRANSFER_PREFIX)
     ? normalized
     : `${IDENTITY_TRANSFER_PREFIX}${normalized}`
+}
+
+export function readIdentityTransferSummary(value: string): IdentityTransferSummary {
+  const encodedEnvelope = normalizeIdentityTransferPackage(value).slice(IDENTITY_TRANSFER_PREFIX.length)
+  const envelope = identityTransferEnvelopeSchema.parse(
+    JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope))),
+  )
+
+  return {
+    exportedAt: envelope.exportedAt,
+    sourceFingerprint: envelope.sourceFingerprint,
+  }
 }
