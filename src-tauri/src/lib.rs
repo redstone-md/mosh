@@ -6,12 +6,13 @@ mod models;
 mod runtime_settings;
 mod snapshot_view;
 mod state;
+mod storage;
 
 use std::env;
 
 use crate::ffi::library_file_name;
-use tauri::path::BaseDirectory;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::path::BaseDirectory;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 
@@ -34,7 +35,10 @@ fn configure_bundled_runtime_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) 
         return;
     }
 
-    if let Ok(path) = app.path().resolve(library_file_name(), BaseDirectory::Resource) {
+    if let Ok(path) = app
+        .path()
+        .resolve(library_file_name(), BaseDirectory::Resource)
+    {
         if path.exists() {
             env::set_var("MOSS_SHARED_PATH", path);
         }
@@ -53,7 +57,9 @@ pub fn run() {
         })
         .setup(|app| {
             configure_bundled_runtime_path(&app.handle());
-            app.manage(state::SharedDesktopState::new(state::DesktopShellState::new()));
+            app.manage(state::SharedDesktopState::new(
+                state::DesktopShellState::new(),
+            ));
 
             let open = MenuItemBuilder::with_id("tray-open", "Open MOSH").build(app)?;
             let hide = MenuItemBuilder::with_id("tray-hide", "Hide to tray").build(app)?;
@@ -113,6 +119,13 @@ pub fn run() {
             commands::send_call_signal,
             commands::join_voice_room,
             commands::leave_voice_room,
+            commands::load_shell_preferences,
+            commands::save_shell_preferences,
+            commands::load_signing_identity,
+            commands::save_signing_identity,
+            commands::load_room_archive,
+            commands::save_room_archive,
+            commands::storage_overview,
             commands::window_minimize,
             commands::window_toggle_maximize,
             commands::window_start_drag,

@@ -1,10 +1,12 @@
 use serde::Deserialize;
+use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
     models::DesktopSnapshot,
     runtime_settings::RuntimeSettingsInput,
     state::SharedDesktopState,
+    storage::{self, StorageOverview},
 };
 
 #[derive(Deserialize)]
@@ -23,6 +25,12 @@ pub struct WindowStatePayload {
     pub focused: bool,
     pub visible: bool,
     pub maximized: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoragePayloadInput {
+    pub payload: Value,
 }
 
 #[tauri::command]
@@ -224,6 +232,53 @@ pub fn leave_voice_room(state: State<'_, SharedDesktopState>) -> Result<DesktopS
         .lock()
         .map_err(|_| "desktop state lock poisoned".to_string())?;
     Ok(state.leave_voice_room()?)
+}
+
+#[tauri::command]
+pub fn load_shell_preferences(app: AppHandle) -> Result<Option<Value>, String> {
+    storage::load_shell_preferences(&app)
+}
+
+#[tauri::command]
+pub fn save_shell_preferences(app: AppHandle, payload: StoragePayloadInput) -> Result<(), String> {
+    storage::save_shell_preferences(&app, payload.payload)
+}
+
+#[tauri::command]
+pub fn load_signing_identity(app: AppHandle) -> Result<Option<Value>, String> {
+    storage::load_signing_identity(&app)
+}
+
+#[tauri::command]
+pub fn save_signing_identity(app: AppHandle, payload: StoragePayloadInput) -> Result<(), String> {
+    storage::save_signing_identity(&app, payload.payload)
+}
+
+#[tauri::command]
+pub fn load_room_archive(app: AppHandle, room: String) -> Result<Option<Value>, String> {
+    let room = room.trim();
+    if room.is_empty() {
+        return Err("room is required".to_string());
+    }
+    storage::load_room_archive(&app, room)
+}
+
+#[tauri::command]
+pub fn save_room_archive(
+    app: AppHandle,
+    room: String,
+    payload: StoragePayloadInput,
+) -> Result<(), String> {
+    let room = room.trim();
+    if room.is_empty() {
+        return Err("room is required".to_string());
+    }
+    storage::save_room_archive(&app, room, payload.payload)
+}
+
+#[tauri::command]
+pub fn storage_overview(app: AppHandle) -> Result<StorageOverview, String> {
+    storage::storage_overview(&app)
 }
 
 #[tauri::command]

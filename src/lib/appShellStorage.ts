@@ -8,20 +8,24 @@ import {
   type SignedRoomArchive,
   type StoredMessage,
 } from './appShellSchemas'
+import { createSigningIdentity, parseSigningIdentity, signSerializedPayload, verifySerializedPayload } from './cryptoIdentity'
+import { desktopStorageClient } from './desktopStorageClient'
 import type { Message, RoomSummary, UpdateRuntimeSettingsInput } from './schemas'
-import {
-  createSigningIdentity,
-  parseSigningIdentity,
-  signSerializedPayload,
-  verifySerializedPayload,
-} from './cryptoIdentity'
+import { isTauriEnvironment } from './tauriEnv'
 
 const SHELL_PREFERENCES_KEY = 'mosh.shell.preferences.v1'
 const SIGNING_IDENTITY_KEY = 'mosh.shell.identity.v1'
 const CHAT_ARCHIVE_KEY = 'mosh.shell.archives.v1'
 
+let migrationPromise: Promise<void> | null = null
+
 export type VerifiedArchive = SignedRoomArchive & {
   verified: boolean
+}
+
+export type ShellBootstrap = {
+  preferences: ShellPreferences
+  hasPersistedPreferences: boolean
 }
 
 export function createDefaultRuntimeDraft(): UpdateRuntimeSettingsInput {
@@ -61,33 +65,37 @@ export function createDefaultPreferences(): ShellPreferences {
   }
 }
 
-export function loadPreferences(): ShellPreferences {
-  const fallback = createDefaultPreferences()
-  const raw = window.localStorage.getItem(SHELL_PREFERENCES_KEY)
-  if (!raw) {
-    return fallback
+export async function loadShellBootstrap(): Promise<ShellBootstrap> {
+  const legacyPreferences = loadLegacyPreferences()
+  const hasLegacyPreferences = hasLegacyPersistedPreferences()
+
+  if (!isTauriEnvironment()) {
+    return {
+      preferences: legacyPreferences,
+      hasPersistedPreferences: hasLegacyPreferences,
+    }
   }
-  try {
-    const parsed = JSON.parse(raw)
-    const result = shellPreferencesSchema.safeParse(parsed)
-    return result.success ? result.data : fallback
-  } catch {
-    return fallback
+
+  await migrateLegacyStorage()
+
+  const storedPreferences = await desktopStorageClient.loadPreferences()
+  return {
+    preferences: storedPreferences ?? legacyPreferences,
+    hasPersistedPreferences: storedPreferences !== null || hasLegacyPreferences,
   }
 }
 
-export function savePreferences(value: ShellPreferences): void {
-  window.localStorage.setItem(SHELL_PREFERENCES_KEY, JSON.stringify(value))
-}
+export async function savePreferences(value: ShellPreferences): Promise<void> {
+  if (isTauriEnvironment()) {
+    await desktopStorageClient.savePreferences(value)
+    return
+  }
 
-export function hasPersistedPreferences(): boolean {
-  return window.localStorage.getItem(SHELL_PREFERENCES_KEY) !== null
+  getLocalStorage()?.setItem(SHELL_PREFERENCES_KEY, JSON.stringify(value))
 }
 
 export function reconcileGroups(groups: RoomGroup[], rooms: RoomSummary[]): RoomGroup[] {
-  const channelIds = rooms
-    .filter((room) => room.kind === 'channel')
-    .map((room) => room.id)
+  const channelIds = rooms.filter((room) => room.kind === 'channel').map((room) => room.id)
 
   if (channelIds.length === 0) {
     return groups
@@ -135,9 +143,7 @@ export function reconcileRoomTypes(
     if (room.kind === 'channel') {
       next[room.id] =
         current[room.id] ??
-        (room.id.startsWith('voice-') || room.label.toLowerCase().includes('voice')
-          ? 'voice'
-          : 'text')
+        (room.id.startsWith('voice-') || room.label.toLowerCase().includes('voice') ? 'voice' : 'text')
     }
   }
 
@@ -158,56 +164,41 @@ export function isChannelType(value: string): value is ChannelType {
   return channelTypeSchema.safeParse(value).success
 }
 
-function loadArchiveStore(): Record<string, SignedRoomArchive> {
-  const raw = window.localStorage.getItem(CHAT_ARCHIVE_KEY)
-  if (!raw) {
-    return {}
-  }
-  try {
-    const parsed = JSON.parse(raw)
-    const result = archiveStoreSchema.safeParse(parsed)
-    return result.success ? result.data : {}
-  } catch {
-    return {}
-  }
-}
-
-function saveArchiveStore(store: Record<string, SignedRoomArchive>): void {
-  window.localStorage.setItem(CHAT_ARCHIVE_KEY, JSON.stringify(store))
-}
-
-function serializeArchive(roomId: string, messages: StoredMessage[]): string {
-  return JSON.stringify({
-    roomId,
-    messages,
-  })
-}
-
 export async function ensureSigningIdentity() {
-  const raw = window.localStorage.getItem(SIGNING_IDENTITY_KEY)
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw)
-      const identity = parseSigningIdentity(parsed)
-      if (identity) {
-        return identity
-      }
-    } catch {
-      // regenerate below
+  if (isTauriEnvironment()) {
+    await migrateLegacyStorage()
+
+    const storedIdentity = await desktopStorageClient.loadSigningIdentity()
+    if (storedIdentity) {
+      return storedIdentity
     }
   }
 
+  const legacyIdentity = loadLegacySigningIdentity()
+  if (legacyIdentity) {
+    if (isTauriEnvironment()) {
+      await desktopStorageClient.saveSigningIdentity(legacyIdentity)
+    }
+    return legacyIdentity
+  }
+
   const identity = await createSigningIdentity()
-  window.localStorage.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(identity))
+
+  if (isTauriEnvironment()) {
+    await desktopStorageClient.saveSigningIdentity(identity)
+  } else {
+    getLocalStorage()?.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(identity))
+  }
+
   return identity
 }
 
 export async function readVerifiedArchive(roomId: string): Promise<VerifiedArchive | null> {
-  const store = loadArchiveStore()
-  const archive = store[roomId]
+  const archive = await loadRoomArchive(roomId)
   if (!archive) {
     return null
   }
+
   const payload = serializeArchive(roomId, archive.messages)
   const verified = await verifySerializedPayload(archive.publicKeyJwk, payload, archive.signature)
   return {
@@ -216,10 +207,7 @@ export async function readVerifiedArchive(roomId: string): Promise<VerifiedArchi
   }
 }
 
-export async function persistSignedArchive(
-  roomId: string,
-  messages: Message[],
-): Promise<VerifiedArchive> {
+export async function persistSignedArchive(roomId: string, messages: Message[]): Promise<VerifiedArchive> {
   const identity = await ensureSigningIdentity()
   const archiveMessages = messages.map<StoredMessage>((message) => ({
     ...message,
@@ -237,9 +225,13 @@ export async function persistSignedArchive(
     messages: archiveMessages,
   }
 
-  const store = loadArchiveStore()
-  store[roomId] = archive
-  saveArchiveStore(store)
+  if (isTauriEnvironment()) {
+    await desktopStorageClient.saveRoomArchive(roomId, archive)
+  } else {
+    const store = loadLegacyArchiveStore()
+    store[roomId] = archive
+    saveLegacyArchiveStore(store)
+  }
 
   return {
     ...archive,
@@ -266,4 +258,129 @@ export function mergeArchivedMessages(archived: StoredMessage[], live: Message[]
   }
 
   return Array.from(merged.values()).sort((left, right) => left.id.localeCompare(right.id))
+}
+
+async function migrateLegacyStorage(): Promise<void> {
+  if (!isTauriEnvironment()) {
+    return
+  }
+
+  if (!migrationPromise) {
+    migrationPromise = runLegacyMigration()
+  }
+
+  return migrationPromise
+}
+
+async function runLegacyMigration(): Promise<void> {
+  const localStorage = getLocalStorage()
+  if (!localStorage) {
+    return
+  }
+
+  const [storedPreferences, storedIdentity] = await Promise.all([
+    desktopStorageClient.loadPreferences(),
+    desktopStorageClient.loadSigningIdentity(),
+  ])
+
+  const legacyPreferences = parseLegacyPreferences(localStorage.getItem(SHELL_PREFERENCES_KEY))
+  if (!storedPreferences && legacyPreferences) {
+    await desktopStorageClient.savePreferences(legacyPreferences)
+  }
+
+  const legacyIdentity = loadLegacySigningIdentity()
+  if (!storedIdentity && legacyIdentity) {
+    await desktopStorageClient.saveSigningIdentity(legacyIdentity)
+  }
+
+  const legacyArchives = loadLegacyArchiveStore()
+  for (const [roomId, archive] of Object.entries(legacyArchives)) {
+    const storedArchive = await desktopStorageClient.loadRoomArchive(roomId)
+    if (!storedArchive) {
+      await desktopStorageClient.saveRoomArchive(roomId, archive)
+    }
+  }
+}
+
+async function loadRoomArchive(roomId: string): Promise<SignedRoomArchive | null> {
+  if (isTauriEnvironment()) {
+    await migrateLegacyStorage()
+    return desktopStorageClient.loadRoomArchive(roomId)
+  }
+
+  return loadLegacyArchiveStore()[roomId] ?? null
+}
+
+function loadLegacyPreferences(): ShellPreferences {
+  return parseLegacyPreferences(getLocalStorage()?.getItem(SHELL_PREFERENCES_KEY) ?? null) ?? createDefaultPreferences()
+}
+
+function parseLegacyPreferences(raw: string | null): ShellPreferences | null {
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    const result = shellPreferencesSchema.safeParse(parsed)
+    return result.success ? result.data : null
+  } catch {
+    return null
+  }
+}
+
+function hasLegacyPersistedPreferences(): boolean {
+  return getLocalStorage()?.getItem(SHELL_PREFERENCES_KEY) !== null
+}
+
+function loadLegacyArchiveStore(): Record<string, SignedRoomArchive> {
+  const raw = getLocalStorage()?.getItem(CHAT_ARCHIVE_KEY)
+  if (!raw) {
+    return {}
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    const result = archiveStoreSchema.safeParse(parsed)
+    return result.success ? result.data : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveLegacyArchiveStore(store: Record<string, SignedRoomArchive>): void {
+  getLocalStorage()?.setItem(CHAT_ARCHIVE_KEY, JSON.stringify(store))
+}
+
+function loadLegacySigningIdentity() {
+  const raw = getLocalStorage()?.getItem(SIGNING_IDENTITY_KEY)
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    return parseSigningIdentity(parsed)
+  } catch {
+    return null
+  }
+}
+
+function serializeArchive(roomId: string, messages: StoredMessage[]): string {
+  return JSON.stringify({
+    roomId,
+    messages,
+  })
+}
+
+function getLocalStorage(): Storage | null {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
 }
