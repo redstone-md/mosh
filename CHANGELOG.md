@@ -19,3 +19,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Added a local peer trust registry with trust/revoke actions, trusted/new/name-changed states in the member list, and a dedicated trust tab in settings.
 - Added a mesh invite flow for copying the current room/runtime setup and applying incoming `mosh://invite/...` links without manually re-entering mesh settings.
 - Reworked desktop packaging so builds now sync `moss` from `origin/main`, bundle the platform runtime into MOSH automatically, and produce cross-platform release artifacts with embedded `MOSS` libraries.
+- Expanded CI/release coverage to include Windows ARM64 hosted runners alongside Linux ARM64 and Apple Silicon macOS targets.

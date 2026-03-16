@@ -17,15 +17,26 @@ concurrency:
 
 jobs:
   validate:
-    name: Validate (${{ matrix.os }})
+    name: Validate (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-latest
-          - ubuntu-latest
-          - windows-latest
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: ubuntu-22.04-arm
+            label: linux-arm64
+          - os: macos-15-intel
+            label: macos-x64
+          - os: macos-latest
+            label: macos-arm64
+          - os: windows-latest
+            label: windows-x64
+            msys2: UCRT64
+          - os: windows-11-arm
+            label: windows-arm64
+            moss-cc: clang
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,13 +60,17 @@ jobs:
           cache: true
 
       - name: Setup MinGW
-        if: runner.os == 'Windows'
+        if: matrix.msys2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
+          msystem: ${{ matrix.msys2 }}
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+
+      - name: Verify ARM64 Windows clang
+        if: matrix.moss-cc
+        run: clang --version
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -67,6 +82,8 @@ jobs:
         run: npm ci
 
       - name: Prepare bundled runtime
+        env:
+          MOSS_CC: ${{ matrix.moss-cc || '' }}
         run: npm run desktop:prepare
 
       - name: Run frontend tests

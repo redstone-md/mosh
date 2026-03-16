@@ -5,6 +5,7 @@ import { detectHostTargetTriple, resolveMossRuntimePlan } from './moss-runtime-p
 describe('moss runtime plan', () => {
   it('maps host platform and architecture pairs to supported target triples', () => {
     expect(detectHostTargetTriple('win32', 'x64')).toBe('x86_64-pc-windows-msvc');
+    expect(detectHostTargetTriple('win32', 'arm64')).toBe('aarch64-pc-windows-msvc');
     expect(detectHostTargetTriple('linux', 'arm64')).toBe('aarch64-unknown-linux-gnu');
     expect(detectHostTargetTriple('darwin', 'arm64')).toBe('aarch64-apple-darwin');
   });
@@ -13,6 +14,12 @@ describe('moss runtime plan', () => {
     expect(resolveMossRuntimePlan('x86_64-pc-windows-msvc')).toMatchObject({
       goos: 'windows',
       goarch: 'amd64',
+      libraryFile: 'moss.dll',
+      headerFile: 'moss.h',
+    });
+    expect(resolveMossRuntimePlan('aarch64-pc-windows-msvc')).toMatchObject({
+      goos: 'windows',
+      goarch: 'arm64',
       libraryFile: 'moss.dll',
       headerFile: 'moss.h',
     });

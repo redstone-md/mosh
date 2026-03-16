@@ -31,6 +31,11 @@ jobs:
           - os: windows-latest
             label: windows-amd64
             rust-target: x86_64-pc-windows-msvc
+            msys2: UCRT64
+          - os: windows-11-arm
+            label: windows-arm64
+            rust-target: aarch64-pc-windows-msvc
+            moss-cc: clang
           - os: macos-15-intel
             label: macos-amd64
             rust-target: x86_64-apple-darwin
@@ -57,13 +62,17 @@ jobs:
           cache: true
 
       - name: Setup MinGW
-        if: runner.os == 'Windows'
+        if: matrix.msys2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
+          msystem: ${{ matrix.msys2 }}
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+
+      - name: Verify ARM64 Windows clang
+        if: matrix.moss-cc
+        run: clang --version
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -83,6 +92,8 @@ jobs:
         run: npm run moss:sync
 
       - name: Build and attach shared runtime
+        env:
+          MOSS_CC: ${{ matrix.moss-cc || '' }}
         run: node ./scripts/build-moss-runtime.mjs --target ${{ matrix.rust-target }}
 
       - name: Build frontend
