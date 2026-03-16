@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowRight, Shield, Waypoints, Waves } from 'lucide-react'
 
+import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 
 const INTRO_DURATION_MS = 3000
@@ -10,28 +11,29 @@ type MoshIntroProps = {
   onComplete: () => void
 }
 
-const introSteps = [
-  {
-    icon: Shield,
-    label: 'Identity stays local',
-    detail: 'MOSH creates a local operator profile first. Nothing is pushed anywhere before you join a mesh.',
-    delay: 0.2,
-  },
-  {
-    icon: Waypoints,
-    label: 'Peers route directly',
-    detail: 'A shared mesh id and bootstrap path tell nodes how to discover each other and open rooms.',
-    delay: 0.7,
-  },
-  {
-    icon: Waves,
-    label: 'Rooms stay live',
-    detail: 'Messages, voice and screen sessions attach to rooms, so the shell reopens exactly where you left it.',
-    delay: 1.2,
-  },
-]
-
 export function MoshIntro({ onComplete }: MoshIntroProps) {
+  const { copy } = useI18n()
+  const introSteps = [
+    {
+      icon: Shield,
+      label: copy.intro.steps[0].label,
+      detail: copy.intro.steps[0].detail,
+      delay: 0.2,
+    },
+    {
+      icon: Waypoints,
+      label: copy.intro.steps[1].label,
+      detail: copy.intro.steps[1].detail,
+      delay: 0.7,
+    },
+    {
+      icon: Waves,
+      label: copy.intro.steps[2].label,
+      detail: copy.intro.steps[2].detail,
+      delay: 1.2,
+    },
+  ]
+
   useEffect(() => {
     const timeout = window.setTimeout(onComplete, INTRO_DURATION_MS)
     return () => window.clearTimeout(timeout)
@@ -59,7 +61,7 @@ export function MoshIntro({ onComplete }: MoshIntroProps) {
           </div>
 
           <div className="mt-5 max-w-md text-sm leading-6 text-[var(--muted-foreground)]">
-            Private mesh chat that keeps your identity on this machine, finds peers directly, and restores rooms without another setup pass.
+            {copy.intro.summary}
           </div>
 
           <div className="mt-8 overflow-hidden rounded-md border border-border bg-[var(--chat)]">
@@ -138,7 +140,7 @@ export function MoshIntro({ onComplete }: MoshIntroProps) {
                 animate={{ opacity: 0.86 }}
                 transition={{ delay: 1.55, duration: 0.3 }}
               >
-                mesh room
+                {copy.intro.roomLabel}
               </motion.text>
               <motion.text
                 x="278"
@@ -149,7 +151,7 @@ export function MoshIntro({ onComplete }: MoshIntroProps) {
                 animate={{ opacity: 1 }}
                 transition={{ delay: 1.7, duration: 0.3 }}
               >
-                chat, voice, screen share
+                {copy.intro.roomDetail}
               </motion.text>
             </svg>
           </div>
@@ -182,9 +184,9 @@ export function MoshIntro({ onComplete }: MoshIntroProps) {
 
           <div className="mt-auto pt-6">
             <div className="mb-3 flex items-center justify-between text-xs text-[var(--muted-foreground)]">
-              <span>Intro ends in 3 seconds</span>
+              <span>{copy.intro.countdown}</span>
               <span className="flex items-center gap-1 text-foreground/70">
-                Continue
+                {copy.common.continue}
                 <ArrowRight size={12} />
               </span>
             </div>
@@ -198,7 +200,7 @@ export function MoshIntro({ onComplete }: MoshIntroProps) {
             </div>
             <div className="mt-4 flex justify-end">
               <Button variant="ghost" size="sm" onClick={onComplete}>
-                Skip intro
+                {copy.intro.skip}
               </Button>
             </div>
           </div>

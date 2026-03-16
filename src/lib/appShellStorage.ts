@@ -7,7 +7,6 @@ import {
   type ShellPreferences,
   type SignedRoomArchive,
   type StoredMessage,
-  type ThemeId,
 } from './appShellSchemas'
 import type { Message, RoomSummary, UpdateRuntimeSettingsInput } from './schemas'
 import {
@@ -40,6 +39,7 @@ export function createDefaultRuntimeDraft(): UpdateRuntimeSettingsInput {
 export function createDefaultPreferences(): ShellPreferences {
   return {
     theme: 'moss',
+    languagePreference: 'system',
     onboardingCompleted: false,
     selectedDock: 'group',
     selectedGroupId: 'mesh',
@@ -156,19 +156,6 @@ export function getChannelType(
 
 export function isChannelType(value: string): value is ChannelType {
   return channelTypeSchema.safeParse(value).success
-}
-
-export function getThemeLabel(theme: ThemeId): string {
-  switch (theme) {
-    case 'moss':
-      return 'Moss'
-    case 'graphite':
-      return 'Graphite'
-    case 'linen':
-      return 'Linen'
-    case 'ember':
-      return 'Ember'
-  }
 }
 
 function loadArchiveStore(): Record<string, SignedRoomArchive> {

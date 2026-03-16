@@ -14,9 +14,9 @@ export function getGroupAccentClass(group: RoomGroup): string {
   return accentStyles[group.accent]
 }
 
-export function formatRoomTitle(room: RoomSummary | undefined): string {
+export function formatRoomTitle(room: RoomSummary | undefined, unknownLabel = 'Unknown room'): string {
   if (!room) {
-    return 'Unknown room'
+    return unknownLabel
   }
   if (room.kind === 'system') {
     return room.label
@@ -42,19 +42,6 @@ export function getMessageMarkup(body: string): string {
   return DOMPurify.sanitize(withBreaks, {
     ADD_ATTR: ['target', 'rel', 'class', 'data-reply-to'],
   })
-}
-
-export function describeArchiveState(
-  fingerprint: string | undefined,
-  verified: boolean | undefined,
-): string {
-  if (!fingerprint) {
-    return 'Archive pending'
-  }
-  if (verified) {
-    return `Signed by ${fingerprint}`
-  }
-  return `Archive signature failed for ${fingerprint}`
 }
 
 export function dedupeMessages(messages: Message[]): Message[] {

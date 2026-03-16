@@ -6,6 +6,7 @@ import { channelTypeSchema, groupAccentSchema, roomGroupSchema, type ChannelType
 import { getGroupAccentClass } from '../../lib/chatPresentation'
 import type { RoomSummary } from '../../lib/schemas'
 import { cn } from '../../lib/utils'
+import { useI18n } from '../I18nProvider'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -30,10 +31,10 @@ type WorkspaceEditorProps = {
   ) => void
 }
 
-function createDraftGroup(index: number): RoomGroup {
+function createDraftGroup(index: number, label: string): RoomGroup {
   return {
     id: `group-${Date.now().toString(36)}-${index.toString(36)}`,
-    name: `Group ${index + 1}`,
+    name: label,
     icon: `G${(index + 1).toString(36).toUpperCase()}`,
     accent: 'slate',
     roomIds: [],
@@ -69,6 +70,7 @@ export function WorkspaceEditor({
   selectedGroupId,
   onSave,
 }: WorkspaceEditorProps) {
+  const { copy } = useI18n()
   const channelRooms = useMemo(
     () => rooms.filter((room) => room.kind === 'channel'),
     [rooms],
@@ -90,7 +92,7 @@ export function WorkspaceEditor({
 
   function handleCreateGroup() {
     setDraftGroups((current) => {
-      const nextGroup = createDraftGroup(current.length)
+      const nextGroup = createDraftGroup(current.length, copy.workspace.groupName(current.length + 1))
       setDraftSelectedGroupId(nextGroup.id)
       return [...current, nextGroup]
     })
@@ -99,7 +101,7 @@ export function WorkspaceEditor({
   function handleDeleteGroup(groupId: string) {
     setDraftGroups((current) => {
       const remaining = current.filter((group) => group.id !== groupId)
-      const fallbackGroup = remaining[0] ?? createDraftGroup(0)
+      const fallbackGroup = remaining[0] ?? createDraftGroup(0, copy.workspace.groupName(1))
       const nextGroups = remaining.length > 0 ? remaining : [fallbackGroup]
 
       setRoomAssignments((assignments) => {
@@ -121,7 +123,7 @@ export function WorkspaceEditor({
 
   function handleSaveWorkspace() {
     if (draftGroups.length === 0) {
-      setErrorNote('Create at least one group before saving the workspace.')
+      setErrorNote(copy.workspace.createGroupFirst)
       return
     }
 
@@ -137,7 +139,7 @@ export function WorkspaceEditor({
     })
 
     if (!parsed.success) {
-      setErrorNote(parsed.error.issues[0]?.message ?? 'Workspace layout is invalid.')
+      setErrorNote(copy.workspace.invalidLayout)
       return
     }
 
@@ -149,9 +151,9 @@ export function WorkspaceEditor({
     <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
       <section className="rounded-md border border-border bg-[var(--panel-strong)]">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <p className="text-sm font-medium">Groups</p>
+          <p className="text-sm font-medium">{copy.common.groups}</p>
           <Button variant="outline" size="sm" onClick={handleCreateGroup}>
-            Add group
+            {copy.workspace.addGroup}
           </Button>
         </div>
         <div className="space-y-1 p-2">
@@ -173,10 +175,10 @@ export function WorkspaceEditor({
                   </span>
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-foreground">{group.name}</span>
-                    <span className="block text-xs text-[var(--muted-foreground)]">{channelCount} channels</span>
+                    <span className="block text-xs text-[var(--muted-foreground)]">{copy.workspace.channelCount(channelCount)}</span>
                   </span>
                 </span>
-                {isActive ? <Badge variant="secondary">Active</Badge> : null}
+                {isActive ? <Badge variant="secondary">{copy.common.active}</Badge> : null}
               </button>
             )
           })}
@@ -186,13 +188,13 @@ export function WorkspaceEditor({
       <div className="space-y-4">
         <section className="rounded-md border border-border bg-[var(--panel-strong)]">
           <div className="border-b border-border px-4 py-3">
-            <p className="text-sm font-medium">Group settings</p>
+            <p className="text-sm font-medium">{copy.workspace.groupSettings}</p>
           </div>
           {selectedGroup ? (
             <div className="space-y-4 p-4">
               <div className="grid gap-4 md:grid-cols-[1fr_110px]">
                 <div className="space-y-2">
-                  <Label htmlFor="workspace-group-name">Name</Label>
+                  <Label htmlFor="workspace-group-name">{copy.workspace.name}</Label>
                   <Input
                     id="workspace-group-name"
                     value={selectedGroup.name}
@@ -209,7 +211,7 @@ export function WorkspaceEditor({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="workspace-group-icon">Icon</Label>
+                  <Label htmlFor="workspace-group-icon">{copy.workspace.icon}</Label>
                   <Input
                     id="workspace-group-icon"
                     value={selectedGroup.icon}
@@ -228,7 +230,7 @@ export function WorkspaceEditor({
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Accent</Label>
+                <Label>{copy.workspace.accent}</Label>
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                   {groupAccentSchema.options.map((accent) => (
                     <button
@@ -247,7 +249,7 @@ export function WorkspaceEditor({
                         )
                       }
                     >
-                      {accent}
+                      {copy.workspace.accents[accent]}
                     </button>
                   ))}
                 </div>
@@ -255,7 +257,7 @@ export function WorkspaceEditor({
               <div className="flex items-center justify-between rounded-md border border-border bg-[var(--panel)] px-3 py-3">
                 <div className="flex items-center gap-2 text-sm">
                   <PencilLine className="h-4 w-4 text-[var(--muted-foreground)]" />
-                  <span>{selectedGroupChannelIds.size} channels routed to this group.</span>
+                  <span>{copy.workspace.channelsRouted(selectedGroupChannelIds.size)}</span>
                 </div>
                 <Button
                   variant="destructive"
@@ -263,19 +265,19 @@ export function WorkspaceEditor({
                   onClick={() => handleDeleteGroup(selectedGroup.id)}
                 >
                   <Trash2 className="h-4 w-4" />
-                  Delete group
+                  {copy.workspace.deleteGroup}
                 </Button>
               </div>
             </div>
           ) : (
-            <div className="p-4 text-sm text-[var(--muted-foreground)]">Create a group to start organizing channels.</div>
+            <div className="p-4 text-sm text-[var(--muted-foreground)]">{copy.workspace.createGroupToStart}</div>
           )}
         </section>
 
         <section className="rounded-md border border-border bg-[var(--panel-strong)]">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <p className="text-sm font-medium">Channel routing</p>
-            <p className="text-xs text-[var(--muted-foreground)]">Type and group are saved locally for this shell.</p>
+            <p className="text-sm font-medium">{copy.workspace.channelRouting}</p>
+            <p className="text-xs text-[var(--muted-foreground)]">{copy.workspace.routingNote}</p>
           </div>
           <div className="space-y-3 p-4">
             {channelRooms.length > 0 ? (
@@ -289,7 +291,7 @@ export function WorkspaceEditor({
                     <p className="truncate text-xs text-[var(--muted-foreground)]">{room.id}</p>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-xs text-[var(--muted-foreground)]">Group</Label>
+                    <Label className="text-xs text-[var(--muted-foreground)]">{copy.workspace.groupSelect}</Label>
                     <Select
                       value={roomAssignments[room.id] ?? draftGroups[0]?.id}
                       onValueChange={(value) =>
@@ -312,7 +314,7 @@ export function WorkspaceEditor({
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-xs text-[var(--muted-foreground)]">Type</Label>
+                    <Label className="text-xs text-[var(--muted-foreground)]">{copy.workspace.typeSelect}</Label>
                     <Select
                       value={draftRoomTypes[room.id] ?? 'text'}
                       onValueChange={(value: ChannelType) =>
@@ -326,22 +328,22 @@ export function WorkspaceEditor({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="text">Text</SelectItem>
-                        <SelectItem value="voice">Voice</SelectItem>
+                        <SelectItem value="text">{copy.common.text}</SelectItem>
+                        <SelectItem value="voice">{copy.common.voice}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
               ))
             ) : (
-              <p className="text-sm text-[var(--muted-foreground)]">Join a channel first, then route it into a local group here.</p>
+              <p className="text-sm text-[var(--muted-foreground)]">{copy.workspace.joinChannelFirst}</p>
             )}
           </div>
         </section>
 
         <div className="flex items-center justify-between gap-3">
           {errorNote ? <p className="text-sm text-[var(--danger)]">{errorNote}</p> : <span />}
-          <Button onClick={handleSaveWorkspace}>Save workspace</Button>
+          <Button onClick={handleSaveWorkspace}>{copy.workspace.saveWorkspace}</Button>
         </div>
       </div>
     </div>

@@ -7,6 +7,8 @@ import {
   TriangleAlert,
   Waypoints,
 } from 'lucide-react'
+import { useI18n } from './I18nProvider'
+import { localizeRuntimeState } from '../lib/i18n'
 
 type RuntimePanelProps = {
   state: string
@@ -33,12 +35,15 @@ export function RuntimePanel({
   isBusy,
   compact = false,
 }: RuntimePanelProps) {
+  const { copy } = useI18n()
+  const localizedState = localizeRuntimeState(copy, state)
+
   if (compact) {
     return (
       <div className="flex items-center gap-1 rounded-md border border-border/70 bg-[var(--panel)] px-1.5 py-1">
         <IndicatorButton
           icon={CircleDot}
-          title={`${state} • ${summary}`}
+          title={`${localizedState} • ${summary}`}
           active={isOnline}
           className="text-primary"
         />
@@ -60,7 +65,7 @@ export function RuntimePanel({
           } disabled:opacity-50`}
           onClick={onToggle}
           disabled={isBusy}
-          title={isOnline ? 'Stop runtime' : 'Start runtime'}
+          title={isOnline ? copy.runtime.stop : copy.runtime.start}
           type="button"
         >
           {isOnline ? <PowerOff size={12} /> : <Power size={12} />}
@@ -74,7 +79,7 @@ export function RuntimePanel({
       <div className="flex items-center gap-6 min-w-0">
         <div className="flex items-center gap-2 min-w-0">
           <div className={`w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-primary shadow-[0_0_0_4px_rgba(90,198,136,0.2)]' : 'bg-foreground/30'}`} />
-          <strong className="whitespace-nowrap">{state}</strong>
+          <strong className="whitespace-nowrap">{localizedState}</strong>
           <span className="text-foreground/50 truncate hidden sm:inline-block">{summary}</span>
         </div>
         <div className="hidden md:flex gap-2 text-xs font-mono">
@@ -90,7 +95,7 @@ export function RuntimePanel({
         disabled={isBusy}
       >
         {isOnline ? <PowerOff size={14} /> : <Power size={14} />}
-        <span>{isBusy ? '...' : isOnline ? 'Stop' : 'Start'}</span>
+        <span>{isBusy ? '...' : isOnline ? copy.runtime.stop : copy.runtime.start}</span>
       </button>
     </section>
   )

@@ -1,7 +1,9 @@
 import { Fingerprint, MessageSquare, Radio } from 'lucide-react'
 
+import { describeArchiveStateLabel, localizePeerStatus } from '../../lib/i18n'
 import { initialsFromName } from '../../lib/chatPresentation'
 import type { PeerSummary, RoomSummary, VoiceRoom } from '../../lib/schemas'
+import { useI18n } from '../I18nProvider'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -26,33 +28,37 @@ export function MemberSidebar({
   activeVoiceRoom,
   onOpenDirectRoom,
 }: MemberSidebarProps) {
+  const { copy } = useI18n()
+
   return (
     <aside className="hidden w-[260px] shrink-0 border-l border-border bg-[var(--sidebar)] xl:flex xl:flex-col">
       <div className="border-b border-border px-4 py-4">
-        <p className="text-sm font-semibold">Members in {room?.label ?? 'room'}</p>
+        <p className="text-sm font-semibold">
+          {copy.room.members(peers.length)} · {room?.label ?? copy.common.unknownRoom}
+        </p>
         <p className="mt-1 text-xs text-[var(--muted-foreground)]">{mediaLabel}</p>
       </div>
       <div className="space-y-3 border-b border-border px-4 py-4">
         <div className="rounded-md border border-border bg-[var(--panel-strong)] p-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Fingerprint className="h-4 w-4" />
-            Signed archive
+            {copy.archive.title}
           </div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">
             {archiveFingerprint
-              ? `${archiveVerified ? 'Verified' : 'Verification failed'} • ${archiveFingerprint}`
-              : 'Archive will be signed after the first persisted message set.'}
+              ? describeArchiveStateLabel(copy, archiveFingerprint, archiveVerified)
+              : copy.archive.firstPersistedMessage}
           </p>
         </div>
         <div className="rounded-md border border-border bg-[var(--panel-strong)] p-3">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Radio className="h-4 w-4" />
-            Call status
+            {copy.call.status}
           </div>
           <p className="mt-2 text-xs text-[var(--muted-foreground)]">{mediaLabel}</p>
           {activeVoiceRoom ? (
             <p className="mt-2 text-xs text-[var(--muted-foreground)]">
-              {activeVoiceRoom.participants.length} in voice
+              {copy.call.inVoice(activeVoiceRoom.participants.length)}
             </p>
           ) : null}
         </div>
@@ -74,16 +80,16 @@ export function MemberSidebar({
                     size="icon"
                     variant="ghost"
                     onClick={() => onOpenDirectRoom(peer.displayName)}
-                    title={`Message ${peer.displayName}`}
+                    title={`${copy.sidebar.directMessages}: ${peer.displayName}`}
                   >
                     <MessageSquare className="h-4 w-4" />
                   </Button>
                   {activeVoiceRoom?.participants.some((participant) => participant.peerId === peer.id) ? (
-                    <Badge variant="default">voice</Badge>
+                    <Badge variant="default">{copy.common.voice.toLowerCase()}</Badge>
                   ) : null}
                 </div>
               ) : (
-                <Badge variant="default">{peer.status}</Badge>
+                <Badge variant="default">{localizePeerStatus(copy, peer.status)}</Badge>
               )}
             </div>
           ))}

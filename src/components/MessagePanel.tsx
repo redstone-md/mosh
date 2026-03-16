@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import type { Message, RoomSummary } from '../lib/schemas'
 import { Send, MessageSquareOff, Paperclip, Smile, Copy, Reply } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { formatRoomTitle } from '../lib/chatPresentation'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -10,6 +11,7 @@ import Mention from '@tiptap/extension-mention'
 import DOMPurify from 'dompurify'
 import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
 import makeSuggestion from '../lib/suggestion'
+import { useI18n } from './I18nProvider'
 
 type MessagePanelProps = {
   room: RoomSummary | undefined
@@ -32,6 +34,7 @@ export function MessagePanel({
   isSending,
   errorNote,
 }: MessagePanelProps) {
+  const { copy } = useI18n()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -59,7 +62,7 @@ export function MessagePanel({
         suggestion: makeSuggestion(peerNames),
       }),
       Placeholder.configure({
-        placeholder: `Message ${room?.label ?? '#room'}...`,
+        placeholder: copy.messages.placeholder(formatRoomTitle(room, copy.common.unknownRoom)),
       }),
     ],
     content: draft,
@@ -112,7 +115,7 @@ export function MessagePanel({
     if (!file) return
 
     if (file.size > 40 * 1024) {
-      alert("File is too large. Base64 attachments are limited to 40KB in this demo.")
+      alert(copy.messages.imageTooLarge)
       return
     }
 
@@ -210,14 +213,14 @@ export function MessagePanel({
                     <button 
                         onClick={() => handleReply(message)}
                         className="p-1.5 text-foreground/50 hover:text-foreground hover:bg-muted rounded-md transition-colors"
-                        title="Reply"
+                        title={copy.messages.reply}
                     >
                         <Reply size={14} />
                     </button>
                     <button 
                         onClick={() => handleCopy(message.body)}
                         className="p-1.5 text-foreground/50 hover:text-foreground hover:bg-muted rounded-md transition-colors"
-                        title="Copy text"
+                        title={copy.messages.copy}
                     >
                         <Copy size={14} />
                     </button>
@@ -230,11 +233,11 @@ export function MessagePanel({
                 <MessageSquareOff size={32} />
               </div>
               <div className="space-y-1">
-                <p className="font-bold text-lg">No messages yet</p>
+                <p className="font-bold text-lg">{copy.messages.noMessages}</p>
                 <p className="text-sm max-w-xs mx-auto">
                   {room?.kind === 'system'
-                    ? 'System updates will appear here as soon as the runtime has something to report.'
-                    : `Start the conversation in ${room?.label ?? '#room'} and new messages will stream in here.`}
+                    ? copy.messages.noMessagesSystem
+                    : copy.messages.noMessagesRoom(formatRoomTitle(room, copy.common.unknownRoom))}
                 </p>
               </div>
             </div>
@@ -276,7 +279,7 @@ export function MessagePanel({
                     type="button"
                     className="p-2.5 text-foreground/40 hover:text-foreground hover:bg-foreground/5 rounded-xl transition-colors"
                     onClick={() => fileInputRef.current?.click()}
-                    title="Attach Image (<40KB)"
+                    title={copy.messages.attachImage}
                   >
                       <Paperclip size={18} />
                   </button>
@@ -284,7 +287,7 @@ export function MessagePanel({
                     type="button"
                     className="p-2.5 text-foreground/40 hover:text-foreground hover:bg-foreground/5 rounded-xl transition-colors"
                     onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                    title="Insert Emoji"
+                    title={copy.messages.insertEmoji}
                   >
                       <Smile size={18} />
                   </button>
