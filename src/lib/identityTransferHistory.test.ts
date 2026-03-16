@@ -32,6 +32,24 @@ describe('identityTransferHistory', () => {
     })
   })
 
+  it('stores rollback events with replaced fingerprints', () => {
+    const history = appendIdentityTransferEvent([], {
+      action: 'rollback',
+      channel: 'manual',
+      activeFingerprint: 'ff:00',
+      replacedFingerprint: 'aa:bb',
+      packageSourceFingerprint: 'ff:00',
+      packageExportedAt: '2026-03-16T11:00:00.000Z',
+      occurredAt: '2026-03-16T11:05:00.000Z',
+    })
+
+    expect(history[0]).toMatchObject({
+      action: 'rollback',
+      activeFingerprint: 'ff:00',
+      replacedFingerprint: 'aa:bb',
+    })
+  })
+
   it('caps the stored history length', () => {
     let history = [] as ReturnType<typeof appendIdentityTransferEvent>
 

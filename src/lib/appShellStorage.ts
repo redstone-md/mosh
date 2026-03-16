@@ -67,6 +67,7 @@ export function createDefaultPreferences(): ShellPreferences {
     mutedRooms: [],
     lastReadMessageIds: {},
     identityTransferHistory: [],
+    identityRollbackSnapshots: [],
     trustedPeers: {},
   }
 }

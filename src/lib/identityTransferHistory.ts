@@ -20,7 +20,16 @@ type ImportTransferEventInput = BaseTransferEventInput & {
   replacedFingerprint: string
 }
 
-export type IdentityTransferEventInput = ExportTransferEventInput | ImportTransferEventInput
+type RollbackTransferEventInput = BaseTransferEventInput & {
+  action: 'rollback'
+  activeFingerprint: string
+  replacedFingerprint: string
+}
+
+export type IdentityTransferEventInput =
+  | ExportTransferEventInput
+  | ImportTransferEventInput
+  | RollbackTransferEventInput
 
 export function appendIdentityTransferEvent(
   history: IdentityTransferEvent[],

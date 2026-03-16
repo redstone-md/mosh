@@ -11,6 +11,7 @@ import {
   readIdentityTransferSummary,
 } from '../../lib/identityTransfer'
 import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
+import type { SigningIdentity } from '../../lib/appShellSchemas'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -21,9 +22,10 @@ import { IdentityTransferHandoffDialog } from './IdentityTransferHandoffDialog'
 type IdentityTransferPanelProps = {
   onImported: () => void | Promise<void>
   onRecordEvent: (event: IdentityTransferEventInput) => void
+  onSaveRollbackSnapshot: (identity: SigningIdentity, source: 'import' | 'rollback') => void
 }
 
-export function IdentityTransferPanel({ onImported, onRecordEvent }: IdentityTransferPanelProps) {
+export function IdentityTransferPanel({ onImported, onRecordEvent, onSaveRollbackSnapshot }: IdentityTransferPanelProps) {
   const { copy } = useI18n()
   const [passphrase, setPassphrase] = useState('')
   const [transferPackage, setTransferPackage] = useState('')
@@ -63,13 +65,15 @@ export function IdentityTransferPanel({ onImported, onRecordEvent }: IdentityTra
       const identity = await importIdentityTransferPackage(transferPackage, passphrase)
       await replaceSigningIdentity(identity)
       return {
+        previousIdentity,
         previousFingerprint: previousIdentity.fingerprint,
         importedFingerprint: identity.fingerprint,
         summary: readIdentityTransferSummary(transferPackage),
       }
     },
-    onSuccess: async ({ previousFingerprint, importedFingerprint, summary }) => {
+    onSuccess: async ({ previousIdentity, previousFingerprint, importedFingerprint, summary }) => {
       setErrorNote(null)
+      onSaveRollbackSnapshot(previousIdentity, 'import')
       onRecordEvent({
         action: 'import',
         channel: 'manual',

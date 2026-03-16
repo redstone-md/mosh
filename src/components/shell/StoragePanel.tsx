@@ -2,12 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import toast from 'react-hot-toast'
 
-import type { IdentityTransferEvent } from '../../lib/appShellSchemas'
+import type { IdentityRollbackSnapshot, IdentityTransferEvent, SigningIdentity } from '../../lib/appShellSchemas'
 import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
 import { desktopStorageClient } from '../../lib/desktopStorageClient'
 import { isTauriEnvironment } from '../../lib/tauriEnv'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
+import { IdentityRollbackPanel } from './IdentityRollbackPanel'
 import { IdentityTransferHistoryPanel } from './IdentityTransferHistoryPanel'
 import { IdentityTransferPanel } from './IdentityTransferPanel'
 
@@ -18,11 +19,23 @@ function createBackupFileName() {
 
 type StoragePanelProps = {
   identityTransferHistory: IdentityTransferEvent[]
+  identityRollbackSnapshots: IdentityRollbackSnapshot[]
+  activeIdentityFingerprint: string
   onRecordTransferEvent: (event: IdentityTransferEventInput) => void
+  onSaveRollbackSnapshot: (identity: SigningIdentity, source: 'import' | 'rollback') => void
+  onRestoreRollbackSnapshot: (snapshotId: string) => Promise<void>
   onRestore: () => void | Promise<void>
 }
 
-export function StoragePanel({ identityTransferHistory, onRecordTransferEvent, onRestore }: StoragePanelProps) {
+export function StoragePanel({
+  identityTransferHistory,
+  identityRollbackSnapshots,
+  activeIdentityFingerprint,
+  onRecordTransferEvent,
+  onSaveRollbackSnapshot,
+  onRestoreRollbackSnapshot,
+  onRestore,
+}: StoragePanelProps) {
   const { copy } = useI18n()
   const desktopOnly = isTauriEnvironment()
   const queryClient = useQueryClient()
@@ -90,6 +103,19 @@ export function StoragePanel({ identityTransferHistory, onRecordTransferEvent, o
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : copy.storage.unavailable)
+    },
+  })
+  const restoreRollback = useMutation({
+    mutationFn: async (snapshotId: string) => {
+      await onRestoreRollbackSnapshot(snapshotId)
+      return snapshotId
+    },
+    onSuccess: async () => {
+      await onRestore()
+      toast.success(copy.identityTransfer.rollbackRestored)
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : copy.identityTransfer.importFailed)
     },
   })
 
@@ -187,7 +213,17 @@ export function StoragePanel({ identityTransferHistory, onRecordTransferEvent, o
         </div>
       </div>
 
-      <IdentityTransferPanel onImported={onRestore} onRecordEvent={onRecordTransferEvent} />
+      <IdentityTransferPanel
+        onImported={onRestore}
+        onRecordEvent={onRecordTransferEvent}
+        onSaveRollbackSnapshot={onSaveRollbackSnapshot}
+      />
+      <IdentityRollbackPanel
+        snapshots={identityRollbackSnapshots}
+        activeFingerprint={activeIdentityFingerprint}
+        restoringSnapshotId={restoreRollback.variables}
+        onRestore={(snapshotId) => restoreRollback.mutate(snapshotId)}
+      />
       <IdentityTransferHistoryPanel history={identityTransferHistory} />
     </div>
   )

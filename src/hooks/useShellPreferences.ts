@@ -6,9 +6,11 @@ import {
   ensureSigningIdentity,
   loadShellBootstrap,
   regenerateSigningIdentity,
+  replaceSigningIdentity,
   savePreferences,
 } from '../lib/appShellStorage'
 import { appendIdentityTransferEvent, type IdentityTransferEventInput } from '../lib/identityTransferHistory'
+import { appendIdentityRollbackSnapshot, promoteRollbackSnapshot } from '../lib/identityRollback'
 
 export function useShellPreferences() {
   const bootstrapHydratedRef = useRef(false)
@@ -63,6 +65,27 @@ export function useShellPreferences() {
       const identity = await regenerateSigningIdentity()
       setIdentityFingerprint(identity.fingerprint)
       return identity
+    },
+    saveIdentityRollbackSnapshot: (identity: Awaited<ReturnType<typeof ensureSigningIdentity>>, source: 'import' | 'rollback') => {
+      setPreferences((current) => ({
+        ...current,
+        identityRollbackSnapshots: appendIdentityRollbackSnapshot(current.identityRollbackSnapshots, identity, source),
+      }))
+    },
+    restoreIdentityRollbackSnapshot: async (snapshotId: string) => {
+      const selectedSnapshot = preferences.identityRollbackSnapshots.find((snapshot) => snapshot.id === snapshotId)
+      if (!selectedSnapshot) {
+        throw new Error('Rollback snapshot not found.')
+      }
+
+      const currentIdentity = await ensureSigningIdentity()
+      const restoredIdentity = await replaceSigningIdentity(selectedSnapshot.identity)
+      setIdentityFingerprint(restoredIdentity.fingerprint)
+      setPreferences((current) => ({
+        ...current,
+        identityRollbackSnapshots: promoteRollbackSnapshot(current.identityRollbackSnapshots, snapshotId, currentIdentity),
+      }))
+      return selectedSnapshot
     },
     recordIdentityTransferEvent: (event: IdentityTransferEventInput) => {
       setPreferences((current) => ({

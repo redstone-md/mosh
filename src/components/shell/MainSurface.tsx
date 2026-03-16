@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import type { ChannelType, IdentityTransferEvent, LanguagePreference, RoomGroup, ThemeId } from '../../lib/appShellSchemas'
+import type {
+  ChannelType,
+  IdentityRollbackSnapshot,
+  IdentityTransferEvent,
+  LanguagePreference,
+  RoomGroup,
+  SigningIdentity,
+  ThemeId,
+} from '../../lib/appShellSchemas'
 import type { IdentityTransferEventInput } from '../../lib/identityTransferHistory'
 import { describeArchiveStateLabel } from '../../lib/i18n'
 import type { MeshInvitePayload } from '../../lib/meshInvite'
@@ -76,6 +84,7 @@ type MainSurfaceProps = {
   trustedCount: number
   reviewCount: number
   identityTransferHistory: IdentityTransferEvent[]
+  identityRollbackSnapshots: IdentityRollbackSnapshot[]
   pinnedMessages: Message[]
   pinnedMessageIds: string[]
   publishPending: boolean
@@ -102,6 +111,8 @@ type MainSurfaceProps = {
   onTogglePeerTrust: (peer: PeerSummary) => void
   onForgetPeer: (peerId: string) => void
   onRecordTransferEvent: (event: IdentityTransferEventInput) => void
+  onSaveRollbackSnapshot: (identity: SigningIdentity, source: 'import' | 'rollback') => void
+  onRestoreRollbackSnapshot: (snapshotId: string) => Promise<void>
   onThemeChange: (theme: ThemeId) => void
   onLanguagePreferenceChange: (value: 'system' | 'en' | 'ru') => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
@@ -141,6 +152,7 @@ export function MainSurface({
   trustedCount,
   reviewCount,
   identityTransferHistory,
+  identityRollbackSnapshots,
   pinnedMessages,
   pinnedMessageIds,
   publishPending,
@@ -167,6 +179,8 @@ export function MainSurface({
   onTogglePeerTrust,
   onForgetPeer,
   onRecordTransferEvent,
+  onSaveRollbackSnapshot,
+  onRestoreRollbackSnapshot,
   onThemeChange,
   onLanguagePreferenceChange,
   onRuntimeDraftChange,
@@ -337,6 +351,8 @@ export function MainSurface({
         roomTypes={roomTypes}
         selectedGroupId={preferences.selectedGroupId}
         identityTransferHistory={identityTransferHistory}
+        identityRollbackSnapshots={identityRollbackSnapshots}
+        activeIdentityFingerprint={identityFingerprint}
         runtimeError={runtimeSettingsError}
         archiveLabel={archiveLabel}
         archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
@@ -353,6 +369,8 @@ export function MainSurface({
         onSaveWorkspace={onSaveWorkspace}
         onForgetPeer={onForgetPeer}
         onRecordTransferEvent={onRecordTransferEvent}
+        onSaveRollbackSnapshot={onSaveRollbackSnapshot}
+        onRestoreRollbackSnapshot={onRestoreRollbackSnapshot}
         onRestoreStorage={onRestoreStorage}
         onResetOnboarding={onResetOnboarding}
       />
