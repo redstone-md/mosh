@@ -2,68 +2,142 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
-  --color-background: #050806;
-  --color-foreground: #eef6ef;
-  --color-primary: #5ac688;
-  --color-secondary: #1a2b1e;
-  --color-muted: #0d1711;
-  --color-accent: #b6ee7a;
-  --color-border: rgba(90, 198, 136, 0.1);
-  
-  --font-sans: 'Segoe UI Variable Display', 'Aptos', 'Segoe UI', sans-serif;
+  --color-background: var(--app);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-secondary: var(--panel-strong);
+  --color-muted: var(--panel);
+  --color-accent: var(--accent-soft);
+  --color-border: var(--border);
+  --font-sans: 'Aptos', 'Segoe UI Variable Text', sans-serif;
 }
 
 @layer base {
   :root {
-    --background: #050806;
-    --foreground: #eef6ef;
-    --primary: #5ac688;
-    --secondary: #1a2b1e;
-    --muted: #0d1711;
-    --accent: #b6ee7a;
-    --border: rgba(90, 198, 136, 0.1);
+    --foreground: #f1f5f2;
+    --muted-foreground: #99a5a0;
+    --primary: #4ea36d;
+    --primary-foreground: #07110b;
+    --ring: #6eb788;
+    --danger: #d46d63;
+    --accent-soft: rgba(78, 163, 109, 0.16);
+    --accent-foreground: #cde6d4;
+    --accent-forest: #356c49;
+    --accent-slate: #4e6476;
+    --accent-sand: #c5a36d;
+    --accent-ember: #9b5b4f;
+    --ink-dark: #1f1a16;
+    --scrollbar: rgba(255, 255, 255, 0.16);
+    --message: #d8e0db;
+  }
+
+  :root,
+  :root[data-theme='moss'] {
+    --app: #121816;
+    --rail: #0d1110;
+    --sidebar: #171d1b;
+    --chat: #1b2220;
+    --panel: #202826;
+    --panel-strong: #252f2c;
+    --panel-hover: #2b3632;
+    --input: #131917;
+    --border: rgba(126, 144, 135, 0.18);
+  }
+
+  :root[data-theme='graphite'] {
+    --app: #18191c;
+    --rail: #101114;
+    --sidebar: #1b1d21;
+    --chat: #202329;
+    --panel: #262a31;
+    --panel-strong: #2b3038;
+    --panel-hover: #333844;
+    --input: #15171b;
+    --border: rgba(150, 159, 177, 0.18);
+    --primary: #7a8ca8;
+    --primary-foreground: #0d1116;
+    --ring: #92a6c6;
+    --accent-soft: rgba(122, 140, 168, 0.18);
+    --accent-foreground: #d9e2ef;
+    --message: #dde3ea;
+  }
+
+  :root[data-theme='linen'] {
+    --app: #f3eee7;
+    --rail: #ebe4db;
+    --sidebar: #f8f4ee;
+    --chat: #fbf8f3;
+    --panel: #ffffff;
+    --panel-strong: #f0e8dd;
+    --panel-hover: #e8dfd1;
+    --input: #ffffff;
+    --border: rgba(102, 82, 60, 0.16);
+    --foreground: #2f251d;
+    --muted-foreground: #746355;
+    --primary: #9f6a41;
+    --primary-foreground: #fff8f0;
+    --ring: #c58b5d;
+    --accent-soft: rgba(159, 106, 65, 0.14);
+    --accent-foreground: #71431e;
+    --message: #3d3128;
+    --scrollbar: rgba(72, 57, 42, 0.2);
+  }
+
+  :root[data-theme='ember'] {
+    --app: #1d1614;
+    --rail: #140f0d;
+    --sidebar: #221917;
+    --chat: #271d1a;
+    --panel: #2e221e;
+    --panel-strong: #372823;
+    --panel-hover: #442f29;
+    --input: #191210;
+    --border: rgba(196, 140, 120, 0.18);
+    --primary: #c27b64;
+    --primary-foreground: #21130f;
+    --ring: #df9a84;
+    --accent-soft: rgba(194, 123, 100, 0.18);
+    --accent-foreground: #f1d5cd;
+    --message: #ead7d1;
   }
 
   * {
     @apply border-border;
+    box-sizing: border-box;
   }
 
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    @apply bg-foreground/10 rounded-full;
-  }
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-foreground/20;
-  }
-
-  body {
-    @apply bg-background text-foreground font-sans antialiased;
-    margin: 0;
-    min-height: 100vh;
-  }
-
+  html,
+  body,
   #app {
     min-height: 100vh;
   }
-}
 
-@utility container-center {
-  margin-inline: auto;
-  padding-inline: 2rem;
-  width: 100%;
-  max-width: 1200px;
-}
+  body {
+    margin: 0;
+    background: var(--app);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+  }
 
-@utility glass {
-  @apply bg-background/80 backdrop-blur-xl border border-border;
-}
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
 
-@utility card {
-  @apply bg-muted/50 border border-border rounded-2xl p-6 shadow-2xl;
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar);
+    border-radius: 999px;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
 }

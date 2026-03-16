@@ -1,68 +1,45 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChatHeader } from './components/ChatHeader'
-import { CreateChannelModal } from './components/CreateChannelModal'
-import { DiagnosticsPanel } from './components/DiagnosticsPanel'
-import { MessagePanel } from './components/MessagePanel'
-import { OnboardingScreen } from './components/OnboardingScreen'
-import { PeerPanel } from './components/PeerPanel'
-import { ProfileEditorPanel } from './components/ProfileEditorPanel'
-import { QuickActionsPanel } from './components/QuickActionsPanel'
+import { BootstrapErrorScreen, LoadingScreen } from './components/AppBootstrapState'
+import { ShellToaster } from './components/ShellToaster'
+import { CallDock } from './components/shell/CallDock'
+import { ConversationSidebar } from './components/shell/ConversationSidebar'
+import { ConversationView } from './components/shell/ConversationView'
+import { CreateSpaceDialog } from './components/shell/CreateSpaceDialog'
+import { IntroSurface } from './components/shell/IntroSurface'
+import { MemberSidebar } from './components/shell/MemberSidebar'
+import { OnboardingSurface } from './components/shell/OnboardingSurface'
+import { ServerRail } from './components/shell/ServerRail'
+import { SettingsDialog } from './components/shell/SettingsDialog'
 import { Titlebar } from './components/Titlebar'
-import { Sidebar } from './components/Sidebar'
 import { useDesktopErrorDialogs } from './hooks/useDesktopErrorDialogs'
 import { useDesktopNotifications } from './hooks/useDesktopNotifications'
+import { useMediaSession } from './hooks/useMediaSession'
+import { useSignedChatArchive } from './hooks/useSignedChatArchive'
+import { findRoomById, getVisiblePeers, sameRuntimeDraft, selectRoomFallback, toRuntimeDraft } from './lib/appShellSelectors'
+import { ensureSigningIdentity } from './lib/appShellStorage'
+import { getChannelType, hasPersistedPreferences, loadPreferences, reconcileGroups, reconcileRoomTypes, savePreferences } from './lib/appShellStorage'
+import { dedupeMessages, describeArchiveState, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
 import { getFallbackRoom } from './lib/fallbacks'
-import { cn } from './lib/utils'
-
-import { Toaster } from 'react-hot-toast'
-
-import { MeshLoader } from './components/MeshLoader'
-
-type ShellView = 'chat' | 'profile'
+import type { ChannelType, RoomGroup, ThemeId } from './lib/appShellSchemas'
+import type { UpdateRuntimeSettingsInput } from './lib/schemas'
 
 export function App() {
-  const [selectedRoomId, setSelectedRoomId] = useState('lobby')
-  const [selectedView, setSelectedView] = useState<ShellView>('chat')
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [onboardingDismissed, setOnboardingDismissed] = useState(false)
-  const [createModalOpen, setCreateModalOpen] = useState(false)
-  const [roomSearch, setRoomSearch] = useState('')
-  const [nicknameDraft, setNicknameDraft] = useState<string | null>(null)
-  const [meshDraft, setMeshDraft] = useState<string | null>(null)
-  const [listenPortDraft, setListenPortDraft] = useState<string | null>(null)
-  const [initialRoomDraft, setInitialRoomDraft] = useState<string | null>(null)
-  const [startupPeerDraft, setStartupPeerDraft] = useState<string | null>(null)
-  const [trackerModeDraft, setTrackerModeDraft] = useState<'default' | 'disabled' | null>(
-    null,
-  )
-  const [lanDiscoveryDraft, setLanDiscoveryDraft] = useState<boolean | null>(null)
-  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null)
-  const [avatarFileName, setAvatarFileName] = useState<string | null>(null)
-  const [roomDraft, setRoomDraft] = useState('design-reviews')
-  const [peerDraft, setPeerDraft] = useState('')
-  const [directDraft, setDirectDraft] = useState('')
-  const [messageDraft, setMessageDraft] = useState('')
   const queryClient = useQueryClient()
-
-  useEffect(() => {
-    return () => {
-      if (avatarPreviewUrl?.startsWith('blob:')) {
-        URL.revokeObjectURL(avatarPreviewUrl)
-      }
-    }
-  }, [avatarPreviewUrl])
+  const settingsHydratedRef = useRef(false)
+  const runtimeAutoStartRef = useRef(false)
+  const [preferences, setPreferences] = useState(loadPreferences)
+  const [messageDraft, setMessageDraft] = useState('')
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [identityFingerprint, setIdentityFingerprint] = useState<string>('')
+  const [introComplete, setIntroComplete] = useState(() => hasPersistedPreferences())
 
   const snapshot = useQuery({
     queryKey: ['desktop-snapshot'],
     queryFn: () => desktopStatusClient.getSnapshot(),
     refetchInterval: 1500,
-  })
-
-  useDesktopNotifications({
-    snapshot: snapshot.data,
-    selectedRoomId,
   })
 
   const toggleRuntime = useMutation({
@@ -73,411 +50,495 @@ export function App() {
   })
 
   const updateRuntimeSettings = useMutation({
-    mutationFn: () =>
-      desktopStatusClient.updateRuntimeSettings({
-        nickname: nicknameDraft ?? snapshot.data?.settings.nickname ?? 'operator',
-        meshId: meshDraft ?? snapshot.data?.settings.meshId ?? 'mosh-chat',
-        listenPort: Number(listenPortDraft ?? snapshot.data?.settings.listenPort ?? 0),
-        initialRoom: initialRoomDraft ?? snapshot.data?.settings.initialRoom ?? 'lobby',
-        startupPeer: startupPeerDraft ?? snapshot.data?.settings.startupPeer ?? '',
-        trackerMode: trackerModeDraft ?? snapshot.data?.settings.trackerMode ?? 'default',
-        lanDiscoveryEnabled:
-          lanDiscoveryDraft ?? snapshot.data?.settings.lanDiscoveryEnabled ?? true,
-      }),
+    mutationFn: (draft: UpdateRuntimeSettingsInput) => desktopStatusClient.updateRuntimeSettings(draft),
     onSuccess: (data) => {
       queryClient.setQueryData(['desktop-snapshot'], data)
-      setSelectedRoomId(data.settings.initialRoom)
+      setPreferences((current) => ({
+        ...current,
+        runtimeDraft: toRuntimeDraft(data.settings),
+        selectedRoomId: data.settings.initialRoom,
+      }))
     },
   })
 
   const subscribeRoom = useMutation({
-    mutationFn: (roomToJoin?: string) => desktopStatusClient.subscribeRoom({ room: roomToJoin ?? roomDraft }),
-    onSuccess: (data, roomToJoin) => {
+    mutationFn: (room: string) => desktopStatusClient.subscribeRoom({ room }),
+    onSuccess: (data, room) => {
       queryClient.setQueryData(['desktop-snapshot'], data)
-      const normalizedRoom = (roomToJoin ?? roomDraft).replace(/^#/, '').toLowerCase()
-      setSelectedRoomId(normalizedRoom)
-      setCreateModalOpen(false)
-      setSidebarOpen(false)
-      setSelectedView('chat')
-    },
-  })
-
-  const unsubscribeRoom = useMutation({
-    mutationFn: (roomToLeave: string) => desktopStatusClient.unsubscribeRoom({ room: roomToLeave }),
-    onSuccess: (data, roomToLeave) => {
-      queryClient.setQueryData(['desktop-snapshot'], data)
-      if (selectedRoomId === roomToLeave) {
-         setSelectedRoomId(data.settings.initialRoom)
-      }
-    },
-  })
-
-  const connectPeer = useMutation({
-    mutationFn: () => desktopStatusClient.connectPeer({ addr: peerDraft }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(['desktop-snapshot'], data)
-      setPeerDraft('')
+      setPreferences((current) => ({
+        ...current,
+        selectedDock: 'group',
+        selectedRoomId: room.replace(/^#/, '').toLowerCase(),
+      }))
     },
   })
 
   const openDirectRoom = useMutation({
-    mutationFn: (target?: string) =>
-      desktopStatusClient.openDirectRoom({ target: target ?? directDraft }),
-    onSuccess: (data, target) => {
+    mutationFn: (target: string) => desktopStatusClient.openDirectRoom({ target }),
+    onSuccess: (data) => {
       queryClient.setQueryData(['desktop-snapshot'], data)
-      const targetLabel = (target ?? directDraft).trim().toLowerCase()
-      const directRoom =
-        data.rooms.find((room) => room.label.toLowerCase() === `@${targetLabel}`) ??
+      const nextRoom =
+        data.rooms.find((room) => room.kind === 'dm' && room.id !== preferences.selectedRoomId) ??
         data.rooms.find((room) => room.kind === 'dm')
-      if (directRoom) {
-        setSelectedRoomId(directRoom.id)
+      if (nextRoom) {
+        setPreferences((current) => ({
+          ...current,
+          selectedDock: 'home',
+          selectedRoomId: nextRoom.id,
+        }))
       }
-      setDirectDraft('')
-      setSelectedView('chat')
     },
   })
 
   const publishMessage = useMutation({
-    mutationFn: () =>
+    mutationFn: ({ roomId, body }: { roomId: string; body: string }) =>
       desktopStatusClient.publishMessage({
-        room: selectedRoomId,
-        body: messageDraft,
+        room: roomId,
+        body,
       }),
-    onSuccess: (updatedSnapshot) => {
-      queryClient.setQueryData(['desktop-snapshot'], updatedSnapshot)
+    onSuccess: (data) => {
+      queryClient.setQueryData(['desktop-snapshot'], data)
       setMessageDraft('')
     },
   })
 
-  const settingsError = updateRuntimeSettings.error?.message
-  const actionError =
-    subscribeRoom.error?.message ??
-    connectPeer.error?.message ??
-    openDirectRoom.error?.message
-  const sendError = publishMessage.error?.message
-  const runtimeError = toggleRuntime.error?.message
+  const mediaSession = useMediaSession(snapshot.data)
 
-  useDesktopErrorDialogs({
-    errors: [settingsError, actionError, sendError, runtimeError].filter(
-      (value): value is string => Boolean(value),
-    ),
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      savePreferences(preferences)
+    }, 120)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [preferences])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = preferences.theme
+  }, [preferences.theme])
+
+  useEffect(() => {
+    void ensureSigningIdentity().then((identity) => {
+      setIdentityFingerprint(identity.fingerprint)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!snapshot.data || settingsHydratedRef.current) {
+      return
+    }
+    settingsHydratedRef.current = true
+
+    if (!sameRuntimeDraft(snapshot.data.settings, preferences.runtimeDraft)) {
+      void updateRuntimeSettings.mutateAsync(preferences.runtimeDraft).catch(() => {
+        settingsHydratedRef.current = false
+      })
+    }
+  }, [preferences.runtimeDraft, snapshot.data, updateRuntimeSettings])
+
+  useEffect(() => {
+    if (!snapshot.data || !preferences.onboardingCompleted) {
+      return
+    }
+    if (!settingsHydratedRef.current || runtimeAutoStartRef.current) {
+      return
+    }
+    if (snapshot.data.runtime.state !== 'Runtime offline') {
+      return
+    }
+
+    runtimeAutoStartRef.current = true
+    void toggleRuntime.mutateAsync().catch(() => undefined)
+  }, [preferences.onboardingCompleted, snapshot.data, toggleRuntime])
+
+  useDesktopNotifications({
+    snapshot: snapshot.data,
+    selectedRoomId: preferences.selectedRoomId,
   })
 
-  const peerNames = React.useMemo(() => {
-    if (!snapshot.data) return []
-    
-    const settings = snapshot.data.settings
-    const rooms = snapshot.data.rooms.length > 0 ? snapshot.data.rooms : [getFallbackRoom()]
-    const visibleRooms = rooms
-      .filter((room) => room.id !== '__moss_chat_control__')
-      .sort((left, right) => {
-        if (left.kind === 'system' && right.kind !== 'system') {
-          return 1
-        }
-        if (left.kind !== 'system' && right.kind === 'system') {
-          return -1
-        }
-        return left.label.localeCompare(right.label)
-      })
-    const computedVisibleRooms = visibleRooms.length > 0 ? visibleRooms : [getFallbackRoom()]
-    
-    const activeRoom =
-        computedVisibleRooms.find((room) => room.id === selectedRoomId) ??
-        computedVisibleRooms.find((room) => room.id === settings.initialRoom) ??
-        computedVisibleRooms[0]
+  useDesktopErrorDialogs({
+    errors: [
+      snapshot.error instanceof Error ? snapshot.error.message : undefined,
+      toggleRuntime.error?.message,
+      updateRuntimeSettings.error?.message,
+      subscribeRoom.error?.message,
+      openDirectRoom.error?.message,
+      publishMessage.error?.message,
+      mediaSession.state.error ?? undefined,
+    ].filter((value): value is string => Boolean(value)),
+  })
 
-    const visiblePeers = snapshot.data.peers.filter((peer) =>
-        activeRoom.kind === 'system'
-        ? true
-        : peer.rooms.includes(activeRoom.label) || peer.rooms.includes(`#${activeRoom.id}`)
-    )
-    return visiblePeers.map(p => p.status === 'self' ? p.displayName.replace(' (you)', '') : p.displayName)
-  }, [snapshot.data, selectedRoomId])
+  const data = snapshot.data
+  const runtimeDraft = preferences.runtimeDraft
+  const showOnboarding =
+    data?.runtime.state !== 'Runtime online' && !preferences.onboardingCompleted
+  const mentionablePeerNames = useMemo(
+    () =>
+      (data?.peers ?? [])
+        .filter((peer) => peer.status !== 'self')
+        .map((peer) => peer.displayName),
+    [data?.peers],
+  )
+  const visibleRooms = useMemo(
+    () => (data?.rooms.length ? data.rooms : [getFallbackRoom()]),
+    [data?.rooms],
+  )
+  const reconciledGroups = useMemo(
+    () => reconcileGroups(preferences.groups, visibleRooms),
+    [preferences.groups, visibleRooms],
+  )
+  const reconciledRoomTypes = useMemo(
+    () => reconcileRoomTypes(preferences.roomTypes, visibleRooms),
+    [preferences.roomTypes, visibleRooms],
+  )
+  const activeRoom = useMemo(
+    () =>
+      data
+        ? selectRoomFallback(
+            visibleRooms,
+            preferences.selectedDock,
+            reconciledGroups,
+            preferences.selectedGroupId,
+            preferences.selectedRoomId,
+            data.settings.initialRoom,
+          ) ?? getFallbackRoom()
+        : getFallbackRoom(),
+    [
+      data,
+      preferences.selectedDock,
+      preferences.selectedGroupId,
+      preferences.selectedRoomId,
+      reconciledGroups,
+      visibleRooms,
+    ],
+  )
+  const visiblePeers = useMemo(
+    () => (data ? getVisiblePeers(activeRoom, data.peers) : []),
+    [activeRoom, data],
+  )
+  const liveMessages = useMemo(
+    () =>
+      data
+        ? dedupeMessages(data.messages.filter((message) => message.roomId === activeRoom.id))
+        : [],
+    [activeRoom.id, data?.messages],
+  )
+  const archiveState = useSignedChatArchive(showOnboarding ? '__inactive__' : activeRoom.id, showOnboarding ? [] : liveMessages)
+
+  useEffect(() => {
+    if (JSON.stringify(reconciledGroups) === JSON.stringify(preferences.groups)) {
+      return
+    }
+    setPreferences((current) => ({
+      ...current,
+      groups: reconciledGroups,
+    }))
+  }, [preferences.groups, reconciledGroups])
+
+  useEffect(() => {
+    if (JSON.stringify(reconciledRoomTypes) === JSON.stringify(preferences.roomTypes)) {
+      return
+    }
+    setPreferences((current) => ({
+      ...current,
+      roomTypes: reconciledRoomTypes,
+    }))
+  }, [preferences.roomTypes, reconciledRoomTypes])
 
   if (snapshot.isPending) {
-    return (
-      <main className="h-screen flex items-center justify-center bg-background text-foreground/40 font-medium">
-        <MeshLoader />
-      </main>
-    )
+    return <LoadingScreen />
   }
 
   if (snapshot.isError) {
+    return <BootstrapErrorScreen message={snapshot.error.message} />
+  }
+
+  if (!data) {
+    return null
+  }
+
+  async function handleStartFromOnboarding() {
+    const updated = await updateRuntimeSettings.mutateAsync(preferences.runtimeDraft)
+    setPreferences((current) => ({
+      ...current,
+      onboardingCompleted: true,
+      selectedRoomId: updated.settings.initialRoom,
+    }))
+    if (updated.runtime.state !== 'Runtime online') {
+      runtimeAutoStartRef.current = true
+      void toggleRuntime.mutateAsync().catch(() => undefined)
+    }
+  }
+
+  function handleSkipOnboarding() {
+    setPreferences((current) => ({
+      ...current,
+      onboardingCompleted: true,
+    }))
+  }
+
+  async function handleSaveRuntime() {
+    await updateRuntimeSettings.mutateAsync(preferences.runtimeDraft)
+  }
+
+  function handleCreateGroup(group: Omit<RoomGroup, 'id'>) {
+    const nextId = `group-${Date.now().toString(36)}`
+    setPreferences((current) => ({
+      ...current,
+      selectedDock: 'group',
+      selectedGroupId: nextId,
+      groups: [
+        ...current.groups,
+        {
+          id: nextId,
+          ...group,
+        },
+      ],
+    }))
+  }
+
+  async function handleSendMessage() {
+    if (!activeRoom || messageDraft.trim().length === 0) {
+      return
+    }
+    await publishMessage.mutateAsync({
+      roomId: activeRoom.id,
+      body: messageDraft.trim(),
+    })
+  }
+
+  function handleThemeChange(theme: ThemeId) {
+    setPreferences((current) => ({
+      ...current,
+      theme,
+    }))
+  }
+
+  function handleRuntimeDraftChange(draft: UpdateRuntimeSettingsInput) {
+    setPreferences((current) => ({
+      ...current,
+      runtimeDraft: draft,
+    }))
+  }
+
+  function handleSaveWorkspace(
+    groups: RoomGroup[],
+    roomTypes: Record<string, ChannelType>,
+    selectedGroupId: string,
+  ) {
+    const nextGroups = reconcileGroups(groups, visibleRooms)
+    const nextRoomTypes = reconcileRoomTypes(roomTypes, visibleRooms)
+    const nextSelectedGroupId =
+      nextGroups.find((group) => group.id === selectedGroupId)?.id ?? nextGroups[0]?.id ?? 'mesh'
+
+    setPreferences((current) => ({
+      ...current,
+      groups: nextGroups,
+      roomTypes: nextRoomTypes,
+      selectedGroupId: nextSelectedGroupId,
+    }))
+  }
+
+  const mediaLabel =
+    mediaSession.state.activeRoomId
+      ? `${formatRoomTitle(visibleRooms.find((room) => room.id === mediaSession.state.activeRoomId))} · ${mediaSession.state.remoteStreams.length} peers`
+      : 'Voice idle'
+  const activeVoiceRoom = data.voiceRooms.find((room) => room.joined) ?? null
+
+  if (!introComplete) {
     return (
-      <main className="h-screen flex items-center justify-center bg-background p-6">
-        <section className="max-w-md w-full bg-muted/30 border border-border/20 rounded-3xl p-8 backdrop-blur-sm shadow-xl space-y-4">
-          <p className="text-xs uppercase tracking-widest text-red-400 font-bold">Bootstrap error</p>
-          <h1 className="text-2xl font-bold">Desktop shell did not start cleanly</h1>
-          <p className="text-foreground/60">{snapshot.error.message}</p>
-        </section>
-      </main>
+      <IntroSurface
+        runtime={data.runtime}
+        isBusy={toggleRuntime.isPending}
+        errorNote={toggleRuntime.error?.message}
+        onToggleRuntime={() => toggleRuntime.mutate()}
+        onComplete={() => setIntroComplete(true)}
+      />
     )
   }
 
-  const data = snapshot.data
-  const settings = data.settings
-  const rooms = data.rooms.length > 0 ? data.rooms : [getFallbackRoom()]
-  const nicknameValue = nicknameDraft ?? settings.nickname
-  const meshValue = meshDraft ?? settings.meshId
-  const listenPortValue = listenPortDraft ?? `${settings.listenPort}`
-  const initialRoomValue = initialRoomDraft ?? settings.initialRoom
-  const startupPeerValue = startupPeerDraft ?? settings.startupPeer
-  const trackerModeValue = trackerModeDraft ?? settings.trackerMode
-  const lanDiscoveryValue = lanDiscoveryDraft ?? settings.lanDiscoveryEnabled
-
-  const visibleRooms = (() => {
-    const filtered = rooms
-      .filter((room) => room.id !== '__moss_chat_control__')
-      .sort((left, right) => {
-        if (left.kind === 'system' && right.kind !== 'system') {
-          return 1
-        }
-        if (left.kind !== 'system' && right.kind === 'system') {
-          return -1
-        }
-        return left.label.localeCompare(right.label)
-      })
-    return filtered.length > 0 ? filtered : [getFallbackRoom()]
-  })()
-
-  const filteredRooms = (() => {
-    const needle = roomSearch.trim().toLowerCase()
-    if (!needle) {
-      return visibleRooms
-    }
-    return visibleRooms.filter((room) => room.label.toLowerCase().includes(needle))
-  })()
-
-  // Find joined channels
-  const activeChannelIds = new Set(data.diagnostics.activeChannels.map(c => c.replace(/^#/, '')))
-  // Also include the initial room to be safe, though activeChannels should have it
-  activeChannelIds.add(settings.initialRoom)
-
-  const sidebarChannels = filteredRooms.filter((room) => room.kind !== 'system' && activeChannelIds.has(room.id))
-  const sidebarUtilityRooms = filteredRooms.filter((room) => room.kind === 'system')
-
-  const activeRoom =
-    visibleRooms.find((room) => room.id === selectedRoomId) ??
-    visibleRooms.find((room) => room.id === settings.initialRoom) ??
-    visibleRooms[0]
-
-  const visibleMessages = data.messages.filter((message) => message.roomId === activeRoom.id)
-
-  const visiblePeers = data.peers.filter((peer) =>
-    activeRoom.kind === 'system'
-      ? true
-      : peer.rooms.includes(activeRoom.label) || peer.rooms.includes(`#${activeRoom.id}`),
-  )
-
-  async function applyAndStartRuntime() {    const updatedSnapshot = await updateRuntimeSettings.mutateAsync()
-    setSelectedRoomId(updatedSnapshot.settings.initialRoom)
-    if (updatedSnapshot.runtime.state !== 'Runtime online') {
-      const runningSnapshot = await toggleRuntime.mutateAsync()
-      setSelectedRoomId(runningSnapshot.settings.initialRoom)
-    }
-    setOnboardingDismissed(true)
-  }
-
-  function handleAvatarChange(file: File | null) {
-    if (avatarPreviewUrl?.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreviewUrl)
-    }
-    if (!file) {
-      setAvatarPreviewUrl(null)
-      setAvatarFileName(null)
-      return
-    }
-    setAvatarPreviewUrl(URL.createObjectURL(file))
-    setAvatarFileName(file.name)
-  }
-
-  const showOnboarding = data.runtime.state !== 'Runtime online' && !onboardingDismissed
-
   if (showOnboarding) {
     return (
-      <main className="h-screen w-screen flex flex-col bg-background overflow-hidden text-foreground">
-        <Titlebar
-          runtime={data.runtime}
-          onToggleRuntime={() => toggleRuntime.mutate()}
-          isBusy={toggleRuntime.isPending}
-          errorNote={runtimeError}
-        />
-        <div className="flex-1 flex overflow-y-auto">
-          <OnboardingScreen
-            nickname={nicknameValue}
-            meshId={meshValue}
-            listenPort={listenPortValue}
-            initialRoom={initialRoomValue}
-            startupPeer={startupPeerValue}
-            trackerMode={trackerModeValue}
-            lanDiscoveryEnabled={lanDiscoveryValue}
-            configPreview={settings.configPreview}
-            errorNote={settingsError ?? runtimeError}
-            isSaving={updateRuntimeSettings.isPending || toggleRuntime.isPending}
-            onNicknameChange={setNicknameDraft}
-            onMeshIdChange={setMeshDraft}
-            onListenPortChange={setListenPortDraft}
-            onInitialRoomChange={setInitialRoomDraft}
-            onStartupPeerChange={setStartupPeerDraft}
-            onTrackerModeChange={setTrackerModeDraft}
-            onLanDiscoveryChange={setLanDiscoveryDraft}
-            onSave={() => void applyAndStartRuntime()}
-            onSkip={() => setOnboardingDismissed(true)}
-          />
-        </div>
-      </main>
+      <OnboardingSurface
+        runtime={data.runtime}
+        theme={preferences.theme}
+        runtimeDraft={runtimeDraft}
+        isBusy={toggleRuntime.isPending || updateRuntimeSettings.isPending}
+        formErrorNote={toggleRuntime.error?.message ?? updateRuntimeSettings.error?.message}
+        titlebarErrorNote={toggleRuntime.error?.message}
+        onThemeChange={handleThemeChange}
+        onRuntimeDraftChange={handleRuntimeDraftChange}
+        onStart={() => void handleStartFromOnboarding()}
+        onSkip={handleSkipOnboarding}
+        onToggleRuntime={() => toggleRuntime.mutate()}
+        runtimeToggleBusy={toggleRuntime.isPending}
+      />
     )
   }
 
   return (
-    <main className="h-screen w-screen flex flex-col bg-background overflow-hidden text-foreground">
-      <Toaster 
-        toastOptions={{
-          style: {
-            background: '#1a2b1e',
-            color: '#eef6ef',
-            border: '1px solid rgba(90, 198, 136, 0.2)',
-          },
-          success: { iconTheme: { primary: '#5ac688', secondary: '#050806' } },
-        }}
-      />
+    <main className="flex h-screen flex-col bg-[var(--app)] text-foreground">
+      <ShellToaster />
+
       <Titlebar
         runtime={data.runtime}
         onToggleRuntime={() => toggleRuntime.mutate()}
         isBusy={toggleRuntime.isPending}
-        errorNote={runtimeError}
+        errorNote={toggleRuntime.error?.message}
       />
 
-      <section className="flex-1 flex min-h-0 relative">
-        <div className={cn(
-          "fixed inset-y-0 left-0 z-40 w-72 transform transition-transform duration-300 ease-in-out lg:relative lg:translate-x-0",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        )}>
-          <Sidebar
-            channels={sidebarChannels}
-            utilityRooms={sidebarUtilityRooms}
-            selectedRoomId={activeRoom.id}
-            roomSearch={roomSearch}
-            onRoomSearchChange={setRoomSearch}
-            onOpenCreateChannel={() => setCreateModalOpen(true)}
-            onSelectRoom={(roomId) => {
-              setSelectedRoomId(roomId)
-              setSelectedView('chat')
-              setSidebarOpen(false)
-            }}
-            onLeaveRoom={(roomId) => unsubscribeRoom.mutate(roomId)}
-            onOpenProfile={() => {
-              setSelectedView('profile')
-              setSidebarOpen(false)
-            }}
-          />
-        </div>
+      <section className="flex min-h-0 flex-1">
+        <ServerRail
+          groups={reconciledGroups}
+          selectedDock={preferences.selectedDock}
+          selectedGroupId={preferences.selectedGroupId}
+          onSelectHome={() =>
+            setPreferences((current) => ({
+              ...current,
+              selectedDock: 'home',
+              selectedRoomId:
+                findRoomById(visibleRooms, current.selectedRoomId)?.kind === 'dm'
+                  ? current.selectedRoomId
+                  : visibleRooms.find((room) => room.kind === 'dm')?.id ?? current.selectedRoomId,
+            }))
+          }
+          onSelectGroup={(groupId) =>
+            setPreferences((current) => ({
+              ...current,
+              selectedDock: 'group',
+              selectedGroupId: groupId,
+            }))
+          }
+          onOpenCreate={() => setCreateDialogOpen(true)}
+        />
 
-        {sidebarOpen && (
-          <div 
-            className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm lg:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
+        <ConversationSidebar
+          runtime={data.runtime}
+          currentUser={runtimeDraft.nickname}
+          selectedDock={preferences.selectedDock}
+          activeGroup={reconciledGroups.find((group) => group.id === preferences.selectedGroupId)}
+          rooms={visibleRooms}
+          peers={data.peers}
+          selectedRoomId={activeRoom.id}
+          mediaLabel={mediaLabel}
+          roomTypes={reconciledRoomTypes}
+          activeVoiceRoom={activeVoiceRoom}
+          onSelectRoom={(roomId) =>
+            setPreferences((current) => ({
+              ...current,
+              selectedRoomId: roomId,
+              selectedDock: findRoomById(visibleRooms, roomId)?.kind === 'dm' ? 'home' : current.selectedDock,
+            }))
+          }
+          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenCreate={() => setCreateDialogOpen(true)}
+          onOpenDirectRoom={(target) => openDirectRoom.mutate(target)}
+        />
 
-        <section className="flex-1 flex flex-col min-w-0">
-          <ChatHeader
-            room={activeRoom}
-            peers={visiblePeers}
-            runtime={data.runtime}
-            onToggleSidebar={() => setSidebarOpen((current) => !current)}
-          />
+        <ConversationView
+          room={activeRoom}
+          peers={visiblePeers}
+          messages={archiveState.mergedMessages}
+          archiveFingerprint={archiveState.archive?.signerFingerprint}
+          archiveVerified={archiveState.archive?.verified}
+          draft={messageDraft}
+          isSending={publishMessage.isPending}
+          mediaLive={mediaSession.state.status === 'live'}
+          mediaRoomId={mediaSession.state.activeRoomId}
+          channelType={getChannelType(activeRoom, reconciledRoomTypes)}
+          peerNames={mentionablePeerNames}
+          errorNote={publishMessage.error?.message}
+          onDraftChange={setMessageDraft}
+          onSend={() => void handleSendMessage()}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onStartVoice={() => {
+            if (mediaSession.state.activeRoomId === activeRoom.id) {
+              void mediaSession.leaveVoiceRoom()
+              return
+            }
+            void mediaSession.joinVoiceRoom(activeRoom.id, false)
+          }}
+          onStartScreenShare={() => {
+            if (mediaSession.state.activeRoomId === activeRoom.id) {
+              if (mediaSession.state.screenSharingEnabled) {
+                void mediaSession.stopScreenShare()
+              } else {
+                void mediaSession.startScreenShare()
+              }
+              return
+            }
+            void mediaSession.joinVoiceRoom(activeRoom.id, true)
+          }}
+        />
 
-          {selectedView === 'profile' ? (
-            <div className="flex-1 overflow-y-auto p-6 lg:p-12">
-              <div className="max-w-6xl mx-auto flex flex-col lg:flex-row gap-12">
-                <div className="flex-1">
-                  <ProfileEditorPanel
-                    nickname={nicknameValue}
-                    avatarPreviewUrl={avatarPreviewUrl}
-                    avatarFileName={avatarFileName}
-                    meshId={meshValue}
-                    initialRoom={initialRoomValue}
-                    startupPeer={startupPeerValue}
-                    listenPort={listenPortValue}
-                    trackerMode={trackerModeValue}
-                    lanDiscoveryEnabled={lanDiscoveryValue}
-                    configPreview={settings.configPreview}
-                    errorNote={settingsError}
-                    isSaving={updateRuntimeSettings.isPending}
-                    onAvatarChange={handleAvatarChange}
-                    onNicknameChange={setNicknameDraft}
-                    onMeshIdChange={setMeshDraft}
-                    onInitialRoomChange={setInitialRoomDraft}
-                    onStartupPeerChange={setStartupPeerDraft}
-                    onListenPortChange={setListenPortDraft}
-                    onTrackerModeChange={setTrackerModeDraft}
-                    onLanDiscoveryChange={setLanDiscoveryDraft}
-                    onSave={() => updateRuntimeSettings.mutate()}
-                  />
-                </div>
-
-                <div className="w-full lg:w-80 space-y-6">
-                  <QuickActionsPanel
-                    peerDraft={peerDraft}
-                    directDraft={directDraft}
-                    busyAction={
-                      connectPeer.isPending
-                        ? 'connect'
-                        : openDirectRoom.isPending
-                          ? 'dm'
-                          : undefined
-                    }
-                    errorNote={actionError}
-                    onPeerDraftChange={setPeerDraft}
-                    onDirectDraftChange={setDirectDraft}
-                    onConnectPeer={() => connectPeer.mutate()}
-                    onOpenDirectRoom={() => openDirectRoom.mutate(directDraft)}
-                  />
-                  <DiagnosticsPanel diagnostics={data.diagnostics} />
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 flex min-h-0">
-              <MessagePanel
-                room={activeRoom}
-                messages={visibleMessages}
-                draft={messageDraft}
-                peerNames={peerNames}
-                onDraftChange={setMessageDraft}
-                onSend={() => {
-                  publishMessage.mutate()
-                  setMessageDraft('')
-                }}
-                isSending={publishMessage.isPending}
-                errorNote={sendError}
-              />
-              <div className="hidden xl:block w-72 flex-shrink-0">
-                <PeerPanel
-                  peers={visiblePeers}
-                  onOpenDirectRoom={(target) => {
-                    setDirectDraft(target)
-                    openDirectRoom.mutate(target)
-                  }}
-                />
-              </div>
-            </div>
-          )}
-        </section>
+        <MemberSidebar
+          room={activeRoom}
+          peers={visiblePeers}
+          archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
+          archiveVerified={archiveState.archive?.verified}
+          mediaLabel={mediaLabel}
+          activeVoiceRoom={activeVoiceRoom}
+          onOpenDirectRoom={(target) => openDirectRoom.mutate(target)}
+        />
       </section>
 
-      {createModalOpen && (
-        <CreateChannelModal
-          roomDraft={roomDraft}
-          isCreating={subscribeRoom.isPending}
-          errorNote={subscribeRoom.error?.message}
-          onRoomDraftChange={setRoomDraft}
-          onCreate={(roomToJoin) => subscribeRoom.mutate(roomToJoin)}
-          onClose={() => setCreateModalOpen(false)}
-          availableRooms={visibleRooms.filter(r => r.kind !== 'system' && !activeChannelIds.has(r.id))}
-        />
-      )}
+      <CreateSpaceDialog
+        open={createDialogOpen}
+        availableChannels={visibleRooms.filter((room) => room.kind === 'channel')}
+        peers={data.peers}
+        onOpenChange={setCreateDialogOpen}
+        onCreateChannel={(room, channelType) => {
+          setPreferences((current) => ({
+            ...current,
+            roomTypes: {
+              ...current.roomTypes,
+              [room.replace(/^#/, '').toLowerCase()]: channelType,
+            },
+          }))
+          subscribeRoom.mutate(room)
+        }}
+        onCreateGroup={handleCreateGroup}
+        onCreateDirect={(target) => openDirectRoom.mutate(target)}
+      />
+
+      <SettingsDialog
+        open={settingsOpen}
+        theme={preferences.theme}
+        runtimeDraft={runtimeDraft}
+        groups={reconciledGroups}
+        rooms={visibleRooms}
+        roomTypes={reconciledRoomTypes}
+        selectedGroupId={preferences.selectedGroupId}
+        runtimeError={updateRuntimeSettings.error?.message}
+        archiveLabel={describeArchiveState(
+          archiveState.archive?.signerFingerprint ?? identityFingerprint,
+          archiveState.archive?.verified,
+        )}
+        archiveFingerprint={archiveState.archive?.signerFingerprint ?? identityFingerprint}
+        archiveVerified={archiveState.archive?.verified}
+        saving={updateRuntimeSettings.isPending}
+        onOpenChange={setSettingsOpen}
+        onThemeChange={handleThemeChange}
+        onRuntimeDraftChange={handleRuntimeDraftChange}
+        onSaveRuntime={() => void handleSaveRuntime()}
+        onSaveWorkspace={handleSaveWorkspace}
+        onResetOnboarding={() =>
+          setPreferences((current) => ({
+            ...current,
+            onboardingCompleted: false,
+          }))
+        }
+      />
+
+      <CallDock
+        roomLabel={formatRoomTitle(activeRoom)}
+        memberCount={visiblePeers.length}
+        mediaState={mediaSession.state}
+        onToggleMicrophone={mediaSession.toggleMicrophone}
+        onStopScreenShare={mediaSession.stopScreenShare}
+        onLeaveVoice={mediaSession.leaveVoiceRoom}
+      />
     </main>
   )
 }

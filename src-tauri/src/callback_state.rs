@@ -7,7 +7,10 @@ use serde_json::Value;
 
 use crate::{
     chat_protocol::{format_peer, normalize_room_id, ChatPayload, CONTROL_ROOM},
-    models::{Message, PeerSummary, RoomSummary},
+    models::{
+        CallStateSummary, Message, PeerSummary, RoomSummary, SignalingEvent,
+        VoiceParticipantSummary, VoiceRoomSummary,
+    },
 };
 
 #[derive(Default)]
@@ -19,9 +22,13 @@ pub struct CallbackState {
     presence_seen: BTreeSet<String>,
     peer_names: BTreeMap<String, String>,
     peer_rooms: BTreeMap<String, BTreeSet<String>>,
+    local_voice_room: Option<String>,
+    voice_room_members: BTreeMap<String, BTreeSet<String>>,
     messages: Vec<Message>,
     rooms: BTreeMap<String, RoomSummary>,
     peers: BTreeMap<String, PeerSummary>,
+    call_state: Option<CallStateSummary>,
+    signaling_events: Vec<SignalingEvent>,
 }
 
 impl CallbackState {
@@ -40,9 +47,13 @@ impl CallbackState {
         self.presence_seen.clear();
         self.peer_names.clear();
         self.peer_rooms.clear();
+        self.local_voice_room = None;
+        self.voice_room_members.clear();
         self.messages.clear();
         self.rooms.clear();
         self.peers.clear();
+        self.call_state = None;
+        self.signaling_events.clear();
         self.ensure_room("system", "System", "system");
         self.ensure_room("lobby", "#lobby", "channel");
     }
@@ -66,7 +77,7 @@ impl CallbackState {
         self.peers.insert(
             peer_id,
             PeerSummary {
-                id: "peer-self".to_string(),
+                id: self.local_peer_id.clone(),
                 display_name: format!("{nickname} (you)"),
                 route: "local shell".to_string(),
                 latency: "--".to_string(),
@@ -189,6 +200,10 @@ impl CallbackState {
                 self.peers.remove(&peer);
                 self.peer_rooms.remove(&peer);
                 self.presence_seen.remove(&peer);
+                let voice_rooms = self.voice_room_members.keys().cloned().collect::<Vec<_>>();
+                for room in voice_rooms {
+                    self.remove_voice_member(&room, &peer);
+                }
                 self.bump_room_participants();
                 self.push_message(
                     "lobby",
@@ -249,6 +264,101 @@ impl CallbackState {
 
     pub fn peers(&self) -> Vec<PeerSummary> {
         self.peers.values().cloned().collect()
+    }
+
+    pub fn current_call(&self) -> Option<CallStateSummary> {
+        self.call_state.clone()
+    }
+
+    pub fn signaling_events(&self) -> Vec<SignalingEvent> {
+        self.signaling_events.clone()
+    }
+
+    pub fn voice_rooms(&self) -> Vec<VoiceRoomSummary> {
+        let mut rooms = Vec::new();
+        for (room_id, members) in &self.voice_room_members {
+            let mut participants = members
+                .iter()
+                .map(|peer_id| VoiceParticipantSummary {
+                    peer_id: peer_id.clone(),
+                    peer_name: if peer_id == &self.local_peer_id {
+                        format!("{} (you)", self.local_nickname)
+                    } else {
+                        self.display_name_for_peer(peer_id)
+                    },
+                    is_self: peer_id == &self.local_peer_id,
+                })
+                .collect::<Vec<_>>();
+            participants.sort_by(|left, right| left.peer_name.cmp(&right.peer_name));
+            rooms.push(VoiceRoomSummary {
+                room_id: room_id.clone(),
+                joined: self.local_voice_room.as_deref() == Some(room_id.as_str()),
+                participants,
+            });
+        }
+        rooms
+    }
+
+    pub fn begin_outgoing_call(&mut self, peer_id: String, peer_name: String, room_id: String) -> String {
+        let call_id = format!("call-{}", self.next_message_id());
+        self.call_state = Some(CallStateSummary {
+            call_id: call_id.clone(),
+            peer_id,
+            peer_name,
+            room_id,
+            status: "dialing".to_string(),
+            direction: "outgoing".to_string(),
+        });
+        call_id
+    }
+
+    pub fn answer_current_call(&mut self) -> Result<CallStateSummary, String> {
+        let Some(call_state) = self.call_state.as_mut() else {
+            return Err("there is no incoming call to answer".to_string());
+        };
+        if call_state.status != "ringing" {
+            return Err("there is no incoming call to answer".to_string());
+        }
+        call_state.status = "active".to_string();
+        Ok(call_state.clone())
+    }
+
+    pub fn decline_current_call(&mut self) -> Result<CallStateSummary, String> {
+        let Some(call_state) = self.call_state.clone() else {
+            return Err("there is no incoming call to decline".to_string());
+        };
+        if call_state.status != "ringing" {
+            return Err("there is no incoming call to decline".to_string());
+        }
+        self.call_state = None;
+        Ok(call_state)
+    }
+
+    pub fn hangup_current_call(&mut self) -> Result<CallStateSummary, String> {
+        let Some(call_state) = self.call_state.clone() else {
+            return Err("there is no active call".to_string());
+        };
+        self.call_state = None;
+        Ok(call_state)
+    }
+
+    pub fn join_voice_room(&mut self, room: &str) {
+        let room_id = normalize_room_id(room);
+        if let Some(previous_room) = self.local_voice_room.replace(room_id.clone()) {
+            if previous_room != room_id {
+                self.remove_voice_member(&previous_room, &self.local_peer_id.clone());
+            }
+        }
+        self.voice_room_members
+            .entry(room_id)
+            .or_default()
+            .insert(self.local_peer_id.clone());
+    }
+
+    pub fn leave_voice_room(&mut self) -> Option<String> {
+        let room = self.local_voice_room.take()?;
+        self.remove_voice_member(&room, &self.local_peer_id.clone());
+        Some(room)
     }
 
     pub fn resolve_peer_target(&self, target: &str) -> Option<(String, String)> {
@@ -354,6 +464,119 @@ impl CallbackState {
                     "system",
                 );
             }
+            "call_invite" => {
+                let room = normalize_room_id(&payload.room);
+                let peer_name = self.display_name_for_peer(&sender_hex);
+                self.ensure_room(&room, &format!("@{peer_name}"), "dm");
+                self.call_state = Some(CallStateSummary {
+                    call_id: payload.call_id.clone(),
+                    peer_id: sender_hex.clone(),
+                    peer_name: peer_name.clone(),
+                    room_id: room,
+                    status: "ringing".to_string(),
+                    direction: "incoming".to_string(),
+                });
+                self.push_message(
+                    "system",
+                    "System",
+                    format!("Incoming call from {peer_name}."),
+                    "system",
+                );
+            }
+            "call_accept" => {
+                let peer_name = self.display_name_for_peer(&sender_hex);
+                if let Some(call_state) = self.call_state.as_mut() {
+                    if call_state.call_id == payload.call_id {
+                        call_state.status = "active".to_string();
+                    }
+                }
+                self.push_message(
+                    "system",
+                    "System",
+                    format!("Call connected: {peer_name}."),
+                    "system",
+                );
+            }
+            "call_decline" => {
+                let peer_name = self.display_name_for_peer(&sender_hex);
+                let should_clear = self
+                    .call_state
+                    .as_ref()
+                    .map(|state| state.call_id == payload.call_id)
+                    .unwrap_or(false);
+                if should_clear {
+                    self.call_state = None;
+                }
+                self.push_message(
+                    "system",
+                    "System",
+                    format!("Call declined by {peer_name}."),
+                    "system",
+                );
+            }
+            "call_hangup" => {
+                let peer_name = self.display_name_for_peer(&sender_hex);
+                let should_clear = self
+                    .call_state
+                    .as_ref()
+                    .map(|state| {
+                        state.call_id == payload.call_id || state.peer_id.eq_ignore_ascii_case(&sender_hex)
+                    })
+                    .unwrap_or(false);
+                if should_clear {
+                    self.call_state = None;
+                }
+                self.push_message(
+                    "system",
+                    "System",
+                    format!("Call ended by {peer_name}."),
+                    "system",
+                );
+            }
+            "webrtc_signal" => {
+                if payload.call_id.trim().is_empty() || payload.signal_type.trim().is_empty() {
+                    return;
+                }
+                let signal_id = self.next_message_id();
+                self.signaling_events.push(SignalingEvent {
+                    id: signal_id,
+                    call_id: payload.call_id.clone(),
+                    room_id: normalize_room_id(&payload.room),
+                    peer_id: sender_hex,
+                    signal_type: payload.signal_type.clone(),
+                    signal_data: payload.signal_data.clone(),
+                    sent_at: payload.sent_at.clone(),
+                });
+                if self.signaling_events.len() > 256 {
+                    let overflow = self.signaling_events.len() - 256;
+                    self.signaling_events.drain(0..overflow);
+                }
+            }
+            "voice_join" => {
+                let room = normalize_room_id(&payload.room);
+                let peer_name = self.display_name_for_peer(&sender_hex);
+                self.voice_room_members
+                    .entry(room.clone())
+                    .or_default()
+                    .insert(sender_hex);
+                self.push_message(
+                    "system",
+                    "System",
+                    format!("{peer_name} joined voice in #{room}."),
+                    "system",
+                );
+            }
+            "voice_leave" => {
+                let room = normalize_room_id(&payload.room);
+                let peer_name = self.display_name_for_peer(&sender_hex);
+                self.remove_voice_member(&room, &sender_hex);
+                self.push_message(
+                    "system",
+                    "System",
+                    format!("{peer_name} left voice in #{room}."),
+                    "system",
+                );
+            }
             _ => {}
         }
     }
@@ -411,6 +634,18 @@ impl CallbackState {
     fn next_message_id(&mut self) -> String {
         self.next_id += 1;
         format!("cb-{}", self.next_id)
+    }
+
+    fn remove_voice_member(&mut self, room: &str, peer_id: &str) {
+        let should_remove = if let Some(members) = self.voice_room_members.get_mut(room) {
+            members.remove(peer_id);
+            members.is_empty()
+        } else {
+            false
+        };
+        if should_remove {
+            self.voice_room_members.remove(room);
+        }
     }
 }
 
