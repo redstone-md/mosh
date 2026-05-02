@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { formatPeerFingerprint, getPeerTrustState, listTrustedPeers, trustPeer, untrustPeer } from './peerTrust'
+import {
+  formatPeerApprovedAt,
+  formatPeerFingerprint,
+  getPeerTrustState,
+  listTrustedPeers,
+  trustPeer,
+  untrustPeer,
+} from './peerTrust'
 import type { PeerSummary } from './schemas'
 
 const peer: PeerSummary = {
@@ -15,6 +22,16 @@ const peer: PeerSummary = {
 describe('peerTrust', () => {
   it('formats long peer ids into a readable fingerprint', () => {
     expect(formatPeerFingerprint(peer.id)).toBe('12345678..abcdef')
+  })
+
+  it('returns null instead of throwing for invalid approval timestamps', () => {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    })
+
+    expect(formatPeerApprovedAt('not-a-date', formatter)).toBeNull()
+    expect(formatPeerApprovedAt('2026-03-16T10:00:00.000Z', formatter)).toContain('2026')
   })
 
   it('tracks trusted, new, and renamed peers', () => {
