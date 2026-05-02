@@ -7,7 +7,7 @@ export function applyMessageOverlays(
   hiddenLabel: string
 ): DisplayMessage[] {
   return messages.map((message) => {
-    const overlay = overlays[message.id]
+    const overlay = roomScopedOverlay(overlays, message.id, message.roomId)
     if (!overlay) {
       return message
     }
@@ -54,7 +54,7 @@ export function toggleHiddenMessageOverlay(
   messageId: string,
   roomId: string
 ): Record<string, MessageOverlay> {
-  const existing = overlays[messageId]
+  const existing = roomScopedOverlay(overlays, messageId, roomId)
   return {
     ...overlays,
     [messageId]: {
@@ -68,6 +68,11 @@ export function toggleHiddenMessageOverlay(
 
 export function serializeEditedMessageBody(text: string): string {
   return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`
+}
+
+function roomScopedOverlay(overlays: Record<string, MessageOverlay>, messageId: string, roomId: string) {
+  const overlay = overlays[messageId]
+  return overlay?.roomId === roomId ? overlay : undefined
 }
 
 function escapeHtml(value: string) {

@@ -26,12 +26,29 @@ describe('messageOverlays', () => {
     expect(next[0]?.overlayState).toBe('edited')
   })
 
+  it('does not apply overlays when message id matches but room differs', () => {
+    const overlays = upsertEditedMessageOverlay({}, 'm-1', 'alpha', '<p>updated elsewhere</p>')
+    const next = applyMessageOverlays([baseMessage], overlays, 'Hidden locally')
+
+    expect(next[0]?.body).toBe('<p>hello</p>')
+    expect(next[0]?.overlayState).toBeUndefined()
+  })
+
   it('toggles hidden overlays and replaces body with a tombstone label', () => {
     const overlays = toggleHiddenMessageOverlay({}, 'm-1', 'lobby')
     const next = applyMessageOverlays([baseMessage], overlays, 'Hidden locally')
 
     expect(next[0]?.overlayState).toBe('hidden')
     expect(next[0]?.body).toContain('Hidden locally')
+  })
+
+  it('does not reuse edited bodies from overlays in another room when hiding', () => {
+    const editedElsewhere = upsertEditedMessageOverlay({}, 'm-1', 'alpha', '<p>updated elsewhere</p>')
+    const overlays = toggleHiddenMessageOverlay(editedElsewhere, 'm-1', 'lobby')
+
+    expect(overlays['m-1']?.roomId).toBe('lobby')
+    expect(overlays['m-1']?.body).toBeUndefined()
+    expect(overlays['m-1']?.hidden).toBe(true)
   })
 
   it('serializes edited plain text safely into message html', () => {
