@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::{
     archive_file_name, build_backup, clear_existing_storage, import_backup_from_path,
-    read_archives, read_json, write_json, ImportedStorageBackup, StoragePaths,
+    read_archives, read_json, read_room_archive, write_json, ImportedStorageBackup, StoragePaths,
 };
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -35,7 +35,41 @@ fn storage_paths_match_expected_layout() {
 #[test]
 fn archive_file_names_escape_unsupported_characters() {
     assert_eq!(archive_file_name("lobby"), "lobby.json");
-    assert_eq!(archive_file_name("dm:peer/one"), "dm_3apeer_2fone.json");
+    assert_eq!(archive_file_name("dm:peer/one"), "dm_3a_peer_2f_one.json");
+    assert_eq!(archive_file_name("dev_3ateam"), "dev_5f_3ateam.json");
+}
+
+#[test]
+fn archive_file_names_do_not_collide_with_escape_like_room_ids() {
+    assert_ne!(
+        archive_file_name("dev:team"),
+        archive_file_name("dev_3ateam")
+    );
+    assert_ne!(
+        archive_file_name("dm:peer/one"),
+        archive_file_name("dm_3apeer_2fone")
+    );
+}
+
+#[test]
+fn room_archive_read_falls_back_to_legacy_file_name() {
+    let base_dir = unique_temp_dir("mosh-legacy-archive-test");
+    let paths = StoragePaths::for_base_dir(base_dir.clone());
+    let legacy_path = paths.archives_dir.join("dm_3apeer_2fone.json");
+
+    write_json(
+        &legacy_path,
+        &json!({ "roomId": "dm:peer/one", "messages": [] }),
+    )
+    .expect("legacy archive write should succeed");
+
+    let archive = read_room_archive(&paths, "dm:peer/one")
+        .expect("archive read should succeed")
+        .expect("legacy archive should load");
+
+    assert_eq!(archive["roomId"], "dm:peer/one");
+
+    let _ = fs::remove_dir_all(base_dir);
 }
 
 #[test]

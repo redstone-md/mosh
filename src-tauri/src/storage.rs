@@ -53,6 +53,10 @@ impl StoragePaths {
         self.archives_dir.join(archive_file_name(room_id))
     }
 
+    fn legacy_archive_path(&self, room_id: &str) -> PathBuf {
+        self.archives_dir.join(legacy_archive_file_name(room_id))
+    }
+
     fn overview(&self) -> StorageOverview {
         StorageOverview {
             base_dir: self.base_dir.display().to_string(),
@@ -120,7 +124,7 @@ pub fn load_room_archive<R: tauri::Runtime>(
     room_id: &str,
 ) -> Result<Option<Value>, String> {
     let paths = StoragePaths::resolve(app)?;
-    read_json(&paths.archive_path(room_id))
+    read_room_archive(&paths, room_id)
 }
 
 pub fn save_room_archive<R: tauri::Runtime>(
@@ -182,6 +186,19 @@ fn write_json(path: &Path, payload: &Value) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(payload)
         .map_err(|err| format!("failed to serialize {}: {err}", path.display()))?;
     fs::write(path, raw).map_err(|err| format!("failed to write {}: {err}", path.display()))
+}
+
+fn read_room_archive(paths: &StoragePaths, room_id: &str) -> Result<Option<Value>, String> {
+    if let Some(archive) = read_json(&paths.archive_path(room_id))? {
+        return Ok(Some(archive));
+    }
+
+    let legacy_path = paths.legacy_archive_path(room_id);
+    if legacy_path == paths.archive_path(room_id) {
+        return Ok(None);
+    }
+
+    read_json(&legacy_path)
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -307,6 +324,23 @@ fn archive_paths(archives_dir: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn archive_file_name(room_id: &str) -> String {
+    let mut file_name = String::with_capacity(room_id.len() + 5);
+
+    for ch in room_id.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.') {
+            file_name.push(ch);
+        } else {
+            file_name.push('_');
+            file_name.push_str(&format!("{:x}", ch as u32));
+            file_name.push('_');
+        }
+    }
+
+    file_name.push_str(".json");
+    file_name
+}
+
+fn legacy_archive_file_name(room_id: &str) -> String {
     let mut file_name = String::with_capacity(room_id.len() + 5);
 
     for ch in room_id.chars() {
