@@ -185,7 +185,7 @@ fn live_callback_rows(
     let callback_state = shared_callback_state();
     if let Ok(state) = callback_state.lock() {
         let mut rooms = state.rooms();
-        let mut messages = state.messages();
+        let messages = state.messages();
         let mut peers = state.peers();
         let call_state = state.current_call();
         let signaling_events = state.signaling_events();
@@ -195,10 +195,6 @@ fn live_callback_rows(
             rooms = live_room_rows(mesh);
         } else {
             merge_room_rows(&mut rooms, mesh);
-        }
-
-        if messages.is_empty() {
-            messages = base_messages();
         }
 
         merge_peer_rows(&mut peers, mesh);
@@ -213,8 +209,8 @@ fn live_callback_rows(
     }
     (
         live_room_rows(mesh),
-        base_messages(),
-        live_peer_rows(mesh),
+        Vec::new(),
+        Vec::new(),
         None,
         Vec::new(),
         Vec::new(),
@@ -249,40 +245,6 @@ fn live_room_rows(mesh: &MeshInfo) -> Vec<RoomSummary> {
         });
     }
     rooms
-}
-
-fn live_peer_rows(mesh: &MeshInfo) -> Vec<PeerSummary> {
-    let mut peers = vec![PeerSummary {
-        id: "peer-self".to_string(),
-        display_name: "Desktop operator".to_string(),
-        route: format!("listen {}", mesh.listen_port),
-        latency: "--".to_string(),
-        status: "self".to_string(),
-        rooms: mesh
-            .channels
-            .iter()
-            .map(|channel| format!("#{channel}"))
-            .collect(),
-    }];
-    for (index, peer) in mesh.peers.iter().enumerate() {
-        peers.push(PeerSummary {
-            id: format!("peer-{index}"),
-            display_name: peer.clone(),
-            route: if mesh.supernode_ready {
-                "direct or relay candidate".to_string()
-            } else {
-                "connected peer".to_string()
-            },
-            latency: "runtime pending".to_string(),
-            status: "connected".to_string(),
-            rooms: mesh
-                .channels
-                .iter()
-                .map(|channel| format!("#{channel}"))
-                .collect(),
-        });
-    }
-    peers
 }
 
 fn merge_room_rows(rooms: &mut Vec<RoomSummary>, mesh: &MeshInfo) {

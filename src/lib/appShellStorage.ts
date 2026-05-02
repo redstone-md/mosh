@@ -242,7 +242,7 @@ export async function readVerifiedArchive(roomId: string): Promise<VerifiedArchi
 
 export async function persistSignedArchive(roomId: string, messages: Message[]): Promise<VerifiedArchive> {
   const identity = await ensureSigningIdentity()
-  const archiveMessages = messages.map<StoredMessage>((message) => ({
+  const archiveMessages = messages.filter(isArchivableMessage).map<StoredMessage>((message) => ({
     ...message,
     storedAt: new Date().toISOString(),
   }))
@@ -276,6 +276,9 @@ export function mergeArchivedMessages(archived: StoredMessage[], live: Message[]
   const merged = new Map<string, Message>()
 
   for (const message of archived) {
+    if (!isArchivableMessage(message)) {
+      continue
+    }
     merged.set(message.id, {
       id: message.id,
       roomId: message.roomId,
@@ -287,6 +290,9 @@ export function mergeArchivedMessages(archived: StoredMessage[], live: Message[]
   }
 
   for (const message of live) {
+    if (!isArchivableMessage(message)) {
+      continue
+    }
     merged.set(message.id, message)
   }
 
@@ -416,4 +422,8 @@ function getLocalStorage(): Storage | null {
   } catch {
     return null
   }
+}
+
+function isArchivableMessage(message: Pick<Message, 'id'>): boolean {
+  return !message.id.startsWith('m-offline-') && !message.id.startsWith('m-failed-')
 }
