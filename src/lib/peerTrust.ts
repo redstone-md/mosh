@@ -18,6 +18,11 @@ export function formatPeerFingerprint(peerId: string): string {
   return `${normalized.slice(0, 8)}..${normalized.slice(-6)}`
 }
 
+export function formatPeerApprovedAt(approvedAt: string, formatter: Intl.DateTimeFormat): string | null {
+  const date = new Date(approvedAt)
+  return Number.isFinite(date.getTime()) ? formatter.format(date) : null
+}
+
 export function getPeerTrustState(
   trustedPeers: Record<string, TrustedPeerRecord>,
   peer: Pick<PeerSummary, 'id' | 'displayName' | 'status'>

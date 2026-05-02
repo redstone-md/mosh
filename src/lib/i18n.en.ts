@@ -254,6 +254,7 @@ export const enTranslations = {
     reviewCount: (count: number) => `${count} peers still need review`,
     summary: (trusted: number, review: number) => `${trusted} trusted · ${review} to review`,
     approvedAt: (value: string) => `Approved ${value}`,
+    unknownApprovalTime: 'unknown time',
     renamedFrom: (value: string) => `Previously trusted as ${value}`,
   },
   inviteReview: {

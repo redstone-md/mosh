@@ -8,6 +8,13 @@ export const languagePreferenceSchema = z.enum(['system', 'en', 'ru'])
 export const groupAccentSchema = z.enum(['forest', 'slate', 'sand', 'ember'])
 export const channelTypeSchema = z.enum(['text', 'voice'])
 
+const FALLBACK_APPROVED_AT = '1970-01-01T00:00:00.000Z'
+
+function normalizeIsoDateString(value: string): string {
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : FALLBACK_APPROVED_AT
+}
+
 export const roomGroupSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(1).max(32),
@@ -77,7 +84,7 @@ export const shellPreferencesSchema = z.object({
       z.string(),
       z.object({
         displayName: z.string().trim().min(1).max(128),
-        approvedAt: z.string().min(1),
+        approvedAt: z.string().transform(normalizeIsoDateString),
       })
     )
     .default({}),

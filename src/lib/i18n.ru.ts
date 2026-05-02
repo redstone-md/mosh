@@ -254,6 +254,7 @@ export const ruTranslations = {
     reviewCount: (count: number) => `${count} пиров ещё ждут проверки`,
     summary: (trusted: number, review: number) => `${trusted} доверенных · ${review} на проверке`,
     approvedAt: (value: string) => `Подтверждено ${value}`,
+    unknownApprovalTime: 'в неизвестное время',
     renamedFrom: (value: string) => `Ранее доверен как ${value}`,
   },
   inviteReview: {

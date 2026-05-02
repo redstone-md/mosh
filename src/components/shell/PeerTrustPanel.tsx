@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ShieldCheck, ShieldQuestion, ShieldX, Trash2 } from 'lucide-react'
 
-import { formatPeerFingerprint } from '../../lib/peerTrust'
+import { formatPeerApprovedAt, formatPeerFingerprint } from '../../lib/peerTrust'
 import type { TrustedPeerEntry } from '../../lib/peerTrust'
 import { useI18n } from '../I18nProvider'
 import { Badge } from '../ui/badge'
@@ -55,7 +55,9 @@ export function PeerTrustPanel({ trustedPeers, trustedCount, reviewCount, onForg
                   {formatPeerFingerprint(peer.peerId)}
                 </p>
                 <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                  {copy.trust.approvedAt(formatter.format(new Date(peer.approvedAt)))}
+                  {copy.trust.approvedAt(
+                    formatPeerApprovedAt(peer.approvedAt, formatter) ?? copy.trust.unknownApprovalTime
+                  )}
                 </p>
               </div>
               <Button variant="ghost" size="icon" onClick={() => onForgetPeer(peer.peerId)} title={copy.trust.revoke}>
