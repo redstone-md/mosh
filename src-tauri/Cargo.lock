@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "mosh"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libloading 0.8.9",
  "log",
