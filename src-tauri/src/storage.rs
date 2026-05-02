@@ -18,6 +18,7 @@ const MAX_IMPORTED_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct StorageOverview {
     pub base_dir: String,
+    pub logs_dir: String,
     pub settings_path: String,
     pub identity_path: String,
     pub archives_dir: String,
@@ -28,6 +29,7 @@ pub struct StorageOverview {
 
 struct StoragePaths {
     base_dir: PathBuf,
+    logs_dir: PathBuf,
     settings_path: PathBuf,
     identity_path: PathBuf,
     archives_dir: PathBuf,
@@ -39,14 +41,25 @@ impl StoragePaths {
             .path()
             .app_local_data_dir()
             .map_err(|err| format!("failed to resolve app local data directory: {err}"))?;
-        Ok(Self::for_base_dir(base_dir))
+        let logs_dir = app
+            .path()
+            .app_log_dir()
+            .map_err(|err| format!("failed to resolve app log directory: {err}"))?;
+        Ok(Self::for_base_and_logs_dir(base_dir, logs_dir))
     }
 
+    #[cfg(test)]
     fn for_base_dir(base_dir: PathBuf) -> Self {
+        let logs_dir = base_dir.join("logs");
+        Self::for_base_and_logs_dir(base_dir, logs_dir)
+    }
+
+    fn for_base_and_logs_dir(base_dir: PathBuf, logs_dir: PathBuf) -> Self {
         Self {
             settings_path: base_dir.join(SETTINGS_PATH),
             identity_path: base_dir.join(IDENTITY_PATH),
             archives_dir: base_dir.join(ARCHIVES_DIR),
+            logs_dir,
             base_dir,
         }
     }
@@ -62,6 +75,7 @@ impl StoragePaths {
     fn overview(&self) -> StorageOverview {
         StorageOverview {
             base_dir: self.base_dir.display().to_string(),
+            logs_dir: self.logs_dir.display().to_string(),
             settings_path: self.settings_path.display().to_string(),
             identity_path: self.identity_path.display().to_string(),
             archives_dir: self.archives_dir.display().to_string(),

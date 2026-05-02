@@ -106,6 +106,7 @@ export const signedRoomArchiveSchema = z.object({
 export const archiveStoreSchema = z.record(z.string(), signedRoomArchiveSchema)
 export const storageOverviewSchema = z.object({
   baseDir: z.string().min(1),
+  logsDir: z.string().min(1),
   settingsPath: z.string().min(1),
   identityPath: z.string().min(1),
   archivesDir: z.string().min(1),

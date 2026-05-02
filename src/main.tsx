@@ -3,9 +3,13 @@ import ReactDOM from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { App } from './App'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
+import { debugLogInfo, registerFrontendDebugLogging } from './lib/debugLog'
 import './index.css'
 
 const queryClient = new QueryClient()
+
+registerFrontendDebugLogging()
+void debugLogInfo('MOSH frontend initialized.')
 
 ReactDOM.createRoot(document.getElementById('app')!).render(
   <React.StrictMode>

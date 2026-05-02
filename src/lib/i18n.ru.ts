@@ -289,6 +289,7 @@ export const ruTranslations = {
     settingsFile: 'Файл настроек',
     identityFile: 'Подписывающая identity',
     archivesDirectory: 'Директория архивов',
+    debugLogsDirectory: 'Директория debug-логов',
     present: 'Есть',
     missing: 'Нет',
     backup: 'Резервная копия',

@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 
+import { debugLogError } from '../lib/debugLog'
+
 type AppErrorBoundaryProps = {
   children: ReactNode
 }
@@ -21,6 +23,14 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('MOSH render failure', error, info)
+    void debugLogError('MOSH render failure', {
+      keyValues: {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        componentStack: info.componentStack ?? undefined,
+      },
+    })
   }
 
   render() {
