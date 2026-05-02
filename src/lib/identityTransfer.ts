@@ -126,7 +126,9 @@ export function normalizeIdentityTransferPackage(value: string) {
     throw new Error('Identity transfer package is empty.')
   }
 
-  return normalized.startsWith(IDENTITY_TRANSFER_PREFIX) ? normalized : `${IDENTITY_TRANSFER_PREFIX}${normalized}`
+  return normalized.toLowerCase().startsWith(IDENTITY_TRANSFER_PREFIX)
+    ? `${IDENTITY_TRANSFER_PREFIX}${normalized.slice(IDENTITY_TRANSFER_PREFIX.length)}`
+    : `${IDENTITY_TRANSFER_PREFIX}${normalized}`
 }
 
 export function readIdentityTransferSummary(value: string): IdentityTransferSummary {

@@ -40,6 +40,15 @@ describe('deepLinkIdentityTransfers', () => {
     expect(pending.handoff.summary.sourceFingerprint).toBe('ab:cd:ef')
   })
 
+  it('normalizes mixed-case identity transfer schemes before decoding', () => {
+    const transferUrl = createTransferUrl('ab:cd:ef')
+    const mixedCaseUrl = transferUrl.replace('mosh-identity://transfer/', 'MOSH-IDENTITY://TRANSFER/')
+    const pending = decodePendingIdentityTransfer(mixedCaseUrl)
+
+    expect(pending.transferPackage).toBe(transferUrl)
+    expect(pending.handoff.summary.sourceFingerprint).toBe('ab:cd:ef')
+  })
+
   it('appends only unique transfer urls', () => {
     const alpha = decodePendingIdentityTransfer(createTransferUrl('alpha'))
     const beta = decodePendingIdentityTransfer(createTransferUrl('beta'))
