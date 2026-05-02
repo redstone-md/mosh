@@ -38,7 +38,7 @@ jobs:
             msys2: CLANGARM64
             msys2-install: >-
               mingw-w64-clang-aarch64-clang
-            moss-cc: clang
+            moss-cc: C:/msys64/clangarm64/bin/clang.exe
           - os: macos-15-intel
             label: macos-amd64
             rust-target: x86_64-apple-darwin
