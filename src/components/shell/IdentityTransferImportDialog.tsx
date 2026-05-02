@@ -52,12 +52,7 @@ export function IdentityTransferImportDialog({
                     {pendingTransfer.handoff.summary.sourceFingerprint}
                   </div>
                   <p className="mt-3 text-sm text-[var(--muted-foreground)]">
-                    {pendingTransfer.handoff.summary.sourceFingerprint === currentIdentityFingerprint
-                      ? copy.identityTransfer.sameIdentity
-                      : copy.identityTransfer.replaceIdentity(
-                          currentIdentityFingerprint,
-                          pendingTransfer.handoff.summary.sourceFingerprint
-                        )}
+                    {copy.identityTransfer.unverifiedIncomingFingerprint}
                   </p>
                 </div>
                 <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4">

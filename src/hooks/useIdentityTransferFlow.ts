@@ -42,10 +42,15 @@ export function useIdentityTransferFlow({
       const previousIdentity = await ensureSigningIdentity()
       const identity = await importIdentityTransferPackage(pendingTransfer.transferPackage, passphrase)
       await replaceSigningIdentity(identity)
-      return { previousIdentity }
+      return {
+        previousIdentity,
+        previousFingerprint: previousIdentity.fingerprint,
+        importedFingerprint: identity.fingerprint,
+        packageExportedAt: pendingTransfer.handoff.summary.exportedAt,
+      }
     },
     onSuccess: async (result) => {
-      if (!pendingTransfer) {
+      if (!pendingTransfer || !result) {
         return
       }
       setErrorNote(null)
@@ -56,10 +61,10 @@ export function useIdentityTransferFlow({
       onRecordEvent({
         action: 'import',
         channel: 'deep-link',
-        activeFingerprint: pendingTransfer.handoff.summary.sourceFingerprint,
-        replacedFingerprint: currentIdentityFingerprint,
-        packageSourceFingerprint: pendingTransfer.handoff.summary.sourceFingerprint,
-        packageExportedAt: pendingTransfer.handoff.summary.exportedAt,
+        activeFingerprint: result.importedFingerprint,
+        replacedFingerprint: result.previousFingerprint,
+        packageSourceFingerprint: result.importedFingerprint,
+        packageExportedAt: result.packageExportedAt,
       })
       dismissPendingTransfer()
       await queryClient.invalidateQueries({

@@ -344,8 +344,8 @@ export const enTranslations = {
       'After import, this device will start signing local archives and trust actions with the transferred identity instead of the current one.',
     currentDevice: 'Current device identity',
     incomingIdentity: 'Incoming identity',
-    sameIdentity: 'This transfer matches the identity already active on this device.',
-    replaceIdentity: (current: string, incoming: string) => `This will replace ${current} with ${incoming}.`,
+    unverifiedIncomingFingerprint:
+      'This fingerprint is package metadata. MOSH verifies it after decrypting the transfer.',
     importFromLink: 'Import from link',
     deepLinkInvalid: 'Identity transfer link is invalid.',
     deepLinkImported: 'Identity imported from link.',

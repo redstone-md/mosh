@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  IDENTITY_TRANSFER_PREFIX,
   exportIdentityTransferPackage,
   importIdentityTransferPackage,
   readIdentityTransferSummary,
 } from './identityTransfer'
+import { decodeBase64UrlToBytes, encodeBytesToBase64Url } from './base64Url'
 
 const identity = {
   algorithm: 'ECDSA-P256' as const,
@@ -26,6 +28,20 @@ const identity = {
     ext: true,
     key_ops: ['sign'],
   },
+}
+
+function withEnvelopeFingerprint(transferPackage: string, sourceFingerprint: string) {
+  const encodedEnvelope = transferPackage.slice(IDENTITY_TRANSFER_PREFIX.length)
+  const envelope = JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope)))
+
+  return `${IDENTITY_TRANSFER_PREFIX}${encodeBytesToBase64Url(
+    new TextEncoder().encode(
+      JSON.stringify({
+        ...envelope,
+        sourceFingerprint,
+      })
+    )
+  )}`
 }
 
 describe('identityTransfer', () => {
@@ -53,5 +69,15 @@ describe('identityTransfer', () => {
     expect(readIdentityTransferSummary(transferPackage)).toMatchObject({
       sourceFingerprint: identity.fingerprint,
     })
+  })
+
+  it('rejects packages when plaintext fingerprint metadata does not match the decrypted identity', async () => {
+    const transferPackage = await exportIdentityTransferPackage(identity, 'top-secret-passphrase')
+    const tamperedPackage = withEnvelopeFingerprint(transferPackage, 'ff:ff:ff:ff:ff:ff')
+
+    expect(readIdentityTransferSummary(tamperedPackage).sourceFingerprint).toBe('ff:ff:ff:ff:ff:ff')
+    await expect(importIdentityTransferPackage(tamperedPackage, 'top-secret-passphrase')).rejects.toThrow(
+      /Unable to decrypt/
+    )
   })
 })
