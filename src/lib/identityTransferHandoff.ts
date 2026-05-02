@@ -31,6 +31,18 @@ export function buildIdentityTransferHandoff(value: string): IdentityTransferHan
   }
 }
 
+export function tryBuildIdentityTransferHandoff(value: string): IdentityTransferHandoff | null {
+  if (!value.trim()) {
+    return null
+  }
+
+  try {
+    return buildIdentityTransferHandoff(value)
+  } catch {
+    return null
+  }
+}
+
 function splitIntoChunks(value: string, size: number) {
   const chunks: string[] = []
 
