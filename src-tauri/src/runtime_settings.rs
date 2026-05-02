@@ -21,7 +21,7 @@ pub struct RuntimeSettingsInput {
     pub lan_discovery_enabled: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DesktopRuntimeConfig {
     nickname: String,
     mesh_id: String,
@@ -32,7 +32,7 @@ pub struct DesktopRuntimeConfig {
     lan_discovery_enabled: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum TrackerMode {
     Default,
     Disabled,
@@ -132,7 +132,15 @@ impl DesktopRuntimeConfig {
         let mut config = json!({
             "listen_port": self.listen_port,
             "lan_discovery_enabled": self.lan_discovery_enabled,
+            "nat": {
+                "upnp_enabled": true,
+                "natpmp_enabled": true,
+                "pcp_enabled": true,
+            },
         });
+        if let Some(startup_peer) = &self.startup_peer {
+            config["static_peers"] = json!([startup_peer]);
+        }
         if matches!(self.tracker_mode, TrackerMode::Disabled) {
             config["trackers"] = json!([]);
         }
@@ -153,6 +161,14 @@ impl DesktopRuntimeConfig {
 
     pub fn startup_peer(&self) -> Option<&str> {
         self.startup_peer.as_deref()
+    }
+
+    pub fn requires_runtime_restart(&self, previous: &Self) -> bool {
+        self.mesh_id != previous.mesh_id
+            || self.listen_port != previous.listen_port
+            || self.initial_room != previous.initial_room
+            || self.tracker_mode != previous.tracker_mode
+            || self.lan_discovery_enabled != previous.lan_discovery_enabled
     }
 }
 
@@ -254,6 +270,55 @@ mod tests {
         assert_eq!(summary.tracker_mode, "disabled");
         assert!(!summary.lan_discovery_enabled);
         assert!(summary.config_preview.contains("\"trackers\":[]"));
+        assert!(summary.config_preview.contains("\"upnp_enabled\":true"));
+        assert!(summary
+            .config_preview
+            .contains("\"static_peers\":[\"example.com:41031\"]"));
+    }
+
+    #[test]
+    fn runtime_settings_restart_policy_ignores_nickname_and_startup_peer() {
+        let mut previous = DesktopRuntimeConfig::default();
+        previous
+            .apply(RuntimeSettingsInput {
+                nickname: "andrii".to_string(),
+                mesh_id: "mosh-chat".to_string(),
+                listen_port: 0,
+                initial_room: "lobby".to_string(),
+                startup_peer: "host-a:41030".to_string(),
+                tracker_mode: "default".to_string(),
+                lan_discovery_enabled: true,
+            })
+            .expect("previous settings should be valid");
+
+        let mut current = previous.clone();
+        current
+            .apply(RuntimeSettingsInput {
+                nickname: "guest".to_string(),
+                mesh_id: "mosh-chat".to_string(),
+                listen_port: 0,
+                initial_room: "lobby".to_string(),
+                startup_peer: "host-b:41030".to_string(),
+                tracker_mode: "default".to_string(),
+                lan_discovery_enabled: true,
+            })
+            .expect("current settings should be valid");
+
+        assert!(!current.requires_runtime_restart(&previous));
+
+        current
+            .apply(RuntimeSettingsInput {
+                nickname: "guest".to_string(),
+                mesh_id: "team-mesh".to_string(),
+                listen_port: 0,
+                initial_room: "lobby".to_string(),
+                startup_peer: "host-b:41030".to_string(),
+                tracker_mode: "default".to_string(),
+                lan_discovery_enabled: true,
+            })
+            .expect("mesh update should be valid");
+
+        assert!(current.requires_runtime_restart(&previous));
     }
 
     #[test]
