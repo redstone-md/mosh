@@ -1,7 +1,6 @@
-import DOMPurify from 'dompurify'
-
 import type { GroupAccent, RoomGroup } from './appShellSchemas'
 import type { Message, RoomSummary } from './schemas'
+import { sanitizeMessageMarkup } from './messageSanitizer'
 
 const accentStyles: Record<GroupAccent, string> = {
   forest: 'bg-[var(--accent-forest)] text-white',
@@ -42,9 +41,7 @@ export function getMessageMarkup(body: string): string {
   const trimmed = body.trim()
   const hasHtmlLikeMarkup = /<\/?[a-z][\s\S]*>/i.test(trimmed)
   const withBreaks = hasHtmlLikeMarkup ? trimmed : trimmed.replace(/\n/g, '<br />')
-  return DOMPurify.sanitize(withBreaks, {
-    ADD_ATTR: ['target', 'rel', 'class', 'data-reply-to'],
-  })
+  return sanitizeMessageMarkup(withBreaks)
 }
 
 export function dedupeMessages(messages: Message[]): Message[] {

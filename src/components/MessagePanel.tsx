@@ -19,12 +19,12 @@ import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
 import Image from '@tiptap/extension-image'
 import Mention from '@tiptap/extension-mention'
-import DOMPurify from 'dompurify'
 import EmojiPicker, { Theme, type EmojiClickData } from 'emoji-picker-react'
 import makeSuggestion from '../lib/suggestion'
 import { useI18n } from './I18nProvider'
 import { MessageDeliveryState } from './MessageDeliveryState'
 import { MessageEditDialog } from './MessageEditDialog'
+import { sanitizeMessageMarkup } from '../lib/messageSanitizer'
 
 type MessagePanelProps = {
   room: RoomSummary | undefined
@@ -195,17 +195,7 @@ export function MessagePanel({
   }
 
   const onEmojiClick = (emojiData: EmojiClickData) => {
-    if (emojiData.imageUrl) {
-      editor
-        ?.chain()
-        .focus()
-        .insertContent(
-          `<img src="${emojiData.imageUrl}" alt="${emojiData.emoji}" class="w-5 h-5 inline-block align-middle m-0" />`
-        )
-        .run()
-    } else {
-      editor?.chain().focus().insertContent(emojiData.emoji).run()
-    }
+    editor?.chain().focus().insertContent(emojiData.emoji).run()
     setShowEmojiPicker(false)
   }
 
@@ -303,22 +293,7 @@ export function MessagePanel({
                         'font-mono text-sm text-primary/80 bg-primary/5 p-4 rounded-xl border border-primary/10'
                     )}
                     dangerouslySetInnerHTML={{
-                      __html: DOMPurify.sanitize(message.body, {
-                        ADD_ATTR: [
-                          'target',
-                          'class',
-                          'data-reply-to',
-                          'data-attachment',
-                          'data-file-name',
-                          'data-file-size',
-                          'data-file-type',
-                          'data-file-url',
-                          'download',
-                          'href',
-                          'title',
-                          'alt',
-                        ],
-                      }),
+                      __html: sanitizeMessageMarkup(message.body),
                     }}
                   />
                   <MessageDeliveryState
