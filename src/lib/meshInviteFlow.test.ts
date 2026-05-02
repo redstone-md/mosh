@@ -49,4 +49,32 @@ describe('meshInviteFlow', () => {
     expect(resolveInviteStartupPeer(invite, 'host:7000')).toBe('relay:9000')
     expect(resolveInviteStartupPeer(invite, 'relay:9000')).toBeNull()
   })
+
+  it('resolves startup peer against the active settings before applying the invite patch', () => {
+    const invite = buildMeshInvite('operator', {
+      nickname: 'operator',
+      meshId: 'mosh-team',
+      listenPort: 9100,
+      initialRoom: 'ops',
+      startupPeer: 'relay:9000',
+      trackerMode: 'default',
+      lanDiscoveryEnabled: true,
+    })
+    const patch = buildInviteShellStatePatch(
+      {
+        nickname: 'guest',
+        meshId: 'sandbox',
+        listenPort: 0,
+        initialRoom: 'lobby',
+        startupPeer: 'host:7000',
+        trackerMode: 'disabled',
+        lanDiscoveryEnabled: false,
+      },
+      invite
+    )
+
+    expect(patch.runtimeDraft.startupPeer).toBe('relay:9000')
+    expect(resolveInviteStartupPeer(invite, 'host:7000')).toBe('relay:9000')
+    expect(resolveInviteStartupPeer(invite, patch.runtimeDraft.startupPeer)).toBeNull()
+  })
 })
