@@ -29,12 +29,6 @@ pub struct WindowStatePayload {
     pub maximized: bool,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StoragePayloadInput {
-    pub payload: Value,
-}
-
 fn create_backup_file_name() -> Result<String, String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -250,8 +244,8 @@ pub fn load_shell_preferences(app: AppHandle) -> Result<Option<Value>, String> {
 }
 
 #[tauri::command]
-pub fn save_shell_preferences(app: AppHandle, payload: StoragePayloadInput) -> Result<(), String> {
-    storage::save_shell_preferences(&app, payload.payload)
+pub fn save_shell_preferences(app: AppHandle, payload: Value) -> Result<(), String> {
+    storage::save_shell_preferences(&app, payload)
 }
 
 #[tauri::command]
@@ -260,8 +254,8 @@ pub fn load_signing_identity(app: AppHandle) -> Result<Option<Value>, String> {
 }
 
 #[tauri::command]
-pub fn save_signing_identity(app: AppHandle, payload: StoragePayloadInput) -> Result<(), String> {
-    storage::save_signing_identity(&app, payload.payload)
+pub fn save_signing_identity(app: AppHandle, payload: Value) -> Result<(), String> {
+    storage::save_signing_identity(&app, payload)
 }
 
 #[tauri::command]
@@ -279,16 +273,12 @@ pub fn load_all_room_archives(app: AppHandle) -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
-pub fn save_room_archive(
-    app: AppHandle,
-    room: String,
-    payload: StoragePayloadInput,
-) -> Result<(), String> {
+pub fn save_room_archive(app: AppHandle, room: String, payload: Value) -> Result<(), String> {
     let room = room.trim();
     if room.is_empty() {
         return Err("room is required".to_string());
     }
-    storage::save_room_archive(&app, room, payload.payload)
+    storage::save_room_archive(&app, room, payload)
 }
 
 #[tauri::command]
