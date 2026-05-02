@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { extractPlainText, searchMessages } from './messageSearch'
 import type { Message } from './schemas'
@@ -23,8 +23,30 @@ const messages: Message[] = [
 ]
 
 describe('messageSearch', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('extracts plain text from html content', () => {
     expect(extractPlainText('<p>Hello <strong>MOSH</strong> operator</p>')).toBe('Hello MOSH operator')
+  })
+
+  it('extracts text without touching browser DOM APIs', () => {
+    vi.stubGlobal('document', {
+      createElement: () => {
+        throw new Error('extractPlainText must not parse untrusted HTML in the DOM')
+      },
+    })
+
+    expect(extractPlainText('<img src=x onerror=alert(1)>ready')).toBe('ready')
+  })
+
+  it('strips tags with quoted greater-than characters', () => {
+    expect(extractPlainText('<a title="1 > 0" href="#">safe &amp; ready</a>')).toBe('safe & ready')
+  })
+
+  it('drops malformed tag fragments instead of indexing attacker-controlled attributes', () => {
+    expect(extractPlainText('<img src=x onerror=alert(1)')).toBe('')
   })
 
   it('matches by message body text', () => {

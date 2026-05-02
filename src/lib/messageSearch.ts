@@ -17,7 +17,8 @@ export function searchMessages(messages: Message[], rawQuery: string): MessageSe
   return messages
     .map((message) => {
       const author = normalizeSearchText(message.author)
-      const body = normalizeSearchText(extractPlainText(message.body))
+      const plainBody = extractPlainText(message.body)
+      const body = normalizeSearchText(plainBody)
       const haystack = `${author} ${body}`.trim()
       const index = haystack.indexOf(query)
 
@@ -29,7 +30,7 @@ export function searchMessages(messages: Message[], rawQuery: string): MessageSe
         messageId: message.id,
         roomId: message.roomId,
         author: message.author,
-        preview: buildPreview(extractPlainText(message.body), query, body, index),
+        preview: buildPreview(plainBody, query, body, index),
         query,
       }
     })
@@ -37,13 +38,92 @@ export function searchMessages(messages: Message[], rawQuery: string): MessageSe
 }
 
 export function extractPlainText(value: string): string {
-  if (typeof document !== 'undefined') {
-    const container = document.createElement('div')
-    container.innerHTML = value
-    return (container.textContent || container.innerText || '').replace(/\s+/g, ' ').trim()
+  return decodeHtmlEntities(stripHtmlTags(value)).replace(/\s+/g, ' ').trim()
+}
+
+const htmlEntityMap: Record<string, string> = {
+  amp: '&',
+  apos: "'",
+  gt: '>',
+  lt: '<',
+  nbsp: ' ',
+  quot: '"',
+}
+
+function stripHtmlTags(value: string): string {
+  let output = ''
+  let index = 0
+
+  while (index < value.length) {
+    if (isHtmlTagStart(value, index)) {
+      index = findTagEnd(value, index)
+      output += ' '
+      continue
+    }
+
+    output += value[index]
+    index += 1
   }
 
-  return value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  return output
+}
+
+function isHtmlTagStart(value: string, index: number): boolean {
+  if (value[index] !== '<') {
+    return false
+  }
+
+  const next = value[index + 1]
+  return next !== undefined && /[a-z!/\?]/i.test(next)
+}
+
+function findTagEnd(value: string, start: number): number {
+  let quote: string | null = null
+
+  for (let index = start + 1; index < value.length; index += 1) {
+    const char = value[index]
+
+    if (quote) {
+      if (char === quote) {
+        quote = null
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+
+    if (char === '>') {
+      return index + 1
+    }
+  }
+
+  return value.length
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (entity, token: string) => {
+    const decoded = decodeNumericEntity(token) ?? htmlEntityMap[token.toLowerCase()]
+    return decoded ?? entity
+  })
+}
+
+function decodeNumericEntity(token: string): string | null {
+  if (!token.startsWith('#')) {
+    return null
+  }
+
+  const radix = token[1]?.toLowerCase() === 'x' ? 16 : 10
+  const digits = radix === 16 ? token.slice(2) : token.slice(1)
+  const codePoint = Number.parseInt(digits, radix)
+
+  if (!Number.isSafeInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+    return null
+  }
+
+  return String.fromCodePoint(codePoint)
 }
 
 function normalizeSearchText(value: string): string {

@@ -198,9 +198,7 @@ export function MessagePanel({
   }
 
   const handleCopy = useCallback((text: string) => {
-    const tempDiv = document.createElement("div")
-    tempDiv.innerHTML = text
-    navigator.clipboard.writeText(tempDiv.textContent || tempDiv.innerText || "")
+    navigator.clipboard.writeText(extractPlainText(text))
   }, [])
 
   const handleReply = useCallback((message: DisplayMessage) => {
