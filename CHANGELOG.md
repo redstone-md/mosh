@@ -13,6 +13,7 @@ All notable user-visible changes in this project should be documented in this fi
 - Added backup import and live restore flow in settings so a desktop user can bring settings, identity, and signed archives onto a new machine without manual file copying.
 - Added in-room message search with result navigation over the merged live transcript and signed archive history.
 - Added embedded file attachments with download cards for non-image files and inline previews for images inside the rich message flow.
+- Hardened embedded file attachments so data-URL payloads cannot navigate chat links or open executable MIME types.
 - Added pinned messages with persisted room-level pins, hover actions, and a compact pinned strip in the chat header.
 - Added global room search with `Ctrl/Cmd+K`, cross-room live message indexing, and signed archive results for quick navigation across MOSH.
 - Added local read-state tracking and room mute controls, including unread badges driven by persisted room activity and muted-room suppression for desktop notifications.
