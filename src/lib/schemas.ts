@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { MAX_WEBRTC_SIGNAL_DATA_LENGTH } from './webrtcSignals'
+
 export const artifactSchema = z.object({
   name: z.string().min(1),
   platform: z.string().min(1),
@@ -54,8 +56,8 @@ export const signalingEventSchema = z.object({
   callId: z.string().min(1),
   roomId: z.string().min(1),
   peerId: z.string().min(1),
-  signalType: z.string().min(1),
-  signalData: z.string().min(1),
+  signalType: z.enum(['offer', 'answer', 'ice-candidate']),
+  signalData: z.string().min(1).max(MAX_WEBRTC_SIGNAL_DATA_LENGTH),
   sentAt: z.string().min(1),
 })
 
@@ -167,7 +169,7 @@ export const sendCallSignalInputSchema = z.object({
   callId: z.string().trim().min(1),
   room: z.string().trim().min(1),
   signalType: z.string().trim().min(1).max(64),
-  signalData: z.string().trim().min(1).max(400_000),
+  signalData: z.string().trim().min(1).max(MAX_WEBRTC_SIGNAL_DATA_LENGTH),
 })
 
 export const joinVoiceRoomInputSchema = z.object({

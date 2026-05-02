@@ -13,6 +13,8 @@ use crate::{
     },
 };
 
+const MAX_WEBRTC_SIGNAL_DATA_BYTES: usize = 400_000;
+
 #[derive(Default)]
 pub struct CallbackState {
     next_id: u64,
@@ -541,7 +543,7 @@ impl CallbackState {
                 );
             }
             "webrtc_signal" => {
-                if payload.call_id.trim().is_empty() || payload.signal_type.trim().is_empty() {
+                if !valid_webrtc_signal(&payload) {
                     return;
                 }
                 let signal_id = self.next_message_id();
@@ -672,6 +674,20 @@ fn fallback_text(value: &str, fallback: &str) -> String {
     }
 }
 
+fn valid_webrtc_signal(payload: &ChatPayload) -> bool {
+    if payload.call_id.trim().is_empty() || payload.signal_data.trim().is_empty() {
+        return false;
+    }
+    if payload.signal_data.len() > MAX_WEBRTC_SIGNAL_DATA_BYTES {
+        return false;
+    }
+
+    matches!(
+        payload.signal_type.trim(),
+        "offer" | "answer" | "ice-candidate"
+    ) && serde_json::from_str::<Value>(&payload.signal_data).is_ok()
+}
+
 static CALLBACK_STATE: OnceLock<Arc<Mutex<CallbackState>>> = OnceLock::new();
 
 pub fn shared_callback_state() -> Arc<Mutex<CallbackState>> {
@@ -679,3 +695,6 @@ pub fn shared_callback_state() -> Arc<Mutex<CallbackState>> {
         .get_or_init(|| Arc::new(Mutex::new(CallbackState::new())))
         .clone()
 }
+
+#[cfg(test)]
+mod tests;

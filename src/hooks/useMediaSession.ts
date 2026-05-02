@@ -3,6 +3,11 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { desktopStatusClient } from '../lib/desktopStatusClient'
 import type { DesktopSnapshot, SignalingEvent, VoiceRoom } from '../lib/schemas'
+import {
+  isWebRtcSignalType,
+  parseIceCandidateInit,
+  parseSessionDescriptionInit,
+} from '../lib/webrtcSignals'
 
 type MediaMode = 'voice' | 'screen'
 type MediaStatus = 'idle' | 'requesting' | 'live' | 'error'
@@ -47,10 +52,6 @@ function stopStream(stream: MediaStream | null) {
 
 function voiceSessionId(roomId: string) {
   return `voice:${roomId}`
-}
-
-function isCandidateInit(value: unknown): value is RTCIceCandidateInit {
-  return typeof value === 'object' && value !== null && 'candidate' in value
 }
 
 export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
@@ -122,7 +123,11 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
           continue
         }
         processedSignalIdsRef.current.add(event.id)
-        await routeSignalEvent(event, activeVoiceRoom.roomId)
+        try {
+          await routeSignalEvent(event, activeVoiceRoom.roomId)
+        } catch {
+          continue
+        }
       }
     }
 
@@ -304,13 +309,39 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
   }
 
   async function routeSignalEvent(event: SignalingEvent, roomId: string) {
+    if (!isWebRtcSignalType(event.signalType)) {
+      return
+    }
+
+    let parsedSignal:
+      | { type: 'offer'; data: RTCSessionDescriptionInit }
+      | { type: 'answer'; data: RTCSessionDescriptionInit }
+      | { type: 'ice-candidate'; data: RTCIceCandidateInit }
+      | null = null
+
+    if (event.signalType === 'offer') {
+      const data = parseSessionDescriptionInit(event.signalData, 'offer')
+      parsedSignal = data ? { type: 'offer', data } : null
+    }
+    if (event.signalType === 'answer') {
+      const data = parseSessionDescriptionInit(event.signalData, 'answer')
+      parsedSignal = data ? { type: 'answer', data } : null
+    }
+    if (event.signalType === 'ice-candidate') {
+      const data = parseIceCandidateInit(event.signalData)
+      parsedSignal = data ? { type: 'ice-candidate', data } : null
+    }
+    if (!parsedSignal) {
+      return
+    }
+
     const room = snapshot?.voiceRooms.find((candidate) => candidate.roomId === roomId)
     const participant = room?.participants.find((candidate) => candidate.peerId === event.peerId)
     const peerName = participant?.peerName ?? event.peerId
     const connection = await createPeerConnection(roomId, event.peerId, peerName)
 
-    if (event.signalType === 'offer') {
-      const offer = new RTCSessionDescription(JSON.parse(event.signalData) as RTCSessionDescriptionInit)
+    if (parsedSignal.type === 'offer') {
+      const offer = new RTCSessionDescription(parsedSignal.data)
       await connection.setRemoteDescription(offer)
       const answer = await connection.createAnswer()
       await connection.setLocalDescription(answer)
@@ -318,19 +349,16 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
       return
     }
 
-    if (event.signalType === 'answer') {
-      const answer = new RTCSessionDescription(JSON.parse(event.signalData) as RTCSessionDescriptionInit)
+    if (parsedSignal.type === 'answer') {
+      const answer = new RTCSessionDescription(parsedSignal.data)
       if (!connection.currentRemoteDescription) {
         await connection.setRemoteDescription(answer)
       }
       return
     }
 
-    if (event.signalType === 'ice-candidate') {
-      const candidateData = JSON.parse(event.signalData) as unknown
-      if (isCandidateInit(candidateData)) {
-        await connection.addIceCandidate(new RTCIceCandidate(candidateData))
-      }
+    if (parsedSignal.type === 'ice-candidate') {
+      await connection.addIceCandidate(new RTCIceCandidate(parsedSignal.data))
     }
   }
 
