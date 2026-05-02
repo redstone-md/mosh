@@ -11,14 +11,10 @@ type UsePeerTrustStateOptions = {
   setPreferences: Dispatch<SetStateAction<ShellPreferences>>
 }
 
-export function usePeerTrustState({
-  peers,
-  trustedPeers,
-  setPreferences,
-}: UsePeerTrustStateOptions) {
+export function usePeerTrustState({ peers, trustedPeers, setPreferences }: UsePeerTrustStateOptions) {
   const trustByPeerId = useMemo(
     () => Object.fromEntries(peers.map((peer) => [peer.id, getPeerTrustState(trustedPeers, peer)] as const)),
-    [peers, trustedPeers],
+    [peers, trustedPeers]
   )
   const trustedPeerEntries = useMemo(() => listTrustedPeers(trustedPeers, peers), [peers, trustedPeers])
 

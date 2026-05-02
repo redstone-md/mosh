@@ -124,11 +124,7 @@ type MainSurfaceProps = {
   onLanguagePreferenceChange: (value: 'system' | 'en' | 'ru') => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
   onSaveRuntime: () => void
-  onSaveWorkspace: (
-    groups: RoomGroup[],
-    roomTypes: Record<string, ChannelType>,
-    selectedGroupId: string,
-  ) => void
+  onSaveWorkspace: (groups: RoomGroup[], roomTypes: Record<string, ChannelType>, selectedGroupId: string) => void
   onRestoreStorage: () => void
   onResetOnboarding: () => void
 }
@@ -205,16 +201,19 @@ export function MainSurface({
 }: MainSurfaceProps) {
   const { copy } = useI18n()
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
-  const [focusTarget, setFocusTarget] = useState<{ roomId: string; messageId: string } | null>(null)
+  const [focusTarget, setFocusTarget] = useState<{
+    roomId: string
+    messageId: string
+  } | null>(null)
   const globalArchives = useGlobalSearchArchives(archiveRefreshToken)
   const archiveLabel = describeArchiveStateLabel(
     copy,
     archiveState.archive?.signerFingerprint ?? identityFingerprint,
-    archiveState.archive?.verified,
+    archiveState.archive?.verified
   )
   const globalSearchEntries = useMemo(
     () => buildGlobalSearchEntries(data.messages, globalArchives.data ?? [], data.rooms),
-    [data.messages, data.rooms, globalArchives.data],
+    [data.messages, data.rooms, globalArchives.data]
   )
   const { inviteCode, applyInviteCode } = useMeshInviteActions({
     currentUser: runtimeDraft.nickname,
@@ -292,9 +291,7 @@ export function MainSurface({
           currentUser={currentUser}
           archiveFingerprint={archiveState.archive?.signerFingerprint}
           archiveVerified={archiveState.archive?.verified}
-          externalFocusMessageId={
-            focusTarget?.roomId === activeRoom.id ? focusTarget.messageId : undefined
-          }
+          externalFocusMessageId={focusTarget?.roomId === activeRoom.id ? focusTarget.messageId : undefined}
           muted={mutedRoomIds.includes(activeRoom.id)}
           draft={messageDraft}
           isSending={publishPending}

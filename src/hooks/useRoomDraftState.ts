@@ -15,9 +15,9 @@ export function useRoomDraftState({ roomDrafts, setPreferences }: UseRoomDraftSt
       Object.fromEntries(
         Object.entries(roomDrafts)
           .map(([roomId, value]) => [roomId, getRoomDraftPreview(value)] as const)
-          .filter((entry) => entry[1].length > 0),
+          .filter((entry) => entry[1].length > 0)
       ),
-    [roomDrafts],
+    [roomDrafts]
   )
 
   const setDraft = useCallback(
@@ -27,7 +27,7 @@ export function useRoomDraftState({ roomDrafts, setPreferences }: UseRoomDraftSt
         roomDrafts: setRoomDraftValue(current.roomDrafts, roomId, value),
       }))
     },
-    [setPreferences],
+    [setPreferences]
   )
 
   const clearDraft = useCallback(
@@ -37,7 +37,7 @@ export function useRoomDraftState({ roomDrafts, setPreferences }: UseRoomDraftSt
         roomDrafts: setRoomDraftValue(current.roomDrafts, roomId, ''),
       }))
     },
-    [setPreferences],
+    [setPreferences]
   )
 
   return {

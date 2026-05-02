@@ -66,7 +66,10 @@ export function useShellPreferences() {
       setIdentityFingerprint(identity.fingerprint)
       return identity
     },
-    saveIdentityRollbackSnapshot: (identity: Awaited<ReturnType<typeof ensureSigningIdentity>>, source: 'import' | 'rollback') => {
+    saveIdentityRollbackSnapshot: (
+      identity: Awaited<ReturnType<typeof ensureSigningIdentity>>,
+      source: 'import' | 'rollback'
+    ) => {
       setPreferences((current) => ({
         ...current,
         identityRollbackSnapshots: appendIdentityRollbackSnapshot(current.identityRollbackSnapshots, identity, source),
@@ -83,7 +86,11 @@ export function useShellPreferences() {
       setIdentityFingerprint(restoredIdentity.fingerprint)
       setPreferences((current) => ({
         ...current,
-        identityRollbackSnapshots: promoteRollbackSnapshot(current.identityRollbackSnapshots, snapshotId, currentIdentity),
+        identityRollbackSnapshots: promoteRollbackSnapshot(
+          current.identityRollbackSnapshots,
+          snapshotId,
+          currentIdentity
+        ),
       }))
       return selectedSnapshot
     },

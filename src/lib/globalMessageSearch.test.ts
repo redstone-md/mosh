@@ -39,7 +39,7 @@ describe('globalMessageSearch', () => {
     const entries = buildGlobalSearchEntries(
       [createMessage('m-1', 'lobby', '<p>live body</p>')],
       [createArchive('lobby', [createMessage('m-1', 'lobby', '<p>archived body</p>')])],
-      rooms,
+      rooms
     )
 
     expect(entries).toHaveLength(1)
@@ -49,12 +49,9 @@ describe('globalMessageSearch', () => {
 
   it('searches across room names and message bodies', () => {
     const entries = buildGlobalSearchEntries(
-      [
-        createMessage('m-1', 'lobby', '<p>handover ready</p>'),
-        createMessage('m-2', 'ops', '<p>transport stable</p>'),
-      ],
+      [createMessage('m-1', 'lobby', '<p>handover ready</p>'), createMessage('m-2', 'ops', '<p>transport stable</p>')],
       [],
-      rooms,
+      rooms
     )
 
     expect(searchGlobalMessages(entries, 'transport')[0]?.messageId).toBe('m-2')
@@ -63,12 +60,9 @@ describe('globalMessageSearch', () => {
 
   it('returns newest matches first', () => {
     const entries = buildGlobalSearchEntries(
-      [
-        createMessage('m-1', 'lobby', '<p>mesh</p>'),
-        createMessage('m-2', 'ops', '<p>mesh</p>'),
-      ],
+      [createMessage('m-1', 'lobby', '<p>mesh</p>'), createMessage('m-2', 'ops', '<p>mesh</p>')],
       [],
-      rooms,
+      rooms
     )
 
     const results = searchGlobalMessages(entries, 'mesh')

@@ -9,7 +9,12 @@ import {
   type SignedRoomArchive,
   type StoredMessage,
 } from './appShellSchemas'
-import { createSigningIdentity, parseSigningIdentity, signSerializedPayload, verifySerializedPayload } from './cryptoIdentity'
+import {
+  createSigningIdentity,
+  parseSigningIdentity,
+  signSerializedPayload,
+  verifySerializedPayload,
+} from './cryptoIdentity'
 import { desktopStorageClient } from './desktopStorageClient'
 import type { Message, RoomSummary, UpdateRuntimeSettingsInput } from './schemas'
 import { isTauriEnvironment } from './tauriEnv'
@@ -144,7 +149,7 @@ export function reconcileGroups(groups: RoomGroup[], rooms: RoomSummary[]): Room
 
 export function reconcileRoomTypes(
   current: Record<string, ChannelType>,
-  rooms: RoomSummary[],
+  rooms: RoomSummary[]
 ): Record<string, ChannelType> {
   const next: Record<string, ChannelType> = {}
 
@@ -159,10 +164,7 @@ export function reconcileRoomTypes(
   return next
 }
 
-export function getChannelType(
-  room: RoomSummary | undefined,
-  roomTypes: Record<string, ChannelType>,
-): ChannelType {
+export function getChannelType(room: RoomSummary | undefined, roomTypes: Record<string, ChannelType>): ChannelType {
   if (!room || room.kind !== 'channel') {
     return 'text'
   }

@@ -6,11 +6,11 @@ import { resolveAppLanguage, type AppLanguage } from '../lib/i18n'
 export function useDocumentAppearance(
   theme: ThemeId,
   languagePreference: LanguagePreference,
-  systemLanguage: AppLanguage,
+  systemLanguage: AppLanguage
 ) {
   const activeLanguage = useMemo(
     () => resolveAppLanguage(languagePreference, systemLanguage),
-    [languagePreference, systemLanguage],
+    [languagePreference, systemLanguage]
   )
 
   useEffect(() => {

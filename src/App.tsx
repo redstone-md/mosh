@@ -17,7 +17,13 @@ import { useRoomDraftState } from './hooks/useRoomDraftState'
 import { useRoomActivityState } from './hooks/useRoomActivityState'
 import { useShellPreferences } from './hooks/useShellPreferences'
 import { useSignedChatArchive } from './hooks/useSignedChatArchive'
-import { findRoomById, getVisiblePeers, sameRuntimeDraft, selectRoomFallback, toRuntimeDraft } from './lib/appShellSelectors'
+import {
+  findRoomById,
+  getVisiblePeers,
+  sameRuntimeDraft,
+  selectRoomFallback,
+  toRuntimeDraft,
+} from './lib/appShellSelectors'
 import { reconcileGroups, reconcileRoomTypes } from './lib/appShellStorage'
 import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
@@ -32,7 +38,16 @@ export function App() {
   const settingsHydratedRef = useRef(false)
   const runtimeAutoStartRef = useRef(false)
   const shellPreferences = useShellPreferences()
-  const { preferences, setPreferences, identityFingerprint, regenerateIdentity, saveIdentityRollbackSnapshot, restoreIdentityRollbackSnapshot, recordIdentityTransferEvent, reload } = shellPreferences
+  const {
+    preferences,
+    setPreferences,
+    identityFingerprint,
+    regenerateIdentity,
+    saveIdentityRollbackSnapshot,
+    restoreIdentityRollbackSnapshot,
+    recordIdentityTransferEvent,
+    reload,
+  } = shellPreferences
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archiveRefreshKey, setArchiveRefreshKey] = useState(0)
@@ -166,21 +181,30 @@ export function App() {
   const data = snapshot.data
   const runtimeDraft = preferences.runtimeDraft
   const showOnboarding = data?.runtime.state !== 'Runtime online' && !preferences.onboardingCompleted
-  const mentionablePeerNames = useMemo(() => (data?.peers ?? []).filter((peer) => peer.status !== 'self').map((peer) => peer.displayName), [data?.peers])
+  const mentionablePeerNames = useMemo(
+    () => (data?.peers ?? []).filter((peer) => peer.status !== 'self').map((peer) => peer.displayName),
+    [data?.peers]
+  )
   const visibleRooms = useMemo(() => (data?.rooms.length ? data.rooms : [getFallbackRoom()]), [data?.rooms])
-  const reconciledGroups = useMemo(() => reconcileGroups(preferences.groups, visibleRooms), [preferences.groups, visibleRooms])
-  const reconciledRoomTypes = useMemo(() => reconcileRoomTypes(preferences.roomTypes, visibleRooms), [preferences.roomTypes, visibleRooms])
+  const reconciledGroups = useMemo(
+    () => reconcileGroups(preferences.groups, visibleRooms),
+    [preferences.groups, visibleRooms]
+  )
+  const reconciledRoomTypes = useMemo(
+    () => reconcileRoomTypes(preferences.roomTypes, visibleRooms),
+    [preferences.roomTypes, visibleRooms]
+  )
   const activeRoom = useMemo(
     () =>
       data
-        ? selectRoomFallback(
+        ? (selectRoomFallback(
             visibleRooms,
             preferences.selectedDock,
             reconciledGroups,
             preferences.selectedGroupId,
             preferences.selectedRoomId,
-            data.settings.initialRoom,
-          ) ?? getFallbackRoom()
+            data.settings.initialRoom
+          ) ?? getFallbackRoom())
         : getFallbackRoom(),
     [
       data,
@@ -189,34 +213,47 @@ export function App() {
       preferences.selectedRoomId,
       reconciledGroups,
       visibleRooms,
-    ],
+    ]
   )
   const visiblePeers = useMemo(() => (data ? getVisiblePeers(activeRoom, data.peers) : []), [activeRoom, data])
   const liveMessages = useMemo(
-    () =>
-      data
-        ? dedupeMessages(data.messages.filter((message) => message.roomId === activeRoom.id))
-        : [],
-    [activeRoom.id, data?.messages],
+    () => (data ? dedupeMessages(data.messages.filter((message) => message.roomId === activeRoom.id)) : []),
+    [activeRoom.id, data?.messages]
   )
   const archiveState = useSignedChatArchive(
     showOnboarding ? '__inactive__' : activeRoom.id,
     showOnboarding ? [] : liveMessages,
-    archiveRefreshKey,
+    archiveRefreshKey
   )
   const activePinnedMessageIds = preferences.pinnedMessages[activeRoom.id] ?? []
-  const roomActivity = useRoomActivityState({ snapshot: data, selectedRoomId: preferences.selectedRoomId, lastReadMessageIds: preferences.lastReadMessageIds, mutedRooms: preferences.mutedRooms, setPreferences })
-  const peerTrust = usePeerTrustState({ peers: data?.peers ?? [], trustedPeers: preferences.trustedPeers, setPreferences })
-  const roomDraftState = useRoomDraftState({ roomDrafts: preferences.roomDrafts, setPreferences })
+  const roomActivity = useRoomActivityState({
+    snapshot: data,
+    selectedRoomId: preferences.selectedRoomId,
+    lastReadMessageIds: preferences.lastReadMessageIds,
+    mutedRooms: preferences.mutedRooms,
+    setPreferences,
+  })
+  const peerTrust = usePeerTrustState({
+    peers: data?.peers ?? [],
+    trustedPeers: preferences.trustedPeers,
+    setPreferences,
+  })
+  const roomDraftState = useRoomDraftState({
+    roomDrafts: preferences.roomDrafts,
+    setPreferences,
+  })
   const messageOverlayState = useMessageOverlayState({
     messageOverlays: preferences.messageOverlays,
     setPreferences,
     hiddenLabel: activeCopy.messages.hiddenLocally,
   })
-  const overlaidMessages = useMemo(() => messageOverlayState.applyOverlays(archiveState.mergedMessages), [archiveState.mergedMessages, messageOverlayState.applyOverlays])
+  const overlaidMessages = useMemo(
+    () => messageOverlayState.applyOverlays(archiveState.mergedMessages),
+    [archiveState.mergedMessages, messageOverlayState.applyOverlays]
+  )
   const pinnedMessages = useMemo(
     () => resolvePinnedMessages(preferences.pinnedMessages, activeRoom.id, overlaidMessages),
-    [activeRoom.id, overlaidMessages, preferences.pinnedMessages],
+    [activeRoom.id, overlaidMessages, preferences.pinnedMessages]
   )
   const messageOutbox = useMessageOutbox({
     currentUser: runtimeDraft.nickname,
@@ -227,8 +264,12 @@ export function App() {
   })
   const displayMessages = useMemo(
     () =>
-      messageOutbox.buildDisplayMessages(activeRoom.id, overlaidMessages, archiveState.archive?.messages.map((message) => message.id) ?? []),
-    [activeRoom.id, archiveState.archive?.messages, overlaidMessages, messageOutbox.buildDisplayMessages],
+      messageOutbox.buildDisplayMessages(
+        activeRoom.id,
+        overlaidMessages,
+        archiveState.archive?.messages.map((message) => message.id) ?? []
+      ),
+    [activeRoom.id, archiveState.archive?.messages, overlaidMessages, messageOutbox.buildDisplayMessages]
   )
   const messageDraft = roomDraftState.getDraft(activeRoom.id)
   useEffect(() => {
@@ -265,7 +306,11 @@ export function App() {
     subscribeRoom,
   })
   const identityTransferFlow = useIdentityTransferFlow({
-    copy: { invalidLink: activeCopy.identityTransfer.deepLinkInvalid, imported: activeCopy.identityTransfer.deepLinkImported, importFailed: activeCopy.identityTransfer.importFailed },
+    copy: {
+      invalidLink: activeCopy.identityTransfer.deepLinkInvalid,
+      imported: activeCopy.identityTransfer.deepLinkImported,
+      importFailed: activeCopy.identityTransfer.importFailed,
+    },
     currentIdentityFingerprint: identityFingerprint,
     onImported: reload,
     onRecordEvent: recordIdentityTransferEvent,
@@ -297,8 +342,24 @@ export function App() {
     },
   }
 
-  if (shellPreferences.isPending || snapshot.isPending) return <ShellI18nFrame {...shellFrameProps}><LoadingScreen /></ShellI18nFrame>
-  if (shellPreferences.error instanceof Error || snapshot.isError) return <ShellI18nFrame {...shellFrameProps}><BootstrapErrorScreen message={shellPreferences.error instanceof Error ? shellPreferences.error.message : snapshot.error?.message ?? activeCopy.app.bootstrapError} /></ShellI18nFrame>
+  if (shellPreferences.isPending || snapshot.isPending)
+    return (
+      <ShellI18nFrame {...shellFrameProps}>
+        <LoadingScreen />
+      </ShellI18nFrame>
+    )
+  if (shellPreferences.error instanceof Error || snapshot.isError)
+    return (
+      <ShellI18nFrame {...shellFrameProps}>
+        <BootstrapErrorScreen
+          message={
+            shellPreferences.error instanceof Error
+              ? shellPreferences.error.message
+              : (snapshot.error?.message ?? activeCopy.app.bootstrapError)
+          }
+        />
+      </ShellI18nFrame>
+    )
 
   if (!data) return null
 
@@ -315,12 +376,21 @@ export function App() {
     }
   }
 
-  function handleSkipOnboarding() { setPreferences((current) => ({ ...current, onboardingCompleted: true })) }
-  async function handleSaveRuntime() { await updateRuntimeSettings.mutateAsync(preferences.runtimeDraft) }
+  function handleSkipOnboarding() {
+    setPreferences((current) => ({ ...current, onboardingCompleted: true }))
+  }
+  async function handleSaveRuntime() {
+    await updateRuntimeSettings.mutateAsync(preferences.runtimeDraft)
+  }
 
   function handleCreateGroup(group: Omit<RoomGroup, 'id'>) {
     const nextId = `group-${Date.now().toString(36)}`
-    setPreferences((current) => ({ ...current, selectedDock: 'group', selectedGroupId: nextId, groups: [...current.groups, { id: nextId, ...group }] }))
+    setPreferences((current) => ({
+      ...current,
+      selectedDock: 'group',
+      selectedGroupId: nextId,
+      groups: [...current.groups, { id: nextId, ...group }],
+    }))
   }
 
   async function handleSendMessage() {
@@ -330,19 +400,19 @@ export function App() {
     await messageOutbox.sendMessage(activeRoom.id, nextDraft)
   }
 
-  function handleThemeChange(theme: ThemeId) { setPreferences((current) => ({ ...current, theme })) }
+  function handleThemeChange(theme: ThemeId) {
+    setPreferences((current) => ({ ...current, theme }))
+  }
 
-  function handleLanguagePreferenceChange(languagePreference: 'system' | 'en' | 'ru') { setPreferences((current) => ({ ...current, languagePreference })) }
+  function handleLanguagePreferenceChange(languagePreference: 'system' | 'en' | 'ru') {
+    setPreferences((current) => ({ ...current, languagePreference }))
+  }
 
   function handleRuntimeDraftChange(draft: UpdateRuntimeSettingsInput) {
     setPreferences((current) => ({ ...current, runtimeDraft: draft }))
   }
 
-  function handleSaveWorkspace(
-    groups: RoomGroup[],
-    roomTypes: Record<string, ChannelType>,
-    selectedGroupId: string,
-  ) {
+  function handleSaveWorkspace(groups: RoomGroup[], roomTypes: Record<string, ChannelType>, selectedGroupId: string) {
     const nextGroups = reconcileGroups(groups, visibleRooms)
     const nextRoomTypes = reconcileRoomTypes(roomTypes, visibleRooms)
     const nextSelectedGroupId =
@@ -369,19 +439,25 @@ export function App() {
     if (!selectedSnapshot) throw new Error('Rollback snapshot not found.')
     const previousFingerprint = identityFingerprint
     const restoredSnapshot = await restoreIdentityRollbackSnapshot(snapshotId)
-    recordIdentityTransferEvent({ action: 'rollback', channel: 'manual', activeFingerprint: restoredSnapshot.fingerprint, replacedFingerprint: previousFingerprint, packageSourceFingerprint: restoredSnapshot.fingerprint, packageExportedAt: restoredSnapshot.capturedAt })
+    recordIdentityTransferEvent({
+      action: 'rollback',
+      channel: 'manual',
+      activeFingerprint: restoredSnapshot.fingerprint,
+      replacedFingerprint: previousFingerprint,
+      packageSourceFingerprint: restoredSnapshot.fingerprint,
+      packageExportedAt: restoredSnapshot.capturedAt,
+    })
   }
 
-  const mediaLabel =
-    mediaSession.state.activeRoomId
-      ? activeCopy.runtime.roomLiveLabel(
-          formatRoomTitle(
-            visibleRooms.find((room) => room.id === mediaSession.state.activeRoomId),
-            activeCopy.common.unknownRoom,
-          ),
-          mediaSession.state.remoteStreams.length,
-        )
-      : activeCopy.runtime.offlineLabel
+  const mediaLabel = mediaSession.state.activeRoomId
+    ? activeCopy.runtime.roomLiveLabel(
+        formatRoomTitle(
+          visibleRooms.find((room) => room.id === mediaSession.state.activeRoomId),
+          activeCopy.common.unknownRoom
+        ),
+        mediaSession.state.remoteStreams.length
+      )
+    : activeCopy.runtime.offlineLabel
   const activeVoiceRoom = data.voiceRooms.find((room) => room.joined) ?? null
 
   if (showOnboarding) {
@@ -462,7 +538,7 @@ export function App() {
             selectedRoomId:
               findRoomById(visibleRooms, current.selectedRoomId)?.kind === 'dm'
                 ? current.selectedRoomId
-                : visibleRooms.find((room) => room.kind === 'dm')?.id ?? current.selectedRoomId,
+                : (visibleRooms.find((room) => room.kind === 'dm')?.id ?? current.selectedRoomId),
           }))
         }
         onSelectGroup={(groupId) =>

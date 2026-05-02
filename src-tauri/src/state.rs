@@ -1,4 +1,3 @@
-use std::sync::Mutex;
 use crate::{
     callback_state::shared_callback_state,
     chat_protocol::{direct_room_name, ChatPayload, CONTROL_ROOM},
@@ -7,6 +6,7 @@ use crate::{
     runtime_settings::{DesktopRuntimeConfig, RuntimeSettingsInput},
     snapshot_view,
 };
+use std::sync::Mutex;
 
 const DEV_BRANCH: &str = "dev";
 
@@ -40,7 +40,9 @@ impl DesktopShellState {
 
         let live_mesh = self.live_mesh_info();
         let settings = self.settings.summary();
-        let diagnostics = self.settings.diagnostics(live_mesh.as_ref().ok().and_then(|mesh| mesh.as_ref()));
+        let diagnostics = self
+            .settings
+            .diagnostics(live_mesh.as_ref().ok().and_then(|mesh| mesh.as_ref()));
 
         match live_mesh {
             Ok(Some(mesh)) => snapshot_view::online_snapshot(
@@ -196,8 +198,9 @@ impl DesktopShellState {
             .library
             .as_ref()
             .ok_or_else(|| "shared library is not loaded".to_string())?;
-        let payload = serde_json::to_vec(&ChatPayload::room_message(self.settings.nickname(), body))
-            .map_err(|err| format!("failed to encode room message: {err}"))?;
+        let payload =
+            serde_json::to_vec(&ChatPayload::room_message(self.settings.nickname(), body))
+                .map_err(|err| format!("failed to encode room message: {err}"))?;
         library.publish(handle, room, &payload).map_err(|err| {
             if MossLibrary::is_no_peers_error(&err) {
                 "No connected peers yet. Message stayed local until another peer joins.".to_string()
@@ -293,7 +296,10 @@ impl DesktopShellState {
             library,
             handle,
             &payload,
-            format!("Queued call accept for {} until a peer path is ready.", call_state.peer_name),
+            format!(
+                "Queued call accept for {} until a peer path is ready.",
+                call_state.peer_name
+            ),
         )?;
         if let Ok(mut callbacks) = shared_callback_state().lock() {
             callbacks.note_runtime(format!("Call answered: {}.", call_state.peer_name));
@@ -328,7 +334,10 @@ impl DesktopShellState {
             library,
             handle,
             &payload,
-            format!("Queued call decline for {} until a peer path is ready.", call_state.peer_name),
+            format!(
+                "Queued call decline for {} until a peer path is ready.",
+                call_state.peer_name
+            ),
         )?;
         Ok(self.snapshot())
     }
@@ -360,7 +369,10 @@ impl DesktopShellState {
             library,
             handle,
             &payload,
-            format!("Queued call hangup for {} until a peer path is ready.", call_state.peer_name),
+            format!(
+                "Queued call hangup for {} until a peer path is ready.",
+                call_state.peer_name
+            ),
         )?;
         Ok(self.snapshot())
     }
@@ -557,9 +569,9 @@ impl DesktopShellState {
             let state = callback_state
                 .lock()
                 .map_err(|_| "callback state lock poisoned".to_string())?;
-            state
-                .resolve_peer_target(target)
-                .ok_or_else(|| format!("peer {target:?} not found; wait for presence or use connect"))?
+            state.resolve_peer_target(target).ok_or_else(|| {
+                format!("peer {target:?} not found; wait for presence or use connect")
+            })?
         };
 
         let mesh = self

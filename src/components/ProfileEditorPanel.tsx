@@ -45,8 +45,9 @@ export function ProfileEditorPanel({
   onLanDiscoveryChange,
   onSave,
 }: ProfileEditorPanelProps) {
-  const inputClasses = "w-full bg-background border border-border/50 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
-  const labelClasses = "block text-sm font-medium text-foreground/60 mb-1.5"
+  const inputClasses =
+    'w-full bg-background border border-border/50 rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all'
+  const labelClasses = 'block text-sm font-medium text-foreground/60 mb-1.5'
 
   return (
     <section className="space-y-8 pb-8">
@@ -131,9 +132,7 @@ export function ProfileEditorPanel({
           <select
             className={inputClasses}
             value={trackerMode}
-            onChange={(event) =>
-              onTrackerModeChange(event.target.value as 'default' | 'disabled')
-            }
+            onChange={(event) => onTrackerModeChange(event.target.value as 'default' | 'disabled')}
           >
             <option value="default">Use built-in trackers</option>
             <option value="disabled">Disable trackers</option>
@@ -158,13 +157,15 @@ export function ProfileEditorPanel({
         <pre className="text-xs font-mono text-primary/80 overflow-x-auto">{configPreview}</pre>
       </div>
 
-      {errorNote ? <p className="bg-red-500/10 text-red-400 text-sm p-4 rounded-lg border border-red-500/20">{errorNote}</p> : null}
+      {errorNote ? (
+        <p className="bg-red-500/10 text-red-400 text-sm p-4 rounded-lg border border-red-500/20">{errorNote}</p>
+      ) : null}
 
       <div className="pt-4">
-        <button 
-          className="bg-primary text-background font-bold py-3 px-8 rounded-xl hover:bg-primary/90 transition-all disabled:opacity-50" 
-          type="button" 
-          onClick={onSave} 
+        <button
+          className="bg-primary text-background font-bold py-3 px-8 rounded-xl hover:bg-primary/90 transition-all disabled:opacity-50"
+          type="button"
+          onClick={onSave}
           disabled={isSaving}
         >
           {isSaving ? 'Saving...' : 'Save profile'}

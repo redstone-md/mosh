@@ -16,8 +16,7 @@ export type I18nCopy = (typeof translations)[AppLanguage]
 
 export function detectSystemLanguage(input?: string): AppLanguage {
   const source =
-    input ??
-    (typeof navigator !== 'undefined' ? navigator.languages?.find(Boolean) ?? navigator.language : 'en')
+    input ?? (typeof navigator !== 'undefined' ? (navigator.languages?.find(Boolean) ?? navigator.language) : 'en')
   const normalized = source.trim().toLowerCase()
 
   if (normalized.startsWith('ru')) {
@@ -27,10 +26,7 @@ export function detectSystemLanguage(input?: string): AppLanguage {
   return 'en'
 }
 
-export function resolveAppLanguage(
-  preference: LanguagePreference,
-  systemLanguage: AppLanguage,
-): AppLanguage {
+export function resolveAppLanguage(preference: LanguagePreference, systemLanguage: AppLanguage): AppLanguage {
   return preference === 'system' ? systemLanguage : preference
 }
 
@@ -41,7 +37,7 @@ export function getI18nCopy(language: AppLanguage): I18nCopy {
 export function getLanguageOptionLabel(
   copy: I18nCopy,
   preference: LanguagePreference,
-  systemLanguage: AppLanguage,
+  systemLanguage: AppLanguage
 ): string {
   if (preference === 'system') {
     return copy.languageNames.systemResolved(copy.languageNames[systemLanguage])
@@ -73,7 +69,7 @@ export function localizePeerStatus(copy: I18nCopy, status: string): string {
 export function describeArchiveStateLabel(
   copy: I18nCopy,
   fingerprint: string | undefined,
-  verified: boolean | undefined,
+  verified: boolean | undefined
 ): string {
   if (!fingerprint) {
     return copy.archive.pending

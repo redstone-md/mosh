@@ -3,11 +3,7 @@ import type { Dispatch, SetStateAction } from 'react'
 
 import type { DisplayMessage } from '../lib/messageDelivery'
 import type { MessageOverlay, ShellPreferences } from '../lib/appShellSchemas'
-import {
-  applyMessageOverlays,
-  toggleHiddenMessageOverlay,
-  upsertEditedMessageOverlay,
-} from '../lib/messageOverlays'
+import { applyMessageOverlays, toggleHiddenMessageOverlay, upsertEditedMessageOverlay } from '../lib/messageOverlays'
 
 type UseMessageOverlayStateOptions = {
   messageOverlays: Record<string, MessageOverlay>
@@ -22,7 +18,7 @@ export function useMessageOverlayState({
 }: UseMessageOverlayStateOptions) {
   const applyOverlays = useCallback(
     (messages: DisplayMessage[]) => applyMessageOverlays(messages, messageOverlays, hiddenLabel),
-    [hiddenLabel, messageOverlays],
+    [hiddenLabel, messageOverlays]
   )
 
   return {
@@ -34,7 +30,7 @@ export function useMessageOverlayState({
           ...current,
           messageOverlays: upsertEditedMessageOverlay(current.messageOverlays, messageId, roomId, body),
         })),
-      [setPreferences],
+      [setPreferences]
     ),
     toggleMessageHidden: useCallback(
       (messageId: string, roomId: string) =>
@@ -42,14 +38,14 @@ export function useMessageOverlayState({
           ...current,
           messageOverlays: toggleHiddenMessageOverlay(current.messageOverlays, messageId, roomId),
         })),
-      [setPreferences],
+      [setPreferences]
     ),
     hiddenMessageIds: useMemo(
       () =>
         Object.entries(messageOverlays)
           .filter(([, overlay]) => overlay.hidden)
           .map(([messageId]) => messageId),
-      [messageOverlays],
+      [messageOverlays]
     ),
   }
 }

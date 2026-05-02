@@ -29,9 +29,9 @@ export function useSignedChatArchive(roomId: string, liveMessages: Message[], re
           body: message.body,
           timestamp: message.timestamp,
           emphasis: message.emphasis,
-        })),
+        }))
       ),
-    [liveMessages],
+    [liveMessages]
   )
 
   useEffect(() => {
@@ -66,9 +66,9 @@ export function useSignedChatArchive(roomId: string, liveMessages: Message[], re
           body: message.body,
           timestamp: message.timestamp,
           emphasis: message.emphasis,
-        })),
+        }))
       ),
-    [archiveState.mergedMessages],
+    [archiveState.mergedMessages]
   )
 
   useEffect(() => {

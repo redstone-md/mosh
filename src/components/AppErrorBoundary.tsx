@@ -8,10 +8,7 @@ type AppErrorBoundaryState = {
   errorMessage: string | null
 }
 
-export class AppErrorBoundary extends Component<
-  AppErrorBoundaryProps,
-  AppErrorBoundaryState
-> {
+export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
   state: AppErrorBoundaryState = {
     errorMessage: null,
   }

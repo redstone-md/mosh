@@ -15,12 +15,7 @@ type GlobalSearchDialogProps = {
   onSelectResult: (result: GlobalSearchResult) => void
 }
 
-export function GlobalSearchDialog({
-  open,
-  entries,
-  onOpenChange,
-  onSelectResult,
-}: GlobalSearchDialogProps) {
+export function GlobalSearchDialog({ open, entries, onOpenChange, onSelectResult }: GlobalSearchDialogProps) {
   const { copy } = useI18n()
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
@@ -78,7 +73,9 @@ export function GlobalSearchDialog({
                   </div>
                   <div className="shrink-0 text-right text-[11px] text-[var(--muted-foreground)]">
                     <div>{result.timestamp}</div>
-                    <div className="mt-1">{result.source === 'archive' ? copy.messages.globalSearchArchive : copy.messages.globalSearchLive}</div>
+                    <div className="mt-1">
+                      {result.source === 'archive' ? copy.messages.globalSearchArchive : copy.messages.globalSearchLive}
+                    </div>
                   </div>
                 </button>
               ))}

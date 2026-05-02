@@ -5,7 +5,7 @@ const IDENTITY_ROLLBACK_LIMIT = 5
 export function appendIdentityRollbackSnapshot(
   snapshots: IdentityRollbackSnapshot[],
   identity: SigningIdentity,
-  source: IdentityRollbackSnapshot['source'],
+  source: IdentityRollbackSnapshot['source']
 ): IdentityRollbackSnapshot[] {
   const nextSnapshot: IdentityRollbackSnapshot = {
     id: `${source}:${identity.fingerprint}:${new Date().toISOString()}`,
@@ -22,7 +22,7 @@ export function appendIdentityRollbackSnapshot(
 export function promoteRollbackSnapshot(
   snapshots: IdentityRollbackSnapshot[],
   snapshotId: string,
-  currentIdentity: SigningIdentity,
+  currentIdentity: SigningIdentity
 ): IdentityRollbackSnapshot[] {
   const remaining = snapshots.filter((snapshot) => snapshot.id !== snapshotId)
   return appendIdentityRollbackSnapshot(remaining, currentIdentity, 'rollback')

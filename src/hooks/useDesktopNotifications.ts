@@ -72,8 +72,7 @@ export function useDesktopNotifications({
         const mention = message.body.toLowerCase().includes(`@${nickname}`)
         const directRoom = message.roomId.startsWith('dm-') || room?.kind === 'dm'
         const mutedRoom = mutedRoomIds.includes(message.roomId)
-        const activeVisibleRoom =
-          windowState.focused && windowState.visible && message.roomId === selectedRoomId
+        const activeVisibleRoom = windowState.focused && windowState.visible && message.roomId === selectedRoomId
 
         if (activeVisibleRoom && !mention) {
           continue

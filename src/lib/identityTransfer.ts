@@ -29,10 +29,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer
 }
 
-export async function exportIdentityTransferPackage(
-  identity: SigningIdentity,
-  passphrase: string,
-): Promise<string> {
+export async function exportIdentityTransferPackage(identity: SigningIdentity, passphrase: string): Promise<string> {
   const normalizedPassphrase = normalizePassphrase(passphrase)
   const payload = identityTransferPayloadSchema.parse({
     version: 1,
@@ -47,7 +44,7 @@ export async function exportIdentityTransferPackage(
       iv,
     },
     key,
-    encoder.encode(JSON.stringify(payload)),
+    encoder.encode(JSON.stringify(payload))
   )
 
   return `${IDENTITY_TRANSFER_PREFIX}${encodeBytesToBase64Url(
@@ -59,19 +56,19 @@ export async function exportIdentityTransferPackage(
         salt: encodeBytesToBase64Url(salt),
         iv: encodeBytesToBase64Url(iv),
         cipherText: encodeBytesToBase64Url(new Uint8Array(cipherText)),
-      }),
-    ),
+      })
+    )
   )}`
 }
 
 export async function importIdentityTransferPackage(
   transferPackage: string,
-  passphrase: string,
+  passphrase: string
 ): Promise<SigningIdentity> {
   const normalizedPassphrase = normalizePassphrase(passphrase)
   const encodedEnvelope = normalizeIdentityTransferPackage(transferPackage).slice(IDENTITY_TRANSFER_PREFIX.length)
   const envelope = identityTransferEnvelopeSchema.parse(
-    JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope))),
+    JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope)))
   )
   const key = await deriveTransferKey(normalizedPassphrase, decodeBase64UrlToBytes(envelope.salt))
 
@@ -84,10 +81,10 @@ export async function importIdentityTransferPackage(
         iv,
       },
       key,
-      cipherText,
+      cipherText
     )
     const payload = identityTransferPayloadSchema.parse(
-      JSON.parse(new TextDecoder().decode(new Uint8Array(payloadBuffer))),
+      JSON.parse(new TextDecoder().decode(new Uint8Array(payloadBuffer)))
     )
     return payload.identity
   } catch {
@@ -104,13 +101,7 @@ function normalizePassphrase(value: string) {
 }
 
 async function deriveTransferKey(passphrase: string, salt: Uint8Array) {
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(passphrase),
-    'PBKDF2',
-    false,
-    ['deriveKey'],
-  )
+  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(passphrase), 'PBKDF2', false, ['deriveKey'])
 
   return crypto.subtle.deriveKey(
     {
@@ -125,7 +116,7 @@ async function deriveTransferKey(passphrase: string, salt: Uint8Array) {
       length: 256,
     },
     false,
-    ['encrypt', 'decrypt'],
+    ['encrypt', 'decrypt']
   )
 }
 
@@ -135,15 +126,13 @@ export function normalizeIdentityTransferPackage(value: string) {
     throw new Error('Identity transfer package is empty.')
   }
 
-  return normalized.startsWith(IDENTITY_TRANSFER_PREFIX)
-    ? normalized
-    : `${IDENTITY_TRANSFER_PREFIX}${normalized}`
+  return normalized.startsWith(IDENTITY_TRANSFER_PREFIX) ? normalized : `${IDENTITY_TRANSFER_PREFIX}${normalized}`
 }
 
 export function readIdentityTransferSummary(value: string): IdentityTransferSummary {
   const encodedEnvelope = normalizeIdentityTransferPackage(value).slice(IDENTITY_TRANSFER_PREFIX.length)
   const envelope = identityTransferEnvelopeSchema.parse(
-    JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope))),
+    JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope)))
   )
 
   return {

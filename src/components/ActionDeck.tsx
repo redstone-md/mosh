@@ -57,9 +57,9 @@ export function ActionDeck({
               placeholder="lobby"
             />
           </label>
-          <button 
-            className="w-full sm:w-auto bg-primary/10 text-primary border border-primary/20 text-sm font-bold py-2 px-4 rounded-xl hover:bg-primary/20 transition-all disabled:opacity-50 h-[38px]" 
-            onClick={onJoinRoom} 
+          <button
+            className="w-full sm:w-auto bg-primary/10 text-primary border border-primary/20 text-sm font-bold py-2 px-4 rounded-xl hover:bg-primary/20 transition-all disabled:opacity-50 h-[38px]"
+            onClick={onJoinRoom}
             type="button"
           >
             {busyAction === 'join' ? 'Joining...' : 'Subscribe'}
@@ -75,9 +75,9 @@ export function ActionDeck({
               placeholder="host:port"
             />
           </label>
-          <button 
-            className="w-full sm:w-auto bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 h-[38px]" 
-            onClick={onConnectPeer} 
+          <button
+            className="w-full sm:w-auto bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 h-[38px]"
+            onClick={onConnectPeer}
             type="button"
           >
             {busyAction === 'connect' ? 'Connecting...' : 'Connect'}
@@ -93,9 +93,9 @@ export function ActionDeck({
               placeholder="nickname or peer id"
             />
           </label>
-          <button 
-            className="w-full sm:w-auto bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 h-[38px]" 
-            onClick={onOpenDirectRoom} 
+          <button
+            className="w-full sm:w-auto bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 h-[38px]"
+            onClick={onOpenDirectRoom}
             type="button"
           >
             {busyAction === 'dm' ? 'Opening...' : 'Open DM'}
@@ -106,8 +106,9 @@ export function ActionDeck({
           <span>Presence and direct-room invites flow over the control channel.</span>
         </div>
       </div>
-      {errorNote ? <p className="bg-red-500/10 text-red-400 text-sm p-3 rounded-lg border border-red-500/20">{errorNote}</p> : null}
+      {errorNote ? (
+        <p className="bg-red-500/10 text-red-400 text-sm p-3 rounded-lg border border-red-500/20">{errorNote}</p>
+      ) : null}
     </section>
   )
 }
-

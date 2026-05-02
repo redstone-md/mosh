@@ -102,7 +102,11 @@ export function OnboardingGate({
             <motion.div
               className="text-[4.4rem] font-semibold tracking-[0.22em] text-[color-mix(in_srgb,var(--primary)_78%,white)] drop-shadow-[0_0_24px_rgba(143,203,155,0.26)] sm:text-[5.6rem]"
               animate={{ opacity: [0.72, 1, 0.82], scale: [1, 1.015, 1] }}
-              transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, repeatType: 'mirror' }}
+              transition={{
+                duration: 2,
+                repeat: Number.POSITIVE_INFINITY,
+                repeatType: 'mirror',
+              }}
             >
               MOSH
             </motion.div>
@@ -125,9 +129,7 @@ export function OnboardingGate({
               <div className="text-[1.75rem] font-semibold text-[color-mix(in_srgb,var(--primary)_82%,white)]">
                 {activeStep.title}
               </div>
-              <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
-                {activeStep.subtitle}
-              </p>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">{activeStep.subtitle}</p>
             </div>
             <div className="rounded-full border border-[rgba(143,203,155,0.16)] bg-[rgba(10,23,16,0.42)] px-3 py-1.5 text-xs tracking-[0.08em] text-[var(--muted-foreground)]">
               {localizeRuntimeState(copy, runtime.state)}
@@ -158,7 +160,10 @@ export function OnboardingGate({
             >
               {currentStep === 0 ? (
                 <div className="space-y-2">
-                  <Label htmlFor="onboarding-nickname" className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]">
+                  <Label
+                    htmlFor="onboarding-nickname"
+                    className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
+                  >
                     {copy.form.nickname}
                   </Label>
                   <Input
@@ -174,7 +179,10 @@ export function OnboardingGate({
               {currentStep === 1 ? (
                 <div className="grid gap-5">
                   <div className="space-y-2">
-                    <Label htmlFor="onboarding-mesh-id" className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]">
+                    <Label
+                      htmlFor="onboarding-mesh-id"
+                      className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
+                    >
                       {copy.form.meshId}
                     </Label>
                     <Input
@@ -186,7 +194,10 @@ export function OnboardingGate({
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="onboarding-initial-room" className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]">
+                    <Label
+                      htmlFor="onboarding-initial-room"
+                      className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
+                    >
                       {copy.form.initialChannel}
                     </Label>
                     <Input
@@ -203,7 +214,10 @@ export function OnboardingGate({
               {currentStep === 2 ? (
                 <div className="grid gap-5">
                   <div className="space-y-2">
-                    <Label htmlFor="onboarding-startup-peer" className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]">
+                    <Label
+                      htmlFor="onboarding-startup-peer"
+                      className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
+                    >
                       {copy.form.startupPeer}
                     </Label>
                     <Input
@@ -216,7 +230,10 @@ export function OnboardingGate({
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="onboarding-listen-port" className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]">
+                    <Label
+                      htmlFor="onboarding-listen-port"
+                      className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
+                    >
                       {copy.form.listenPort}
                     </Label>
                     <Input
@@ -226,7 +243,11 @@ export function OnboardingGate({
                       max={65535}
                       value={runtimeDraft.listenPort}
                       disabled={isBusy}
-                      onChange={(event) => updateDraft({ listenPort: Number(event.target.value || 0) })}
+                      onChange={(event) =>
+                        updateDraft({
+                          listenPort: Number(event.target.value || 0),
+                        })
+                      }
                       className="h-12 rounded-xl border-[rgba(74,124,89,0.7)] bg-[rgba(10,23,16,0.62)]"
                     />
                   </div>
@@ -236,7 +257,10 @@ export function OnboardingGate({
               {currentStep === 3 ? (
                 <div className="grid gap-5">
                   <div className="space-y-2">
-                    <Label htmlFor="onboarding-tracker-mode" className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]">
+                    <Label
+                      htmlFor="onboarding-tracker-mode"
+                      className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
+                    >
                       {copy.form.trackerBootstrap}
                     </Label>
                     <Select
@@ -263,7 +287,11 @@ export function OnboardingGate({
                       className="h-4 w-4 accent-[var(--primary)]"
                       checked={runtimeDraft.lanDiscoveryEnabled}
                       disabled={isBusy}
-                      onChange={(event) => updateDraft({ lanDiscoveryEnabled: event.target.checked })}
+                      onChange={(event) =>
+                        updateDraft({
+                          lanDiscoveryEnabled: event.target.checked,
+                        })
+                      }
                     />
                   </label>
 

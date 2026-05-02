@@ -4,7 +4,7 @@ import type { MessageOverlay } from './appShellSchemas'
 export function applyMessageOverlays(
   messages: DisplayMessage[],
   overlays: Record<string, MessageOverlay>,
-  hiddenLabel: string,
+  hiddenLabel: string
 ): DisplayMessage[] {
   return messages.map((message) => {
     const overlay = overlays[message.id]
@@ -36,7 +36,7 @@ export function upsertEditedMessageOverlay(
   overlays: Record<string, MessageOverlay>,
   messageId: string,
   roomId: string,
-  body: string,
+  body: string
 ): Record<string, MessageOverlay> {
   return {
     ...overlays,
@@ -52,7 +52,7 @@ export function upsertEditedMessageOverlay(
 export function toggleHiddenMessageOverlay(
   overlays: Record<string, MessageOverlay>,
   messageId: string,
-  roomId: string,
+  roomId: string
 ): Record<string, MessageOverlay> {
   const existing = overlays[messageId]
   return {

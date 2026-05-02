@@ -24,56 +24,50 @@ export const Avatar = React.forwardRef<HTMLSpanElement, React.HTMLAttributes<HTM
         </span>
       </AvatarContext.Provider>
     )
-  },
+  }
 )
 
 Avatar.displayName = 'Avatar'
 
-export const AvatarImage = React.forwardRef<
-  HTMLImageElement,
-  React.ImgHTMLAttributes<HTMLImageElement>
->(({ className, onLoad, ...props }, ref) => {
-  const context = React.useContext(AvatarContext)
+export const AvatarImage = React.forwardRef<HTMLImageElement, React.ImgHTMLAttributes<HTMLImageElement>>(
+  ({ className, onLoad, ...props }, ref) => {
+    const context = React.useContext(AvatarContext)
 
-  return (
-    <img
-      ref={ref}
-      className={cn(
-        'aspect-square h-full w-full',
-        context?.loaded ? 'block' : 'hidden',
-        className,
-      )}
-      onLoad={(event) => {
-        context?.setLoaded(true)
-        onLoad?.(event)
-      }}
-      {...props}
-    />
-  )
-})
+    return (
+      <img
+        ref={ref}
+        className={cn('aspect-square h-full w-full', context?.loaded ? 'block' : 'hidden', className)}
+        onLoad={(event) => {
+          context?.setLoaded(true)
+          onLoad?.(event)
+        }}
+        {...props}
+      />
+    )
+  }
+)
 
 AvatarImage.displayName = 'AvatarImage'
 
-export const AvatarFallback = React.forwardRef<
-  HTMLSpanElement,
-  React.HTMLAttributes<HTMLSpanElement>
->(({ className, ...props }, ref) => {
-  const context = React.useContext(AvatarContext)
+export const AvatarFallback = React.forwardRef<HTMLSpanElement, React.HTMLAttributes<HTMLSpanElement>>(
+  ({ className, ...props }, ref) => {
+    const context = React.useContext(AvatarContext)
 
-  if (context?.loaded) {
-    return null
+    if (context?.loaded) {
+      return null
+    }
+
+    return (
+      <span
+        ref={ref}
+        className={cn(
+          'flex h-full w-full items-center justify-center rounded-full bg-[var(--panel-strong)] text-sm font-semibold text-foreground',
+          className
+        )}
+        {...props}
+      />
+    )
   }
-
-  return (
-    <span
-      ref={ref}
-      className={cn(
-        'flex h-full w-full items-center justify-center rounded-full bg-[var(--panel-strong)] text-sm font-semibold text-foreground',
-        className,
-      )}
-      {...props}
-    />
-  )
-})
+)
 
 AvatarFallback.displayName = 'AvatarFallback'

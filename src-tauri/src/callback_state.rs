@@ -299,7 +299,12 @@ impl CallbackState {
         rooms
     }
 
-    pub fn begin_outgoing_call(&mut self, peer_id: String, peer_name: String, room_id: String) -> String {
+    pub fn begin_outgoing_call(
+        &mut self,
+        peer_id: String,
+        peer_name: String,
+        room_id: String,
+    ) -> String {
         let call_id = format!("call-{}", self.next_message_id());
         self.call_state = Some(CallStateSummary {
             call_id: call_id.clone(),
@@ -405,7 +410,8 @@ impl CallbackState {
                     .iter()
                     .map(|room| normalize_room_id(room))
                     .collect::<BTreeSet<_>>();
-                self.peer_rooms.insert(sender_hex.clone(), peer_rooms.clone());
+                self.peer_rooms
+                    .insert(sender_hex.clone(), peer_rooms.clone());
                 self.peers
                     .entry(sender_hex.clone())
                     .and_modify(|peer| {
@@ -520,7 +526,8 @@ impl CallbackState {
                     .call_state
                     .as_ref()
                     .map(|state| {
-                        state.call_id == payload.call_id || state.peer_id.eq_ignore_ascii_case(&sender_hex)
+                        state.call_id == payload.call_id
+                            || state.peer_id.eq_ignore_ascii_case(&sender_hex)
                     })
                     .unwrap_or(false);
                 if should_clear {

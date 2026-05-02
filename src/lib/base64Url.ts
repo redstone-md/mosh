@@ -3,7 +3,16 @@ function hasBrowserBase64() {
 }
 
 function getNodeBuffer() {
-  return (globalThis as { Buffer?: { from: (value: Uint8Array | string, encoding?: string) => Uint8Array & { toString: (encoding?: string) => string } } }).Buffer
+  return (
+    globalThis as {
+      Buffer?: {
+        from: (
+          value: Uint8Array | string,
+          encoding?: string
+        ) => Uint8Array & { toString: (encoding?: string) => string }
+      }
+    }
+  ).Buffer
 }
 
 export function encodeBytesToBase64Url(bytes: Uint8Array): string {
@@ -26,7 +35,10 @@ export function encodeBytesToBase64Url(bytes: Uint8Array): string {
 
 export function decodeBase64UrlToBytes(value: string): Uint8Array {
   if (hasBrowserBase64()) {
-    const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
+    const padded = value
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(value.length / 4) * 4, '=')
     const binary = atob(padded)
     const bytes = new Uint8Array(binary.length)
 

@@ -40,7 +40,7 @@ export function decodePendingIdentityTransfer(sourceUrl: string): PendingDeepLin
 
 export function appendUniqueDeepLinkIdentityTransfers(
   current: PendingDeepLinkIdentityTransfer[],
-  candidates: PendingDeepLinkIdentityTransfer[],
+  candidates: PendingDeepLinkIdentityTransfer[]
 ): PendingDeepLinkIdentityTransfer[] {
   const seen = new Set(current.map((transfer) => transfer.sourceUrl))
   const next = [...current]

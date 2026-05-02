@@ -15,7 +15,10 @@ export function ArtifactList({ artifacts }: ArtifactListProps) {
       </header>
       <div className="space-y-3">
         {artifacts.map((artifact) => (
-          <article className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-2" key={artifact.name}>
+          <article
+            className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-2"
+            key={artifact.name}
+          >
             <div className="flex flex-col gap-0.5">
               <h3 className="font-bold text-foreground text-sm">{artifact.name}</h3>
               <p className="text-[10px] text-foreground/50 uppercase tracking-wider">{artifact.platform}</p>
@@ -27,4 +30,3 @@ export function ArtifactList({ artifacts }: ArtifactListProps) {
     </section>
   )
 }
-

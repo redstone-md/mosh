@@ -26,7 +26,7 @@ describe('roomActivity', () => {
       ],
       { lobby: 'm-1' },
       'ops',
-      'operator',
+      'operator'
     )
 
     expect(counts).toEqual({
@@ -35,10 +35,9 @@ describe('roomActivity', () => {
   })
 
   it('marks a room as read using the latest room message', () => {
-    expect(markRoomAsRead({}, 'lobby', [
-      createMessage('m-1', 'ops', 'peer'),
-      createMessage('m-2', 'lobby', 'peer'),
-    ])).toEqual({
+    expect(
+      markRoomAsRead({}, 'lobby', [createMessage('m-1', 'ops', 'peer'), createMessage('m-2', 'lobby', 'peer')])
+    ).toEqual({
       lobby: 'm-2',
     })
   })

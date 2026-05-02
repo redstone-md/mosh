@@ -17,8 +17,8 @@ function createTransferUrl(name: string) {
         salt: 'abc',
         iv: 'def',
         cipherText: '123',
-      }),
-    ),
+      })
+    )
   )}`
 }
 
@@ -29,7 +29,7 @@ describe('deepLinkIdentityTransfers', () => {
         ' mosh-identity://transfer/alpha ',
         'mosh://invite/room',
         'MOSH-IDENTITY://TRANSFER/beta',
-      ]),
+      ])
     ).toEqual(['mosh-identity://transfer/alpha', 'MOSH-IDENTITY://TRANSFER/beta'])
   })
 
@@ -44,8 +44,9 @@ describe('deepLinkIdentityTransfers', () => {
     const alpha = decodePendingIdentityTransfer(createTransferUrl('alpha'))
     const beta = decodePendingIdentityTransfer(createTransferUrl('beta'))
 
-    expect(
-      appendUniqueDeepLinkIdentityTransfers([alpha], [alpha, beta]).map((entry) => entry.sourceUrl),
-    ).toEqual([createTransferUrl('alpha'), createTransferUrl('beta')])
+    expect(appendUniqueDeepLinkIdentityTransfers([alpha], [alpha, beta]).map((entry) => entry.sourceUrl)).toEqual([
+      createTransferUrl('alpha'),
+      createTransferUrl('beta'),
+    ])
   })
 })

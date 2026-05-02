@@ -38,9 +38,9 @@ export function QuickActionsPanel({
               placeholder="host:port"
             />
           </label>
-          <button 
-            className="bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 mt-auto" 
-            onClick={onConnectPeer} 
+          <button
+            className="bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 mt-auto"
+            onClick={onConnectPeer}
             type="button"
           >
             {busyAction === 'connect' ? 'Connecting...' : 'Connect'}
@@ -56,16 +56,18 @@ export function QuickActionsPanel({
               placeholder="nickname or peer id"
             />
           </label>
-          <button 
-            className="bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 mt-auto" 
-            onClick={onOpenDirectRoom} 
+          <button
+            className="bg-secondary text-foreground text-sm font-bold py-2 px-4 rounded-xl hover:bg-secondary/80 border border-border/20 transition-all disabled:opacity-50 mt-auto"
+            onClick={onOpenDirectRoom}
             type="button"
           >
             {busyAction === 'dm' ? 'Opening...' : 'Open DM'}
           </button>
         </div>
       </div>
-      {errorNote ? <p className="bg-red-500/10 text-red-400 text-sm p-3 rounded-lg border border-red-500/20">{errorNote}</p> : null}
+      {errorNote ? (
+        <p className="bg-red-500/10 text-red-400 text-sm p-3 rounded-lg border border-red-500/20">{errorNote}</p>
+      ) : null}
     </section>
   )
 }

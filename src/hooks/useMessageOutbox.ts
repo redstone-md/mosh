@@ -39,7 +39,7 @@ export function useMessageOutbox({ currentUser, liveMessages, publishMessage }: 
         throw error
       }
     },
-    [currentUser, liveMessages, publishMessage],
+    [currentUser, liveMessages, publishMessage]
   )
 
   const retryMessage = useCallback(
@@ -57,12 +57,12 @@ export function useMessageOutbox({ currentUser, liveMessages, publishMessage }: 
         throw error
       }
     },
-    [liveMessages, publishMessage],
+    [liveMessages, publishMessage]
   )
 
   const dismissMessage = useCallback(
     (clientId: string) => setPendingMessages((current) => removePendingOutgoingMessage(current, clientId)),
-    [],
+    []
   )
 
   const buildDisplayMessages = useCallback(
@@ -71,9 +71,9 @@ export function useMessageOutbox({ currentUser, liveMessages, publishMessage }: 
         messages,
         pendingMessages.filter((message) => message.roomId === roomId),
         currentUser,
-        archivedMessageIds,
+        archivedMessageIds
       ),
-    [currentUser, pendingMessages],
+    [currentUser, pendingMessages]
   )
 
   return {

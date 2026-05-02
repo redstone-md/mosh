@@ -27,10 +27,15 @@ export function MilestoneList({ milestones }: MilestoneListProps) {
       </header>
       <div className="space-y-3">
         {milestones.map((milestone) => (
-          <article className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-2" key={milestone.title}>
+          <article
+            className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-2"
+            key={milestone.title}
+          >
             <div className="flex items-center justify-between gap-4">
               <h3 className="font-bold text-foreground text-sm">{milestone.title}</h3>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${statusColors[milestone.status]}`}>
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${statusColors[milestone.status]}`}
+              >
                 {labels[milestone.status]}
               </span>
             </div>
@@ -41,4 +46,3 @@ export function MilestoneList({ milestones }: MilestoneListProps) {
     </section>
   )
 }
-

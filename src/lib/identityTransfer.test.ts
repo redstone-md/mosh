@@ -32,16 +32,14 @@ describe('identityTransfer', () => {
   it('roundtrips a signing identity through an encrypted transfer package', async () => {
     const transferPackage = await exportIdentityTransferPackage(identity, 'top-secret-passphrase')
 
-    await expect(importIdentityTransferPackage(transferPackage, 'top-secret-passphrase')).resolves.toEqual(
-      identity,
-    )
+    await expect(importIdentityTransferPackage(transferPackage, 'top-secret-passphrase')).resolves.toEqual(identity)
   })
 
   it('rejects a wrong passphrase', async () => {
     const transferPackage = await exportIdentityTransferPackage(identity, 'top-secret-passphrase')
 
     await expect(importIdentityTransferPackage(transferPackage, 'wrong-passphrase')).rejects.toThrow(
-      /Unable to decrypt/,
+      /Unable to decrypt/
     )
   })
 

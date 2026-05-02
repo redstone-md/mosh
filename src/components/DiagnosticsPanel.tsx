@@ -42,25 +42,27 @@ export function DiagnosticsPanel({ diagnostics }: DiagnosticsPanelProps) {
             {diagnostics.peerCount} peers / {diagnostics.channelCount} channels
           </strong>
           <p className="text-xs text-foreground/50">
-            {diagnostics.supernodeReady
-              ? 'Relay candidate ready'
-              : 'Relay candidate offline'}
+            {diagnostics.supernodeReady ? 'Relay candidate ready' : 'Relay candidate offline'}
           </p>
         </div>
       </div>
       <div className="flex flex-wrap gap-2 text-xs">
         <span className="px-2.5 py-1 rounded-full border border-border/20 bg-background/50 text-foreground/60">
-          startup peer{' '}
-          {diagnostics.startupPeer === 'not set'
-            ? 'not configured'
-            : diagnostics.startupPeer}
+          startup peer {diagnostics.startupPeer === 'not set' ? 'not configured' : diagnostics.startupPeer}
         </span>
         {diagnostics.activeChannels.length > 0 ? (
           diagnostics.activeChannels.map((channel) => (
-            <span key={channel} className="px-2.5 py-1 rounded-full border border-primary/20 bg-primary/10 text-primary">#{channel}</span>
+            <span
+              key={channel}
+              className="px-2.5 py-1 rounded-full border border-primary/20 bg-primary/10 text-primary"
+            >
+              #{channel}
+            </span>
           ))
         ) : (
-          <span className="px-2.5 py-1 rounded-full border border-border/20 bg-background/50 text-foreground/60">No active subscriptions yet</span>
+          <span className="px-2.5 py-1 rounded-full border border-border/20 bg-background/50 text-foreground/60">
+            No active subscriptions yet
+          </span>
         )}
       </div>
     </section>

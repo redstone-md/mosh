@@ -14,7 +14,8 @@ pub fn online_snapshot(
     bridge_path: String,
     branch: &str,
 ) -> DesktopSnapshot {
-    let (rooms, messages, peers, call_state, signaling_events, voice_rooms) = live_callback_rows(mesh);
+    let (rooms, messages, peers, call_state, signaling_events, voice_rooms) =
+        live_callback_rows(mesh);
     DesktopSnapshot {
         app_name: "MOSH".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -64,7 +65,9 @@ pub fn offline_snapshot(
         stage: "Desktop runtime".to_string(),
         runtime: RuntimeStatus {
             state: "Runtime offline".to_string(),
-            summary: "The desktop shell is ready to start a real MOSS node through the shared runtime.".to_string(),
+            summary:
+                "The desktop shell is ready to start a real MOSS node through the shared runtime."
+                    .to_string(),
             route: "No active transport".to_string(),
             nat_hint: "Unknown until runtime starts".to_string(),
             shared_bridge,
@@ -152,7 +155,8 @@ fn base_messages() -> Vec<Message> {
             id: "m-offline-1".to_string(),
             room_id: "system".to_string(),
             author: "System".to_string(),
-            body: "Configure mesh settings, then start the runtime to join a live Moss chat.".to_string(),
+            body: "Configure mesh settings, then start the runtime to join a live Moss chat."
+                .to_string(),
             timestamp: "now".to_string(),
             emphasis: "system".to_string(),
         },
@@ -160,7 +164,8 @@ fn base_messages() -> Vec<Message> {
             id: "m-offline-2".to_string(),
             room_id: "lobby".to_string(),
             author: "Moss".to_string(),
-            body: "Messages, rooms, and peers are driven by libmoss once the runtime is online.".to_string(),
+            body: "Messages, rooms, and peers are driven by libmoss once the runtime is online."
+                .to_string(),
             timestamp: "now".to_string(),
             emphasis: "normal".to_string(),
         },
@@ -197,7 +202,14 @@ fn live_callback_rows(
         }
 
         merge_peer_rows(&mut peers, mesh);
-        return (rooms, messages, peers, call_state, signaling_events, voice_rooms);
+        return (
+            rooms,
+            messages,
+            peers,
+            call_state,
+            signaling_events,
+            voice_rooms,
+        );
     }
     (
         live_room_rows(mesh),

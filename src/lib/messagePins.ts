@@ -5,7 +5,7 @@ const MAX_PINNED_MESSAGES_PER_ROOM = 12
 export function togglePinnedMessage(
   current: Record<string, string[]>,
   roomId: string,
-  messageId: string,
+  messageId: string
 ): Record<string, string[]> {
   const roomPins = current[roomId] ?? []
 
@@ -27,18 +27,14 @@ export function togglePinnedMessage(
   }
 }
 
-export function isMessagePinned(
-  current: Record<string, string[]>,
-  roomId: string,
-  messageId: string,
-): boolean {
+export function isMessagePinned(current: Record<string, string[]>, roomId: string, messageId: string): boolean {
   return (current[roomId] ?? []).includes(messageId)
 }
 
 export function resolvePinnedMessages(
   current: Record<string, string[]>,
   roomId: string,
-  messages: Message[],
+  messages: Message[]
 ): Message[] {
   const roomPins = current[roomId] ?? []
   if (roomPins.length === 0) {

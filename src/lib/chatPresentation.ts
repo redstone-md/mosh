@@ -25,7 +25,10 @@ export function formatRoomTitle(room: RoomSummary | undefined, unknownLabel = 'U
 }
 
 export function initialsFromName(value: string): string {
-  const parts = value.trim().split(/[\s._-]+/).filter(Boolean)
+  const parts = value
+    .trim()
+    .split(/[\s._-]+/)
+    .filter(Boolean)
   if (parts.length === 0) {
     return 'MS'
   }

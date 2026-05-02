@@ -4,15 +4,19 @@ import { buildMeshInvite, decodeMeshInvite, encodeMeshInvite } from './meshInvit
 
 describe('meshInvite', () => {
   it('roundtrips invite payloads through the mosh:// scheme', () => {
-    const payload = buildMeshInvite('operator', {
-      nickname: 'operator',
-      meshId: 'mosh-chat',
-      listenPort: 0,
-      initialRoom: 'lobby',
-      startupPeer: 'host:9000',
-      trackerMode: 'default',
-      lanDiscoveryEnabled: true,
-    }, 'ab:cd:ef:12:34:56')
+    const payload = buildMeshInvite(
+      'operator',
+      {
+        nickname: 'operator',
+        meshId: 'mosh-chat',
+        listenPort: 0,
+        initialRoom: 'lobby',
+        startupPeer: 'host:9000',
+        trackerMode: 'default',
+        lanDiscoveryEnabled: true,
+      },
+      'ab:cd:ef:12:34:56'
+    )
 
     expect(decodeMeshInvite(encodeMeshInvite(payload))).toEqual(payload)
   })

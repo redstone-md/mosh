@@ -22,7 +22,7 @@ describe('onboarding flow helpers', () => {
   it('requires nickname on the identity step', () => {
     const copy = getI18nCopy('en')
     expect(getOnboardingStepError(0, { ...baseDraft, nickname: '   ' }, copy)).toBe(
-      copy.onboarding.validation.nicknameRequired,
+      copy.onboarding.validation.nicknameRequired
     )
   })
 

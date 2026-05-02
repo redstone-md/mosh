@@ -32,7 +32,7 @@ export function ServerRail({
           'flex h-12 w-12 items-center justify-center rounded-2xl transition-all',
           selectedDock === 'home'
             ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-            : 'bg-[var(--panel-strong)] text-foreground hover:bg-[var(--panel-hover)]',
+            : 'bg-[var(--panel-strong)] text-foreground hover:bg-[var(--panel-hover)]'
         )}
         onClick={onSelectHome}
         title={copy.sidebar.directMessages}
@@ -52,7 +52,7 @@ export function ServerRail({
                 'flex h-12 w-12 items-center justify-center rounded-2xl text-sm font-semibold transition-all',
                 isActive
                   ? `${getGroupAccentClass(group)}`
-                  : 'bg-[var(--panel-strong)] text-foreground hover:bg-[var(--panel-hover)]',
+                  : 'bg-[var(--panel-strong)] text-foreground hover:bg-[var(--panel-hover)]'
               )}
               onClick={() => onSelectGroup(group.id)}
               title={group.name}

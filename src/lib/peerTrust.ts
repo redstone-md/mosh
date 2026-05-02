@@ -20,7 +20,7 @@ export function formatPeerFingerprint(peerId: string): string {
 
 export function getPeerTrustState(
   trustedPeers: Record<string, TrustedPeerRecord>,
-  peer: Pick<PeerSummary, 'id' | 'displayName' | 'status'>,
+  peer: Pick<PeerSummary, 'id' | 'displayName' | 'status'>
 ): PeerTrustState {
   if (peer.status === 'self') {
     return 'trusted'
@@ -36,7 +36,7 @@ export function getPeerTrustState(
 
 export function trustPeer(
   trustedPeers: Record<string, TrustedPeerRecord>,
-  peer: Pick<PeerSummary, 'id' | 'displayName'>,
+  peer: Pick<PeerSummary, 'id' | 'displayName'>
 ): Record<string, TrustedPeerRecord> {
   return {
     ...trustedPeers,
@@ -49,7 +49,7 @@ export function trustPeer(
 
 export function untrustPeer(
   trustedPeers: Record<string, TrustedPeerRecord>,
-  peerId: string,
+  peerId: string
 ): Record<string, TrustedPeerRecord> {
   if (!trustedPeers[peerId]) {
     return trustedPeers
@@ -61,7 +61,7 @@ export function untrustPeer(
 
 export function listTrustedPeers(
   trustedPeers: Record<string, TrustedPeerRecord>,
-  peers: PeerSummary[],
+  peers: PeerSummary[]
 ): TrustedPeerEntry[] {
   const currentNames = new Map(peers.map((peer) => [peer.id, peer.displayName] as const))
 

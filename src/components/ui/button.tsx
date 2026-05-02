@@ -13,14 +13,10 @@ export type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 const variantClasses: Record<ButtonVariant, string> = {
   default:
     'bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[color-mix(in_oklab,var(--primary),black_10%)]',
-  secondary:
-    'bg-[var(--panel-strong)] text-foreground hover:bg-[var(--panel-hover)]',
-  outline:
-    'border border-border bg-transparent text-foreground hover:bg-[var(--panel-strong)]',
-  ghost:
-    'bg-transparent text-foreground hover:bg-[var(--panel-strong)]',
-  destructive:
-    'bg-[var(--danger)] text-white hover:bg-[color-mix(in_oklab,var(--danger),black_10%)]',
+  secondary: 'bg-[var(--panel-strong)] text-foreground hover:bg-[var(--panel-hover)]',
+  outline: 'border border-border bg-transparent text-foreground hover:bg-[var(--panel-strong)]',
+  ghost: 'bg-transparent text-foreground hover:bg-[var(--panel-strong)]',
+  destructive: 'bg-[var(--danger)] text-white hover:bg-[color-mix(in_oklab,var(--danger),black_10%)]',
 }
 
 const sizeClasses: Record<ButtonSize, string> = {
@@ -39,12 +35,12 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           'inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-50',
           variantClasses[variant],
           sizeClasses[size],
-          className,
+          className
         )}
         {...props}
       />
     )
-  },
+  }
 )
 
 Button.displayName = 'Button'
