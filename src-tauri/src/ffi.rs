@@ -1,13 +1,17 @@
 use std::{
     env,
     ffi::{c_char, c_void, CStr, CString},
-    path::{Path, PathBuf},
+    path::PathBuf,
+    sync::Mutex,
 };
 
 use libloading::Library;
 use serde::{Deserialize, Deserializer};
 
 use crate::callback_state::shared_callback_state;
+
+const DEV_RUNTIME_PATH_ENV: &str = "MOSS_SHARED_PATH";
+static BUNDLED_RUNTIME_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 type MossHandle = i64;
 type MossMessageCallback = unsafe extern "C" fn(*const c_char, *const u8, *const u8, u32);
@@ -94,7 +98,7 @@ impl MossLibrary {
             }
         }
         Err(format!(
-            "shared runtime not found; set MOSS_SHARED_PATH, place {} next to the desktop binary, or build it from the moss submodule",
+            "shared runtime not found; bundle {}, place it next to the desktop binary, or run npm run desktop:prepare",
             library_file_name()
         ))
     }
@@ -343,45 +347,63 @@ pub fn library_file_name() -> &'static str {
     }
 }
 
+pub fn set_bundled_runtime_path(path: PathBuf) {
+    if let Ok(mut bundled_path) = BUNDLED_RUNTIME_PATH.lock() {
+        *bundled_path = Some(path);
+    }
+}
+
+#[cfg(test)]
+fn clear_bundled_runtime_path() {
+    if let Ok(mut bundled_path) = BUNDLED_RUNTIME_PATH.lock() {
+        *bundled_path = None;
+    }
+}
+
 fn push_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
     if !candidates.iter().any(|candidate| candidate == &path) {
         candidates.push(path);
     }
 }
 
+fn push_env_candidate(candidates: &mut Vec<PathBuf>, env_key: &str) {
+    if let Ok(path) = env::var(env_key) {
+        let path = PathBuf::from(path);
+        if path.is_absolute() {
+            push_candidate(candidates, path);
+        }
+    }
+}
+
 fn shared_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Ok(explicit) = env::var("MOSS_SHARED_PATH") {
-        push_candidate(&mut candidates, PathBuf::from(explicit));
+    if let Ok(bundled_path) = BUNDLED_RUNTIME_PATH.lock() {
+        if let Some(path) = bundled_path.as_ref() {
+            push_candidate(&mut candidates, path.clone());
+        }
     }
+    #[cfg(debug_assertions)]
+    push_env_candidate(&mut candidates, DEV_RUNTIME_PATH_ENV);
+
     if let Ok(exe) = env::current_exe() {
         if let Some(dir) = exe.parent() {
             push_candidate(&mut candidates, dir.join(library_file_name()));
             push_candidate(&mut candidates, dir.join("moss").join(library_file_name()));
         }
     }
-    if let Ok(cwd) = env::current_dir() {
-        push_candidate(&mut candidates, cwd.join(library_file_name()));
-        push_candidate(&mut candidates, cwd.join("moss").join(library_file_name()));
+
+    #[cfg(debug_assertions)]
+    {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         push_candidate(
             &mut candidates,
-            cwd.join("src-tauri")
+            manifest_dir
                 .join("resources")
                 .join("moss")
                 .join(library_file_name()),
         );
-        let repo_root = cwd
-            .ancestors()
-            .find(|candidate| candidate.join("go.mod").exists())
-            .unwrap_or(Path::new("."));
-        push_candidate(&mut candidates, repo_root.join(library_file_name()));
-        for ancestor in cwd.ancestors() {
-            push_candidate(
-                &mut candidates,
-                ancestor.join("moss").join(library_file_name()),
-            );
-        }
     }
+
     candidates
 }
 
@@ -404,9 +426,12 @@ fn error_message(code: i32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{env, path::PathBuf};
 
-    use super::{shared_candidates, MeshInfo};
+    use super::{
+        clear_bundled_runtime_path, set_bundled_runtime_path, shared_candidates, MeshInfo,
+        DEV_RUNTIME_PATH_ENV,
+    };
 
     #[test]
     fn mesh_info_allows_null_collections() {
@@ -428,13 +453,44 @@ mod tests {
     }
 
     #[test]
-    fn explicit_runtime_path_is_prioritized() {
-        let explicit = PathBuf::from(r"C:\bundle\moss.dll");
-        std::env::set_var("MOSS_SHARED_PATH", &explicit);
+    fn bundled_runtime_path_is_prioritized() {
+        let bundled = env::temp_dir()
+            .join("mosh-bundled-runtime-test")
+            .join(super::library_file_name());
+        set_bundled_runtime_path(bundled.clone());
 
         let candidates = shared_candidates();
 
-        std::env::remove_var("MOSS_SHARED_PATH");
-        assert_eq!(candidates.first(), Some(&explicit));
+        clear_bundled_runtime_path();
+        assert_eq!(candidates.first(), Some(&bundled));
+    }
+
+    #[test]
+    fn dev_runtime_path_requires_absolute_path() {
+        clear_bundled_runtime_path();
+        env::set_var(DEV_RUNTIME_PATH_ENV, super::library_file_name());
+
+        let candidates = shared_candidates();
+
+        env::remove_var(DEV_RUNTIME_PATH_ENV);
+        assert!(!candidates
+            .iter()
+            .any(|candidate| candidate == &PathBuf::from(super::library_file_name())));
+    }
+
+    #[test]
+    fn shared_candidates_do_not_trust_current_directory() {
+        clear_bundled_runtime_path();
+        env::remove_var(DEV_RUNTIME_PATH_ENV);
+        let cwd = env::current_dir().expect("current dir should resolve");
+
+        let candidates = shared_candidates();
+
+        assert!(!candidates
+            .iter()
+            .any(|candidate| candidate == &cwd.join(super::library_file_name())));
+        assert!(!candidates
+            .iter()
+            .any(|candidate| candidate == &cwd.join("moss").join(super::library_file_name())));
     }
 }

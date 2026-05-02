@@ -51,11 +51,10 @@ npm run tauri:dev
 
 The desktop backend loads the `MOSS` shared runtime dynamically. It checks:
 
-- `MOSS_SHARED_PATH`
 - the desktop executable directory
-- the current working directory
 - `src-tauri/resources/moss/`
-- the local `moss/` submodule directory
+
+Debug builds also accept an absolute `MOSS_SHARED_PATH` for local runtime testing. Relative paths and the current working directory are intentionally ignored to avoid shared-library planting.
 
 To build and attach the runtime from the bundled submodule:
 
