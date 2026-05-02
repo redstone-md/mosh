@@ -62,22 +62,12 @@ export class DesktopStorageClient {
     return storageOverviewSchema.parse(payload)
   }
 
-  async exportBackup(path: string): Promise<void> {
-    const parsedPath = z.string().trim().min(1).parse(path)
-    await invoke('export_storage_backup', {
-      payload: {
-        path: parsedPath,
-      },
-    })
+  async exportBackup(): Promise<boolean> {
+    return z.boolean().parse(await invoke('export_storage_backup'))
   }
 
-  async importBackup(path: string): Promise<void> {
-    const parsedPath = z.string().trim().min(1).parse(path)
-    await invoke('import_storage_backup', {
-      payload: {
-        path: parsedPath,
-      },
-    })
+  async importBackup(): Promise<boolean> {
+    return z.boolean().parse(await invoke('import_storage_backup'))
   }
 }
 

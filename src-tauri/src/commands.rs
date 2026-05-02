@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     models::DesktopSnapshot,
@@ -33,16 +35,12 @@ pub struct StoragePayloadInput {
     pub payload: Value,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExportStorageBackupInput {
-    pub path: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportStorageBackupInput {
-    pub path: String,
+fn create_backup_file_name() -> Result<String, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("system clock is before unix epoch: {err}"))?
+        .as_millis();
+    Ok(format!("mosh-backup-{timestamp}.json"))
 }
 
 #[tauri::command]
@@ -299,27 +297,38 @@ pub fn storage_overview(app: AppHandle) -> Result<StorageOverview, String> {
 }
 
 #[tauri::command]
-pub fn export_storage_backup(
-    app: AppHandle,
-    payload: ExportStorageBackupInput,
-) -> Result<(), String> {
-    let path = payload.path.trim();
-    if path.is_empty() {
-        return Err("backup path is required".to_string());
-    }
-    storage::export_storage_backup(&app, path)
+pub async fn export_storage_backup(app: AppHandle) -> Result<bool, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .set_file_name(create_backup_file_name()?)
+        .blocking_save_file()
+    else {
+        return Ok(false);
+    };
+    let path = path
+        .into_path()
+        .map_err(|err| format!("failed to resolve backup path: {err}"))?;
+    storage::export_storage_backup(&app, &path)?;
+    Ok(true)
 }
 
 #[tauri::command]
-pub fn import_storage_backup(
-    app: AppHandle,
-    payload: ImportStorageBackupInput,
-) -> Result<(), String> {
-    let path = payload.path.trim();
-    if path.is_empty() {
-        return Err("backup path is required".to_string());
-    }
-    storage::import_storage_backup(&app, path)
+pub async fn import_storage_backup(app: AppHandle) -> Result<bool, String> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file()
+    else {
+        return Ok(false);
+    };
+    let path = path
+        .into_path()
+        .map_err(|err| format!("failed to resolve backup path: {err}"))?;
+    storage::import_storage_backup(&app, &path)?;
+    Ok(true)
 }
 
 #[tauri::command]
