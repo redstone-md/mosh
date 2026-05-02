@@ -123,6 +123,11 @@ export function StoragePanel({
       path: overview.archivesDir,
       present: overview.archiveCount > 0,
     },
+    {
+      label: copy.storage.debugLogsDirectory,
+      path: overview.logsDir,
+      present: true,
+    },
   ]
 
   return (

@@ -14,6 +14,7 @@ describe('desktopStorageClient', () => {
   it('parses storage overview payloads', async () => {
     invoke.mockResolvedValue({
       baseDir: 'C:/Users/example/AppData/Local/md.redstone.mosh',
+      logsDir: 'C:/Users/example/AppData/Local/md.redstone.mosh/logs',
       settingsPath: 'C:/Users/example/AppData/Local/md.redstone.mosh/config/settings.json',
       identityPath: 'C:/Users/example/AppData/Local/md.redstone.mosh/keys/signing-identity.json',
       archivesDir: 'C:/Users/example/AppData/Local/md.redstone.mosh/data/archives',
@@ -27,6 +28,7 @@ describe('desktopStorageClient', () => {
 
     expect(overview.archiveCount).toBe(4)
     expect(overview.hasSettings).toBe(true)
+    expect(overview.logsDir).toContain('/logs')
     expect(invoke).toHaveBeenCalledWith('storage_overview')
   })
 

@@ -61,7 +61,9 @@ impl CallbackState {
     }
 
     pub fn note_runtime(&mut self, body: impl Into<String>) {
-        self.push_message("system", "System", body.into(), "system");
+        let body = body.into();
+        log::info!("runtime: {body}");
+        self.push_message("system", "System", body, "system");
     }
 
     pub fn configure_local_profile(&mut self, peer_id: String, nickname: String, rooms: &[String]) {

@@ -14,6 +14,20 @@ use tauri::path::BaseDirectory;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+
+const DEBUG_LOG_FILE_NAME: &str = "mosh-debug";
+
+fn debug_log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri_plugin_log::Builder::new()
+        .targets([Target::new(TargetKind::LogDir {
+            file_name: Some(DEBUG_LOG_FILE_NAME.to_string()),
+        })])
+        .level(log::LevelFilter::Debug)
+        .max_file_size(5_000_000)
+        .rotation_strategy(RotationStrategy::KeepSome(4))
+        .build()
+}
 
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
@@ -42,6 +56,7 @@ fn configure_bundled_runtime_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) 
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(debug_log_plugin())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -52,6 +67,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            log::info!("MOSH desktop shell starting.");
             configure_bundled_runtime_path(&app.handle());
             #[cfg(all(debug_assertions, any(target_os = "windows", target_os = "linux")))]
             {

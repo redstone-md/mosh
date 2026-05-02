@@ -289,6 +289,7 @@ export const enTranslations = {
     settingsFile: 'Settings file',
     identityFile: 'Signing identity',
     archivesDirectory: 'Archives directory',
+    debugLogsDirectory: 'Debug logs directory',
     present: 'Present',
     missing: 'Missing',
     backup: 'Backup',

@@ -8,6 +8,7 @@
     "deep-link:default",
     "dialog:default",
     "notification:default",
+    "log:default",
     "core:window:allow-start-dragging",
     "core:window:allow-hide",
     "core:window:allow-minimize",
