@@ -5,23 +5,17 @@ import { appendUniqueDeepLinkInvites, extractInviteDeepLinks } from './deepLinkI
 
 describe('deepLinkInvites', () => {
   it('filters unrelated URLs and trims invite links', () => {
-    expect(
-      extractInviteDeepLinks([
-        'https://example.com',
-        '  mosh://invite/alpha  ',
-        'MOSH://INVITE/beta',
-      ]),
-    ).toEqual(['mosh://invite/alpha', 'MOSH://INVITE/beta'])
+    expect(extractInviteDeepLinks(['https://example.com', '  mosh://invite/alpha  ', 'MOSH://INVITE/beta'])).toEqual([
+      'mosh://invite/alpha',
+      'MOSH://INVITE/beta',
+    ])
   })
 
   it('deduplicates repeated invite links', () => {
-    expect(
-      extractInviteDeepLinks([
-        'mosh://invite/alpha',
-        'mosh://invite/alpha',
-        'mosh://invite/beta',
-      ]),
-    ).toEqual(['mosh://invite/alpha', 'mosh://invite/beta'])
+    expect(extractInviteDeepLinks(['mosh://invite/alpha', 'mosh://invite/alpha', 'mosh://invite/beta'])).toEqual([
+      'mosh://invite/alpha',
+      'mosh://invite/beta',
+    ])
   })
 
   it('appends only deep link invites that are not already queued', () => {
@@ -41,8 +35,8 @@ describe('deepLinkInvites', () => {
         [
           { sourceUrl: 'mosh://invite/alpha', invite },
           { sourceUrl: 'mosh://invite/beta', invite },
-        ],
-      ),
+        ]
+      )
     ).toHaveLength(2)
   })
 })

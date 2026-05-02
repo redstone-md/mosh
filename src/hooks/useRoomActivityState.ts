@@ -26,9 +26,9 @@ export function useRoomActivityState({
         snapshot?.messages ?? [],
         lastReadMessageIds,
         selectedRoomId,
-        snapshot?.settings.nickname ?? '',
+        snapshot?.settings.nickname ?? ''
       ),
-    [lastReadMessageIds, selectedRoomId, snapshot?.messages, snapshot?.settings.nickname],
+    [lastReadMessageIds, selectedRoomId, snapshot?.messages, snapshot?.settings.nickname]
   )
 
   useEffect(() => {

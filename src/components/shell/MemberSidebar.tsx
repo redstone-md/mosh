@@ -78,9 +78,7 @@ export function MemberSidebar({
             <ShieldCheck className="h-4 w-4" />
             {copy.common.trust}
           </div>
-          <p className="mt-2 text-xs text-[var(--muted-foreground)]">
-            {copy.trust.summary(trustedCount, reviewCount)}
-          </p>
+          <p className="mt-2 text-xs text-[var(--muted-foreground)]">{copy.trust.summary(trustedCount, reviewCount)}</p>
         </div>
       </div>
       <ScrollArea className="flex-1">
@@ -93,9 +91,7 @@ export function MemberSidebar({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <p className="truncate text-sm font-medium">{peer.displayName}</p>
-                  {peer.status !== 'self' ? (
-                    <TrustBadge state={trustByPeerId[peer.id] ?? 'new'} />
-                  ) : null}
+                  {peer.status !== 'self' ? <TrustBadge state={trustByPeerId[peer.id] ?? 'new'} /> : null}
                 </div>
                 <p className="truncate text-xs text-[var(--muted-foreground)]">
                   {formatPeerFingerprint(peer.id)} · {peer.route}
@@ -107,11 +103,7 @@ export function MemberSidebar({
                     size="icon"
                     variant="ghost"
                     onClick={() => onTogglePeerTrust(peer)}
-                    title={
-                      trustByPeerId[peer.id] === 'trusted'
-                        ? copy.trust.revoke
-                        : copy.trust.verify
-                    }
+                    title={trustByPeerId[peer.id] === 'trusted' ? copy.trust.revoke : copy.trust.verify}
                   >
                     {trustByPeerId[peer.id] === 'trusted' ? (
                       <ShieldCheck className="h-4 w-4" />

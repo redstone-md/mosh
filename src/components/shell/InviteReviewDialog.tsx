@@ -68,9 +68,7 @@ export function InviteReviewDialog({
             </div>
             <div className="border-t border-border px-5 py-3 text-sm text-[var(--muted-foreground)]">
               {copy.inviteReview.discovery(
-                invite.runtime.lanDiscoveryEnabled
-                  ? copy.inviteReview.discoveryLan
-                  : copy.inviteReview.discoveryDirect,
+                invite.runtime.lanDiscoveryEnabled ? copy.inviteReview.discoveryLan : copy.inviteReview.discoveryDirect
               )}
             </div>
             <div className="grid gap-2 border-t border-border px-5 py-4">

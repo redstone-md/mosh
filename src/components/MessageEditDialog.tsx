@@ -29,11 +29,7 @@ export function MessageEditDialog({ open, initialValue, onOpenChange, onSave }: 
           <DialogTitle>{copy.messages.edit}</DialogTitle>
           <DialogDescription>{copy.messages.editDescription}</DialogDescription>
         </DialogHeader>
-        <Textarea
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          className="min-h-40 resize-y"
-        />
+        <Textarea value={value} onChange={(event) => setValue(event.target.value)} className="min-h-40 resize-y" />
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {copy.common.dismiss}

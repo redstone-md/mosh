@@ -25,7 +25,11 @@ type IdentityTransferPanelProps = {
   onSaveRollbackSnapshot: (identity: SigningIdentity, source: 'import' | 'rollback') => void
 }
 
-export function IdentityTransferPanel({ onImported, onRecordEvent, onSaveRollbackSnapshot }: IdentityTransferPanelProps) {
+export function IdentityTransferPanel({
+  onImported,
+  onRecordEvent,
+  onSaveRollbackSnapshot,
+}: IdentityTransferPanelProps) {
   const { copy } = useI18n()
   const [passphrase, setPassphrase] = useState('')
   const [transferPackage, setTransferPackage] = useState('')
@@ -93,11 +97,11 @@ export function IdentityTransferPanel({ onImported, onRecordEvent, onSaveRollbac
 
   const currentFingerprint = useMemo(
     () => identityQuery.data?.fingerprint ?? copy.identityTransfer.unavailable,
-    [copy.identityTransfer.unavailable, identityQuery.data?.fingerprint],
+    [copy.identityTransfer.unavailable, identityQuery.data?.fingerprint]
   )
   const handoff = useMemo(
     () => (transferPackage ? buildIdentityTransferHandoff(transferPackage) : null),
-    [transferPackage],
+    [transferPackage]
   )
 
   async function handleCopyPackage() {

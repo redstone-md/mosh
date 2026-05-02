@@ -1,14 +1,11 @@
 import type { ShellPreferences } from './appShellSchemas'
 import type { MeshInvitePayload } from './meshInvite'
 
-type InviteShellStatePatch = Pick<
-  ShellPreferences,
-  'runtimeDraft' | 'selectedDock' | 'selectedRoomId'
->
+type InviteShellStatePatch = Pick<ShellPreferences, 'runtimeDraft' | 'selectedDock' | 'selectedRoomId'>
 
 export function buildInviteShellStatePatch(
   currentDraft: ShellPreferences['runtimeDraft'],
-  invite: MeshInvitePayload,
+  invite: MeshInvitePayload
 ): InviteShellStatePatch {
   return {
     runtimeDraft: {
@@ -20,10 +17,7 @@ export function buildInviteShellStatePatch(
   }
 }
 
-export function resolveInviteStartupPeer(
-  invite: MeshInvitePayload,
-  activeStartupPeer: string,
-): string | null {
+export function resolveInviteStartupPeer(invite: MeshInvitePayload, activeStartupPeer: string): string | null {
   if (!invite.runtime.startupPeer || invite.runtime.startupPeer === activeStartupPeer) {
     return null
   }

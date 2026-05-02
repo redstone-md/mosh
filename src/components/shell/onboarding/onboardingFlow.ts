@@ -35,7 +35,7 @@ export function buildOnboardingSteps(copy: I18nCopy): OnboardingStep[] {
 export function getOnboardingStepError(
   stepIndex: number,
   draft: UpdateRuntimeSettingsInput,
-  copy: I18nCopy,
+  copy: I18nCopy
 ): string | null {
   if (stepIndex === 0 && draft.nickname.trim().length === 0) {
     return copy.onboarding.validation.nicknameRequired

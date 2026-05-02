@@ -86,8 +86,7 @@ export function ConversationView({
   const inCurrentCall = mediaLive && mediaRoomId === room?.id
   const isVoiceChannel = channelType === 'voice'
   const searchResults = useMemo(() => searchMessages(messages, searchQuery), [messages, searchQuery])
-  const activeSearchIndex =
-    searchResults.length === 0 ? -1 : Math.min(searchIndex, searchResults.length - 1)
+  const activeSearchIndex = searchResults.length === 0 ? -1 : Math.min(searchIndex, searchResults.length - 1)
   const activeSearchResult = activeSearchIndex >= 0 ? searchResults[activeSearchIndex] : null
   const matchedMessageIds = useMemo(() => searchResults.map((result) => result.messageId), [searchResults])
 
@@ -128,9 +127,7 @@ export function ConversationView({
                 className="h-8 w-8"
                 onClick={() =>
                   setSearchIndex((current) =>
-                    searchResults.length === 0
-                      ? 0
-                      : (current - 1 + searchResults.length) % searchResults.length,
+                    searchResults.length === 0 ? 0 : (current - 1 + searchResults.length) % searchResults.length
                   )
                 }
                 disabled={searchResults.length === 0}
@@ -143,9 +140,7 @@ export function ConversationView({
                 size="icon"
                 className="h-8 w-8"
                 onClick={() =>
-                  setSearchIndex((current) =>
-                    searchResults.length === 0 ? 0 : (current + 1) % searchResults.length,
-                  )
+                  setSearchIndex((current) => (searchResults.length === 0 ? 0 : (current + 1) % searchResults.length))
                 }
                 disabled={searchResults.length === 0}
                 title={copy.messages.searchNext}

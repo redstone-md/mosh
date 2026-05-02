@@ -27,7 +27,7 @@ describe('messageDelivery', () => {
     const pending = createPendingOutgoingMessage('lobby', 'operator', '<p>ready</p>', existing)
     const next = resolvePendingOutgoingMessages(
       [pending],
-      [...existing, createMessage('live-1', 'lobby', '<p>ready</p>')],
+      [...existing, createMessage('live-1', 'lobby', '<p>ready</p>')]
     )
 
     expect(next).toHaveLength(0)
@@ -36,10 +36,7 @@ describe('messageDelivery', () => {
   it('keeps failed optimistic messages until they are retried or removed', () => {
     const pending = createPendingOutgoingMessage('lobby', 'operator', '<p>retry me</p>', [])
     const failed = failPendingOutgoingMessage([pending], pending.clientId)
-    const resolved = resolvePendingOutgoingMessages(
-      failed,
-      [createMessage('live-1', 'lobby', '<p>retry me</p>')],
-    )
+    const resolved = resolvePendingOutgoingMessages(failed, [createMessage('live-1', 'lobby', '<p>retry me</p>')])
 
     expect(resolved[0]?.deliveryState).toBe('failed')
     expect(removePendingOutgoingMessage(resolved, pending.clientId)).toHaveLength(0)

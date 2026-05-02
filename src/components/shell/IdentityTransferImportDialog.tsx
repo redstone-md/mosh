@@ -56,7 +56,7 @@ export function IdentityTransferImportDialog({
                       ? copy.identityTransfer.sameIdentity
                       : copy.identityTransfer.replaceIdentity(
                           currentIdentityFingerprint,
-                          pendingTransfer.handoff.summary.sourceFingerprint,
+                          pendingTransfer.handoff.summary.sourceFingerprint
                         )}
                   </p>
                 </div>
@@ -87,9 +87,7 @@ export function IdentityTransferImportDialog({
                     <ShieldAlert className="h-4 w-4 text-[var(--danger)]" />
                     {copy.identityTransfer.deepLinkWarningTitle}
                   </div>
-                  <p className="mt-2 text-sm text-[var(--muted-foreground)]">
-                    {copy.identityTransfer.deepLinkWarning}
-                  </p>
+                  <p className="mt-2 text-sm text-[var(--muted-foreground)]">{copy.identityTransfer.deepLinkWarning}</p>
                 </div>
                 <div className="rounded-md border border-border bg-[var(--panel)] p-4">
                   <div className="text-sm font-medium text-foreground">{copy.identityTransfer.packagePreview}</div>

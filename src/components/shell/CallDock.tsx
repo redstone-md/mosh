@@ -60,7 +60,7 @@ export function CallDock({
           {copy.call.connectedSummary(
             memberCount,
             mediaState.remoteStreams.length,
-            formatCallModes(copy, mediaState.activeModes),
+            formatCallModes(copy, mediaState.activeModes)
           )}
         </p>
       </div>
@@ -110,9 +110,7 @@ export function CallDock({
         {mediaState.error ? (
           <p className="text-sm text-[var(--danger)]">{mediaState.error}</p>
         ) : (
-          <p className="text-sm text-[var(--muted-foreground)]">
-            {copy.call.voiceActive}
-          </p>
+          <p className="text-sm text-[var(--muted-foreground)]">{copy.call.voiceActive}</p>
         )}
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="icon" onClick={onToggleMicrophone} title={copy.call.microphone}>

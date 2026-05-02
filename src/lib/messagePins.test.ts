@@ -43,13 +43,8 @@ describe('messagePins', () => {
       lobby: ['m-3', 'm-1', 'missing'],
     }
 
-    expect(resolvePinnedMessages(current, 'lobby', [
-      createMessage('m-1'),
-      createMessage('m-2'),
-      createMessage('m-3'),
-    ])).toEqual([
-      createMessage('m-3'),
-      createMessage('m-1'),
-    ])
+    expect(
+      resolvePinnedMessages(current, 'lobby', [createMessage('m-1'), createMessage('m-2'), createMessage('m-3')])
+    ).toEqual([createMessage('m-3'), createMessage('m-1')])
   })
 })

@@ -25,7 +25,7 @@ export type GlobalSearchResult = {
 export function buildGlobalSearchEntries(
   messages: Message[],
   archives: SignedRoomArchive[],
-  rooms: RoomSummary[],
+  rooms: RoomSummary[]
 ): GlobalSearchEntry[] {
   const roomLabels = new Map(rooms.map((room) => [room.id, room.label] as const))
   const entries = new Map<string, GlobalSearchEntry>()
@@ -41,14 +41,11 @@ export function buildGlobalSearchEntries(
   }
 
   return Array.from(entries.values()).sort((left, right) =>
-    `${left.timestamp}-${left.id}`.localeCompare(`${right.timestamp}-${right.id}`),
+    `${left.timestamp}-${left.id}`.localeCompare(`${right.timestamp}-${right.id}`)
   )
 }
 
-export function searchGlobalMessages(
-  entries: GlobalSearchEntry[],
-  rawQuery: string,
-): GlobalSearchResult[] {
+export function searchGlobalMessages(entries: GlobalSearchEntry[], rawQuery: string): GlobalSearchResult[] {
   const query = normalizeSearchText(rawQuery)
   if (!query) {
     return []
@@ -84,7 +81,7 @@ function upsertEntry(
   entries: Map<string, GlobalSearchEntry>,
   message: Message,
   roomLabel: string,
-  source: 'live' | 'archive',
+  source: 'live' | 'archive'
 ) {
   const body = extractPlainText(message.body)
   const current = entries.get(message.id)

@@ -14,12 +14,7 @@ type PeerTrustPanelProps = {
   onForgetPeer: (peerId: string) => void
 }
 
-export function PeerTrustPanel({
-  trustedPeers,
-  trustedCount,
-  reviewCount,
-  onForgetPeer,
-}: PeerTrustPanelProps) {
+export function PeerTrustPanel({ trustedPeers, trustedCount, reviewCount, onForgetPeer }: PeerTrustPanelProps) {
   const { copy, language } = useI18n()
   const formatter = new Intl.DateTimeFormat(language, {
     dateStyle: 'medium',
@@ -44,18 +39,17 @@ export function PeerTrustPanel({
       {trustedPeers.length > 0 ? (
         <div className="space-y-2">
           {trustedPeers.map((peer) => (
-            <div key={peer.peerId} className="flex items-start justify-between rounded-md border border-border bg-[var(--panel-strong)] px-4 py-3">
+            <div
+              key={peer.peerId}
+              className="flex items-start justify-between rounded-md border border-border bg-[var(--panel-strong)] px-4 py-3"
+            >
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="truncate text-sm font-medium">
-                    {peer.currentDisplayName ?? peer.displayName}
-                  </p>
+                  <p className="truncate text-sm font-medium">{peer.currentDisplayName ?? peer.displayName}</p>
                   <TrustBadge state={peer.state} />
                 </div>
                 {peer.currentDisplayName && peer.currentDisplayName !== peer.displayName ? (
-                  <p className="mt-1 text-xs text-amber-300">
-                    {copy.trust.renamedFrom(peer.displayName)}
-                  </p>
+                  <p className="mt-1 text-xs text-amber-300">{copy.trust.renamedFrom(peer.displayName)}</p>
                 ) : null}
                 <p className="mt-2 font-mono text-xs text-[var(--muted-foreground)]">
                   {formatPeerFingerprint(peer.peerId)}
@@ -79,15 +73,7 @@ export function PeerTrustPanel({
   )
 }
 
-function TrustStatCard({
-  icon,
-  title,
-  value,
-}: {
-  icon: ReactNode
-  title: string
-  value: string
-}) {
+function TrustStatCard({ icon, title, value }: { icon: ReactNode; title: string; value: string }) {
   return (
     <div className="rounded-md border border-border bg-[var(--panel-strong)] p-4">
       <div className="flex items-center gap-2 text-sm font-medium">

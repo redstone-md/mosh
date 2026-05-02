@@ -10,8 +10,7 @@ use serde::{Deserialize, Deserializer};
 use crate::callback_state::shared_callback_state;
 
 type MossHandle = i64;
-type MossMessageCallback =
-    unsafe extern "C" fn(*const c_char, *const u8, *const u8, u32);
+type MossMessageCallback = unsafe extern "C" fn(*const c_char, *const u8, *const u8, u32);
 type MossEventCallback = unsafe extern "C" fn(i32, *const c_char);
 type MossInit = unsafe extern "C" fn(*const c_char, *const u8, *const c_char) -> MossHandle;
 type MossStart = unsafe extern "C" fn(MossHandle) -> i32;
@@ -109,7 +108,10 @@ impl MossLibrary {
         let config = CString::new(config).map_err(|_| "config contains NUL byte".to_string())?;
         let handle = unsafe { (self.init)(mesh_id.as_ptr(), std::ptr::null(), config.as_ptr()) };
         if handle <= 0 {
-            return Err(format!("Moss_Init failed: {}", error_message(handle as i32)));
+            return Err(format!(
+                "Moss_Init failed: {}",
+                error_message(handle as i32)
+            ));
         }
         Ok(handle)
     }
@@ -131,8 +133,7 @@ impl MossLibrary {
     }
 
     pub fn subscribe(&self, handle: MossHandle, channel: &str) -> Result<(), String> {
-        let channel =
-            CString::new(channel).map_err(|_| "channel contains NUL byte".to_string())?;
+        let channel = CString::new(channel).map_err(|_| "channel contains NUL byte".to_string())?;
         let code = unsafe { (self.subscribe)(handle, channel.as_ptr()) };
         if code != 0 {
             return Err(format!("Moss_Subscribe failed: {}", error_message(code)));
@@ -141,8 +142,7 @@ impl MossLibrary {
     }
 
     pub fn unsubscribe(&self, handle: MossHandle, channel: &str) -> Result<(), String> {
-        let channel =
-            CString::new(channel).map_err(|_| "channel contains NUL byte".to_string())?;
+        let channel = CString::new(channel).map_err(|_| "channel contains NUL byte".to_string())?;
         let code = unsafe { (self.unsubscribe)(handle, channel.as_ptr()) };
         if code != 0 {
             return Err(format!("Moss_Unsubscribe failed: {}", error_message(code)));
@@ -160,8 +160,7 @@ impl MossLibrary {
     }
 
     pub fn publish(&self, handle: MossHandle, channel: &str, payload: &[u8]) -> Result<(), String> {
-        let channel =
-            CString::new(channel).map_err(|_| "channel contains NUL byte".to_string())?;
+        let channel = CString::new(channel).map_err(|_| "channel contains NUL byte".to_string())?;
         let code = unsafe {
             (self.publish)(
                 handle,

@@ -16,13 +16,7 @@ type TitlebarProps = {
   errorNote?: string
 }
 
-export function Titlebar({
-  runtime,
-  onOpenGlobalSearch,
-  onToggleRuntime,
-  isBusy,
-  errorNote,
-}: TitlebarProps) {
+export function Titlebar({ runtime, onOpenGlobalSearch, onToggleRuntime, isBusy, errorNote }: TitlebarProps) {
   const { copy } = useI18n()
 
   const handleDragStart = (event: MouseEvent<HTMLDivElement>) => {
@@ -42,9 +36,7 @@ export function Titlebar({
         <div className="flex h-5 w-5 items-center justify-center rounded-sm bg-[var(--panel-strong)] text-[10px] font-semibold text-foreground/80">
           M
         </div>
-        <div className="text-xs font-semibold tracking-[0.18em] text-foreground/72">
-          MOSH
-        </div>
+        <div className="text-xs font-semibold tracking-[0.18em] text-foreground/72">MOSH</div>
       </div>
 
       <div className="flex min-w-0 flex-1 items-center gap-3">

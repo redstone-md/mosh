@@ -1,4 +1,4 @@
-import os from 'node:os';
+import os from 'node:os'
 
 const TARGET_RUNTIME_PLANS = {
   'x86_64-pc-windows-msvc': {
@@ -43,35 +43,35 @@ const TARGET_RUNTIME_PLANS = {
     headerFile: 'libmoss.h',
     artifactLabel: 'macos-arm64',
   },
-};
+}
 
 export function detectHostTargetTriple(platform = process.platform, arch = process.arch) {
   if (platform === 'win32' && arch === 'x64') {
-    return 'x86_64-pc-windows-msvc';
+    return 'x86_64-pc-windows-msvc'
   }
   if (platform === 'win32' && arch === 'arm64') {
-    return 'aarch64-pc-windows-msvc';
+    return 'aarch64-pc-windows-msvc'
   }
   if (platform === 'linux' && arch === 'x64') {
-    return 'x86_64-unknown-linux-gnu';
+    return 'x86_64-unknown-linux-gnu'
   }
   if (platform === 'linux' && arch === 'arm64') {
-    return 'aarch64-unknown-linux-gnu';
+    return 'aarch64-unknown-linux-gnu'
   }
   if (platform === 'darwin' && arch === 'x64') {
-    return 'x86_64-apple-darwin';
+    return 'x86_64-apple-darwin'
   }
   if (platform === 'darwin' && arch === 'arm64') {
-    return 'aarch64-apple-darwin';
+    return 'aarch64-apple-darwin'
   }
 
-  throw new Error(`Unsupported host target: ${platform}/${arch}`);
+  throw new Error(`Unsupported host target: ${platform}/${arch}`)
 }
 
 export function resolveMossRuntimePlan(targetTriple = detectHostTargetTriple()) {
-  const plan = TARGET_RUNTIME_PLANS[targetTriple];
+  const plan = TARGET_RUNTIME_PLANS[targetTriple]
   if (!plan) {
-    throw new Error(`Unsupported target triple: ${targetTriple}`);
+    throw new Error(`Unsupported target triple: ${targetTriple}`)
   }
 
   return {
@@ -79,5 +79,5 @@ export function resolveMossRuntimePlan(targetTriple = detectHostTargetTriple()) 
     ...plan,
     hostPlatform: os.platform(),
     hostArch: os.arch(),
-  };
+  }
 }

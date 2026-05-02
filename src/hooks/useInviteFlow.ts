@@ -70,7 +70,7 @@ export function useInviteFlow({
 
       await subscribeRoom.mutateAsync(invite.runtime.initialRoom)
     },
-    [connectPeer, data, runtimeDraft, setPreferences, subscribeRoom, updateRuntimeSettings],
+    [connectPeer, data, runtimeDraft, setPreferences, subscribeRoom, updateRuntimeSettings]
   )
 
   const approvePendingInvite = useCallback(async () => {
@@ -93,7 +93,15 @@ export function useInviteFlow({
     } finally {
       setReviewPending(false)
     }
-  }, [applyInvite, copy.inviteApplied, copy.inviteInvalid, dismissPendingInvite, identityMode, pendingInvite, regenerateIdentity])
+  }, [
+    applyInvite,
+    copy.inviteApplied,
+    copy.inviteInvalid,
+    dismissPendingInvite,
+    identityMode,
+    pendingInvite,
+    regenerateIdentity,
+  ])
 
   return {
     pendingInvite: pendingInvite as PendingDeepLinkInvite | null,

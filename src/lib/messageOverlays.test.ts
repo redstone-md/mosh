@@ -36,7 +36,7 @@ describe('messageOverlays', () => {
 
   it('serializes edited plain text safely into message html', () => {
     expect(serializeEditedMessageBody('line one\n<script>x</script>')).toBe(
-      '<p>line one<br>&lt;script&gt;x&lt;/script&gt;</p>',
+      '<p>line one<br>&lt;script&gt;x&lt;/script&gt;</p>'
     )
   })
 })

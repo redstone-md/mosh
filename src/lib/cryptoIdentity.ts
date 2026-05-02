@@ -13,10 +13,7 @@ function base64ToArrayBuffer(value: string): ArrayBuffer {
 }
 
 async function fingerprintPublicKey(publicKey: JsonWebKey): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    encoder.encode(JSON.stringify(publicKey)),
-  )
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(JSON.stringify(publicKey)))
   const bytes = new Uint8Array(digest)
   return Array.from(bytes.slice(0, 6))
     .map((byte) => byte.toString(16).padStart(2, '0'))
@@ -30,7 +27,7 @@ export async function createSigningIdentity(): Promise<SigningIdentity> {
       namedCurve: 'P-256',
     },
     true,
-    ['sign', 'verify'],
+    ['sign', 'verify']
   )
 
   const [publicKeyJwk, privateKeyJwk] = await Promise.all([
@@ -46,10 +43,7 @@ export async function createSigningIdentity(): Promise<SigningIdentity> {
   }
 }
 
-export async function signSerializedPayload(
-  identity: SigningIdentity,
-  payload: string,
-): Promise<string> {
+export async function signSerializedPayload(identity: SigningIdentity, payload: string): Promise<string> {
   const privateKey = await crypto.subtle.importKey(
     'jwk',
     identity.privateKeyJwk,
@@ -58,7 +52,7 @@ export async function signSerializedPayload(
       namedCurve: 'P-256',
     },
     false,
-    ['sign'],
+    ['sign']
   )
 
   const signature = await crypto.subtle.sign(
@@ -67,7 +61,7 @@ export async function signSerializedPayload(
       hash: 'SHA-256',
     },
     privateKey,
-    encoder.encode(payload),
+    encoder.encode(payload)
   )
 
   return arrayBufferToBase64(signature)
@@ -76,7 +70,7 @@ export async function signSerializedPayload(
 export async function verifySerializedPayload(
   publicKeyJwk: JsonWebKey,
   payload: string,
-  signature: string,
+  signature: string
 ): Promise<boolean> {
   const publicKey = await crypto.subtle.importKey(
     'jwk',
@@ -86,7 +80,7 @@ export async function verifySerializedPayload(
       namedCurve: 'P-256',
     },
     false,
-    ['verify'],
+    ['verify']
   )
 
   return crypto.subtle.verify(
@@ -96,7 +90,7 @@ export async function verifySerializedPayload(
     },
     publicKey,
     base64ToArrayBuffer(signature),
-    encoder.encode(payload),
+    encoder.encode(payload)
   )
 }
 

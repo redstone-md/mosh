@@ -78,7 +78,7 @@ export const shellPreferencesSchema = z.object({
       z.object({
         displayName: z.string().trim().min(1).max(128),
         approvedAt: z.string().min(1),
-      }),
+      })
     )
     .default({}),
 })

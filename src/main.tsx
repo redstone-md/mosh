@@ -14,5 +14,5 @@ ReactDOM.createRoot(document.getElementById('app')!).render(
         <App />
       </AppErrorBoundary>
     </QueryClientProvider>
-  </React.StrictMode>,
+  </React.StrictMode>
 )

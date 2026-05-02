@@ -26,9 +26,13 @@ export function RoomList({ rooms, selectedRoomId, onSelect }: RoomListProps) {
             >
               <div className="text-left flex flex-col gap-0.5">
                 <strong className={`text-sm ${selected ? 'text-primary' : 'text-foreground'}`}>{room.label}</strong>
-                <span className="text-[10px] text-foreground/50 uppercase tracking-wider">{room.participants} participants</span>
+                <span className="text-[10px] text-foreground/50 uppercase tracking-wider">
+                  {room.participants} participants
+                </span>
               </div>
-              <span className={`text-[10px] font-bold px-2 py-1 rounded-md ${room.unread > 0 ? 'bg-primary text-background' : 'bg-muted border border-border/50 text-foreground/60'}`}>
+              <span
+                className={`text-[10px] font-bold px-2 py-1 rounded-md ${room.unread > 0 ? 'bg-primary text-background' : 'bg-muted border border-border/50 text-foreground/60'}`}
+              >
                 {room.unread > 0 ? room.unread : room.kind}
               </span>
             </button>
@@ -38,4 +42,3 @@ export function RoomList({ rooms, selectedRoomId, onSelect }: RoomListProps) {
     </aside>
   )
 }
-

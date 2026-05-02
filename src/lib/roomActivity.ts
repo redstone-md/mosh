@@ -4,7 +4,7 @@ export function computeRoomUnreadCounts(
   messages: Message[],
   lastReadMessageIds: Record<string, string>,
   selectedRoomId: string,
-  nickname: string,
+  nickname: string
 ): Record<string, number> {
   const grouped = new Map<string, Message[]>()
 
@@ -53,7 +53,7 @@ export function computeRoomUnreadCounts(
 export function markRoomAsRead(
   current: Record<string, string>,
   roomId: string,
-  messages: Message[],
+  messages: Message[]
 ): Record<string, string> {
   const latestMessage = findLatestRoomMessage(messages, roomId)
   if (!latestMessage || current[roomId] === latestMessage.id) {

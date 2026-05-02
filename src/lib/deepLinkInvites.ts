@@ -26,7 +26,7 @@ export function extractInviteDeepLinks(urls: string[]): string[] {
 
 export function appendUniqueDeepLinkInvites(
   current: PendingDeepLinkInvite[],
-  candidates: PendingDeepLinkInvite[],
+  candidates: PendingDeepLinkInvite[]
 ): PendingDeepLinkInvite[] {
   const seen = new Set(current.map((invite) => invite.sourceUrl))
   const next = [...current]

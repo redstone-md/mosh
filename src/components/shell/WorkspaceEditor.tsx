@@ -2,7 +2,13 @@ import { z } from 'zod'
 import { PencilLine, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
-import { channelTypeSchema, groupAccentSchema, roomGroupSchema, type ChannelType, type RoomGroup } from '../../lib/appShellSchemas'
+import {
+  channelTypeSchema,
+  groupAccentSchema,
+  roomGroupSchema,
+  type ChannelType,
+  type RoomGroup,
+} from '../../lib/appShellSchemas'
 import { getGroupAccentClass } from '../../lib/chatPresentation'
 import type { RoomSummary } from '../../lib/schemas'
 import { cn } from '../../lib/utils'
@@ -24,11 +30,7 @@ type WorkspaceEditorProps = {
   rooms: RoomSummary[]
   roomTypes: Record<string, ChannelType>
   selectedGroupId: string
-  onSave: (
-    groups: RoomGroup[],
-    roomTypes: Record<string, ChannelType>,
-    selectedGroupId: string,
-  ) => void
+  onSave: (groups: RoomGroup[], roomTypes: Record<string, ChannelType>, selectedGroupId: string) => void
 }
 
 function createDraftGroup(index: number, label: string): RoomGroup {
@@ -52,42 +54,27 @@ function buildInitialAssignments(groups: RoomGroup[], rooms: RoomSummary[]) {
   return assignments
 }
 
-function buildGroups(
-  groups: RoomGroup[],
-  rooms: RoomSummary[],
-  assignments: Record<string, string>,
-): RoomGroup[] {
+function buildGroups(groups: RoomGroup[], rooms: RoomSummary[], assignments: Record<string, string>): RoomGroup[] {
   return groups.map((group) => ({
     ...group,
     roomIds: rooms.filter((room) => assignments[room.id] === group.id).map((room) => room.id),
   }))
 }
 
-export function WorkspaceEditor({
-  groups,
-  rooms,
-  roomTypes,
-  selectedGroupId,
-  onSave,
-}: WorkspaceEditorProps) {
+export function WorkspaceEditor({ groups, rooms, roomTypes, selectedGroupId, onSave }: WorkspaceEditorProps) {
   const { copy } = useI18n()
-  const channelRooms = useMemo(
-    () => rooms.filter((room) => room.kind === 'channel'),
-    [rooms],
-  )
+  const channelRooms = useMemo(() => rooms.filter((room) => room.kind === 'channel'), [rooms])
   const [draftGroups, setDraftGroups] = useState(() => groups)
   const [draftRoomTypes, setDraftRoomTypes] = useState(() => roomTypes)
   const [roomAssignments, setRoomAssignments] = useState(() => buildInitialAssignments(groups, channelRooms))
   const [draftSelectedGroupId, setDraftSelectedGroupId] = useState(
-    () => groups.find((group) => group.id === selectedGroupId)?.id ?? groups[0]?.id ?? '',
+    () => groups.find((group) => group.id === selectedGroupId)?.id ?? groups[0]?.id ?? ''
   )
   const [errorNote, setErrorNote] = useState<string | null>(null)
 
   const selectedGroup = draftGroups.find((group) => group.id === draftSelectedGroupId) ?? draftGroups[0]
   const selectedGroupChannelIds = new Set(
-    channelRooms
-      .filter((room) => roomAssignments[room.id] === selectedGroup?.id)
-      .map((room) => room.id),
+    channelRooms.filter((room) => roomAssignments[room.id] === selectedGroup?.id).map((room) => room.id)
   )
 
   function handleCreateGroup() {
@@ -113,9 +100,7 @@ export function WorkspaceEditor({
         }
         return nextAssignments
       })
-      setDraftSelectedGroupId((currentGroupId) =>
-        currentGroupId === groupId ? fallbackGroup.id : currentGroupId,
-      )
+      setDraftSelectedGroupId((currentGroupId) => (currentGroupId === groupId ? fallbackGroup.id : currentGroupId))
 
       return nextGroups
     })
@@ -134,8 +119,7 @@ export function WorkspaceEditor({
         result[room.id] = draftRoomTypes[room.id] ?? 'text'
         return result
       }, {}),
-      selectedGroupId:
-        nextGroups.find((group) => group.id === draftSelectedGroupId)?.id ?? nextGroups[0]?.id ?? '',
+      selectedGroupId: nextGroups.find((group) => group.id === draftSelectedGroupId)?.id ?? nextGroups[0]?.id ?? '',
     })
 
     if (!parsed.success) {
@@ -165,17 +149,26 @@ export function WorkspaceEditor({
                 key={group.id}
                 className={cn(
                   'flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition-colors',
-                  isActive ? 'bg-[var(--panel)] text-foreground' : 'text-[var(--muted-foreground)] hover:bg-[var(--panel)]',
+                  isActive
+                    ? 'bg-[var(--panel)] text-foreground'
+                    : 'text-[var(--muted-foreground)] hover:bg-[var(--panel)]'
                 )}
                 onClick={() => setDraftSelectedGroupId(group.id)}
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className={cn('flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold', getGroupAccentClass(group))}>
+                  <span
+                    className={cn(
+                      'flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold',
+                      getGroupAccentClass(group)
+                    )}
+                  >
                     {group.icon}
                   </span>
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-foreground">{group.name}</span>
-                    <span className="block text-xs text-[var(--muted-foreground)]">{copy.workspace.channelCount(channelCount)}</span>
+                    <span className="block text-xs text-[var(--muted-foreground)]">
+                      {copy.workspace.channelCount(channelCount)}
+                    </span>
                   </span>
                 </span>
                 {isActive ? <Badge variant="secondary">{copy.common.active}</Badge> : null}
@@ -201,10 +194,8 @@ export function WorkspaceEditor({
                     onChange={(event) =>
                       setDraftGroups((current) =>
                         current.map((group) =>
-                          group.id === selectedGroup.id
-                            ? { ...group, name: event.target.value }
-                            : group,
-                        ),
+                          group.id === selectedGroup.id ? { ...group, name: event.target.value } : group
+                        )
                       )
                     }
                     placeholder="Ops"
@@ -219,9 +210,12 @@ export function WorkspaceEditor({
                       setDraftGroups((current) =>
                         current.map((group) =>
                           group.id === selectedGroup.id
-                            ? { ...group, icon: event.target.value.toUpperCase() }
-                            : group,
-                        ),
+                            ? {
+                                ...group,
+                                icon: event.target.value.toUpperCase(),
+                              }
+                            : group
+                        )
                       )
                     }
                     placeholder="OP"
@@ -239,13 +233,11 @@ export function WorkspaceEditor({
                         'rounded-md border px-3 py-2 text-left text-sm capitalize transition-colors',
                         selectedGroup.accent === accent
                           ? 'border-[var(--primary)] bg-[var(--panel)]'
-                          : 'border-border bg-[var(--panel-strong)] hover:bg-[var(--panel)]',
+                          : 'border-border bg-[var(--panel-strong)] hover:bg-[var(--panel)]'
                       )}
                       onClick={() =>
                         setDraftGroups((current) =>
-                          current.map((group) =>
-                            group.id === selectedGroup.id ? { ...group, accent } : group,
-                          ),
+                          current.map((group) => (group.id === selectedGroup.id ? { ...group, accent } : group))
                         )
                       }
                     >
@@ -259,11 +251,7 @@ export function WorkspaceEditor({
                   <PencilLine className="h-4 w-4 text-[var(--muted-foreground)]" />
                   <span>{copy.workspace.channelsRouted(selectedGroupChannelIds.size)}</span>
                 </div>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => handleDeleteGroup(selectedGroup.id)}
-                >
+                <Button variant="destructive" size="sm" onClick={() => handleDeleteGroup(selectedGroup.id)}>
                   <Trash2 className="h-4 w-4" />
                   {copy.workspace.deleteGroup}
                 </Button>

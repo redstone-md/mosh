@@ -65,11 +65,11 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
 
   const selfPeerId = useMemo(
     () => snapshot?.peers.find((peer) => peer.status === 'self')?.id ?? null,
-    [snapshot?.peers],
+    [snapshot?.peers]
   )
   const joinedVoiceRoom = useMemo<VoiceRoom | null>(
     () => snapshot?.voiceRooms.find((room) => room.joined) ?? null,
-    [snapshot?.voiceRooms],
+    [snapshot?.voiceRooms]
   )
 
   useEffect(() => {
@@ -141,7 +141,7 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
 
   function refreshRemoteStreamsState() {
     const remoteStreams = Array.from(remoteStreamsRef.current.values()).sort((left, right) =>
-      left.peerName.localeCompare(right.peerName),
+      left.peerName.localeCompare(right.peerName)
     )
     setState((current) => ({
       ...current,
@@ -169,15 +169,16 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
     if (audioStreamRef.current) {
       return audioStreamRef.current
     }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: false,
+    })
     audioStreamRef.current = stream
     setState((current) => ({
       ...current,
       audioStream: stream,
       microphoneEnabled: true,
-      activeModes: current.activeModes.includes('voice')
-        ? current.activeModes
-        : [...current.activeModes, 'voice'],
+      activeModes: current.activeModes.includes('voice') ? current.activeModes : [...current.activeModes, 'voice'],
     }))
     return stream
   }
@@ -186,7 +187,10 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
     if (displayStreamRef.current) {
       return displayStreamRef.current
     }
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: true,
+    })
     displayStreamRef.current = stream
     stream.getVideoTracks()[0]?.addEventListener('ended', () => {
       void stopScreenShare()
@@ -195,19 +199,12 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
       ...current,
       displayStream: stream,
       screenSharingEnabled: true,
-      activeModes: current.activeModes.includes('screen')
-        ? current.activeModes
-        : [...current.activeModes, 'screen'],
+      activeModes: current.activeModes.includes('screen') ? current.activeModes : [...current.activeModes, 'screen'],
     }))
     return stream
   }
 
-  async function sendSignal(
-    roomId: string,
-    targetPeerId: string,
-    signalType: string,
-    signalData: string,
-  ) {
+  async function sendSignal(roomId: string, targetPeerId: string, signalType: string, signalData: string) {
     await syncSnapshot(
       desktopStatusClient.sendCallSignal({
         targetPeerId,
@@ -215,7 +212,7 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
         room: roomId,
         signalType,
         signalData,
-      }),
+      })
     )
   }
 
@@ -339,7 +336,11 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
 
   async function joinVoiceRoom(roomId: string, withScreen = false) {
     try {
-      setState((current) => ({ ...current, status: 'requesting', error: null }))
+      setState((current) => ({
+        ...current,
+        status: 'requesting',
+        error: null,
+      }))
       await ensureAudioStream()
       if (withScreen) {
         await ensureDisplayStream()
@@ -402,9 +403,7 @@ export function useMediaSession(snapshot: DesktopSnapshot | undefined) {
       setState((current) => ({
         ...current,
         screenSharingEnabled: true,
-        activeModes: current.activeModes.includes('screen')
-          ? current.activeModes
-          : [...current.activeModes, 'screen'],
+        activeModes: current.activeModes.includes('screen') ? current.activeModes : [...current.activeModes, 'screen'],
       }))
     } catch (error) {
       setState((current) => ({

@@ -62,13 +62,7 @@ impl ChatPayload {
         }
     }
 
-    pub fn call_control(
-        nick: &str,
-        kind: &str,
-        room: &str,
-        target: &str,
-        call_id: &str,
-    ) -> Self {
+    pub fn call_control(nick: &str, kind: &str, room: &str, target: &str, call_id: &str) -> Self {
         Self {
             kind: kind.to_string(),
             nick: nick.to_string(),

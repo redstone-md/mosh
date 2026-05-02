@@ -78,32 +78,41 @@ impl DesktopRuntimeConfig {
     }
 
     pub fn diagnostics(&self, mesh: Option<&MeshInfo>) -> RuntimeDiagnostics {
-        let (active_mesh_id, active_listen_port, peer_count, channel_count, active_channels, supernode_ready) =
-            match mesh {
-                Some(mesh) => (
-                    mesh.mesh_id.clone(),
-                    mesh.listen_port.to_string(),
-                    mesh.peer_count,
-                    mesh.channels.len(),
-                    mesh.channels.clone(),
-                    mesh.supernode_ready,
-                ),
-                None => (
-                    "offline".to_string(),
-                    "offline".to_string(),
-                    0,
-                    0,
-                    Vec::new(),
-                    false,
-                ),
-            };
+        let (
+            active_mesh_id,
+            active_listen_port,
+            peer_count,
+            channel_count,
+            active_channels,
+            supernode_ready,
+        ) = match mesh {
+            Some(mesh) => (
+                mesh.mesh_id.clone(),
+                mesh.listen_port.to_string(),
+                mesh.peer_count,
+                mesh.channels.len(),
+                mesh.channels.clone(),
+                mesh.supernode_ready,
+            ),
+            None => (
+                "offline".to_string(),
+                "offline".to_string(),
+                0,
+                0,
+                Vec::new(),
+                false,
+            ),
+        };
 
         RuntimeDiagnostics {
             configured_nickname: self.nickname.clone(),
             configured_mesh_id: self.mesh_id.clone(),
             configured_listen_port: port_label(self.listen_port),
             initial_room: format!("#{}", self.initial_room),
-            startup_peer: self.startup_peer.clone().unwrap_or_else(|| "not set".to_string()),
+            startup_peer: self
+                .startup_peer
+                .clone()
+                .unwrap_or_else(|| "not set".to_string()),
             tracker_mode: self.tracker_mode.label().to_string(),
             lan_discovery: if self.lan_discovery_enabled {
                 "enabled".to_string()
@@ -145,7 +154,6 @@ impl DesktopRuntimeConfig {
     pub fn startup_peer(&self) -> Option<&str> {
         self.startup_peer.as_deref()
     }
-
 }
 
 impl TrackerMode {

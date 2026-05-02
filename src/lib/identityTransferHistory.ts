@@ -33,7 +33,7 @@ export type IdentityTransferEventInput =
 
 export function appendIdentityTransferEvent(
   history: IdentityTransferEvent[],
-  input: IdentityTransferEventInput,
+  input: IdentityTransferEventInput
 ): IdentityTransferEvent[] {
   const occurredAt = input.occurredAt ?? new Date().toISOString()
   const event: IdentityTransferEvent = {

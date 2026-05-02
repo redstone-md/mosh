@@ -3,11 +3,7 @@ import toast from 'react-hot-toast'
 import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link'
 
 import { decodeMeshInvite } from '../lib/meshInvite'
-import {
-  appendUniqueDeepLinkInvites,
-  extractInviteDeepLinks,
-  type PendingDeepLinkInvite,
-} from '../lib/deepLinkInvites'
+import { appendUniqueDeepLinkInvites, extractInviteDeepLinks, type PendingDeepLinkInvite } from '../lib/deepLinkInvites'
 import { showDesktopWindow } from '../lib/desktopWindow'
 import { isTauriEnvironment } from '../lib/tauriEnv'
 

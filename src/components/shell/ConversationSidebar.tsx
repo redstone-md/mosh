@@ -78,7 +78,7 @@ export function ConversationSidebar({
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">
-              {selectedDock === 'home' ? copy.sidebar.directMessages : activeGroup?.name ?? copy.common.group}
+              {selectedDock === 'home' ? copy.sidebar.directMessages : (activeGroup?.name ?? copy.common.group)}
             </p>
             <p className="text-xs text-[var(--muted-foreground)]">{localizeRuntimeState(copy, runtime.state)}</p>
           </div>
@@ -143,40 +143,44 @@ export function ConversationSidebar({
             <>
               <SidebarSection title={copy.common.channels}>
                 {filteredRooms.filter((room) => roomTypes[room.id] !== 'voice').length > 0 ? (
-                  filteredRooms.filter((room) => roomTypes[room.id] !== 'voice').map((room) => (
-                    <RoomButton
-                      key={room.id}
-                      room={room}
-                      channelType={roomTypes[room.id] ?? 'text'}
-                      selected={room.id === selectedRoomId}
-                      unreadCount={unreadCounts[room.id] ?? room.unread}
-                      draftPreview={draftPreviews[room.id]}
-                      draftLabel={copy.common.draft}
-                      muted={mutedRoomIds.includes(room.id)}
-                      activeVoiceRoom={activeVoiceRoom}
-                      onClick={() => onSelectRoom(room.id)}
-                    />
-                  ))
+                  filteredRooms
+                    .filter((room) => roomTypes[room.id] !== 'voice')
+                    .map((room) => (
+                      <RoomButton
+                        key={room.id}
+                        room={room}
+                        channelType={roomTypes[room.id] ?? 'text'}
+                        selected={room.id === selectedRoomId}
+                        unreadCount={unreadCounts[room.id] ?? room.unread}
+                        draftPreview={draftPreviews[room.id]}
+                        draftLabel={copy.common.draft}
+                        muted={mutedRoomIds.includes(room.id)}
+                        activeVoiceRoom={activeVoiceRoom}
+                        onClick={() => onSelectRoom(room.id)}
+                      />
+                    ))
                 ) : (
                   <EmptyNote label={copy.sidebar.noTextChannels} />
                 )}
               </SidebarSection>
               <SidebarSection title={copy.common.voice}>
                 {filteredRooms.filter((room) => roomTypes[room.id] === 'voice').length > 0 ? (
-                  filteredRooms.filter((room) => roomTypes[room.id] === 'voice').map((room) => (
-                    <RoomButton
-                      key={room.id}
-                      room={room}
-                      channelType="voice"
-                      selected={room.id === selectedRoomId}
-                      unreadCount={unreadCounts[room.id] ?? room.unread}
-                      draftPreview={draftPreviews[room.id]}
-                      draftLabel={copy.common.draft}
-                      muted={mutedRoomIds.includes(room.id)}
-                      activeVoiceRoom={activeVoiceRoom}
-                      onClick={() => onSelectRoom(room.id)}
-                    />
-                  ))
+                  filteredRooms
+                    .filter((room) => roomTypes[room.id] === 'voice')
+                    .map((room) => (
+                      <RoomButton
+                        key={room.id}
+                        room={room}
+                        channelType="voice"
+                        selected={room.id === selectedRoomId}
+                        unreadCount={unreadCounts[room.id] ?? room.unread}
+                        draftPreview={draftPreviews[room.id]}
+                        draftLabel={copy.common.draft}
+                        muted={mutedRoomIds.includes(room.id)}
+                        activeVoiceRoom={activeVoiceRoom}
+                        onClick={() => onSelectRoom(room.id)}
+                      />
+                    ))
                 ) : (
                   <EmptyNote label={copy.sidebar.noVoiceChannels} />
                 )}
@@ -222,19 +226,11 @@ export function ConversationSidebar({
   )
 }
 
-function SidebarSection({
-  title,
-  children,
-}: {
-  title: string
-  children: ReactNode
-}) {
+function SidebarSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
       <div className="mb-2 flex items-center justify-between px-2">
-        <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--muted-foreground)]">
-          {title}
-        </p>
+        <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--muted-foreground)]">{title}</p>
       </div>
       <div className="space-y-1">{children}</div>
     </section>
@@ -263,25 +259,34 @@ function RoomButton({
   onClick: () => void
 }) {
   const voiceCount =
-    channelType === 'voice' && activeVoiceRoom?.roomId === room.id
-      ? activeVoiceRoom.participants.length
-      : 0
+    channelType === 'voice' && activeVoiceRoom?.roomId === room.id ? activeVoiceRoom.participants.length : 0
   return (
     <button
       className={cn(
         'flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm transition-colors',
         selected
           ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-          : 'text-foreground hover:bg-[var(--panel-strong)]',
+          : 'text-foreground hover:bg-[var(--panel-strong)]'
       )}
       onClick={onClick}
     >
       <span className="flex min-w-0 items-center gap-2">
-        {room.kind === 'dm' ? <UserRound className="h-4 w-4 shrink-0" /> : channelType === 'voice' ? <Volume2 className="h-4 w-4 shrink-0" /> : <Hash className="h-4 w-4 shrink-0" />}
+        {room.kind === 'dm' ? (
+          <UserRound className="h-4 w-4 shrink-0" />
+        ) : channelType === 'voice' ? (
+          <Volume2 className="h-4 w-4 shrink-0" />
+        ) : (
+          <Hash className="h-4 w-4 shrink-0" />
+        )}
         <span className="min-w-0">
           <span className="block truncate">{formatRoomTitle(room)}</span>
           {draftPreview ? (
-            <span className={cn('mt-0.5 flex items-center gap-1 truncate text-[11px]', selected ? 'text-[var(--primary-foreground)]/75' : 'text-[var(--muted-foreground)]')}>
+            <span
+              className={cn(
+                'mt-0.5 flex items-center gap-1 truncate text-[11px]',
+                selected ? 'text-[var(--primary-foreground)]/75' : 'text-[var(--muted-foreground)]'
+              )}
+            >
               <PenSquare className="h-3 w-3 shrink-0" />
               {draftPreview}
             </span>

@@ -13,13 +13,7 @@ import type { TrustedPeerEntry } from '../../lib/peerTrust'
 import type { RoomSummary, UpdateRuntimeSettingsInput } from '../../lib/schemas'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { RuntimeSettingsForm } from './RuntimeSettingsForm'
@@ -52,11 +46,7 @@ type SettingsDialogProps = {
   onLanguagePreferenceChange: (languagePreference: LanguagePreference) => void
   onRuntimeDraftChange: (draft: UpdateRuntimeSettingsInput) => void
   onSaveRuntime: () => void
-  onSaveWorkspace: (
-    groups: RoomGroup[],
-    roomTypes: Record<string, ChannelType>,
-    selectedGroupId: string,
-  ) => void
+  onSaveWorkspace: (groups: RoomGroup[], roomTypes: Record<string, ChannelType>, selectedGroupId: string) => void
   onForgetPeer: (peerId: string) => void
   onRecordTransferEvent: (event: IdentityTransferEventInput) => void
   onSaveRollbackSnapshot: (identity: SigningIdentity, source: 'import' | 'rollback') => void

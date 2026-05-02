@@ -50,8 +50,8 @@ describe('peerTrust', () => {
             approvedAt: '2026-03-16T10:00:00.000Z',
           },
         },
-        [{ ...peer, displayName: 'relay-operator' }],
-      )[0]?.state,
+        [{ ...peer, displayName: 'relay-operator' }]
+      )[0]?.state
     ).toBe('renamed')
   })
 })

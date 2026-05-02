@@ -26,8 +26,8 @@ describe('meshInviteFlow', () => {
           trackerMode: 'disabled',
           lanDiscoveryEnabled: false,
         },
-        invite,
-      ),
+        invite
+      )
     ).toEqual({
       runtimeDraft: invite.runtime,
       selectedDock: 'group',

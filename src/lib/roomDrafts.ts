@@ -1,7 +1,7 @@
 export function setRoomDraftValue(
   drafts: Record<string, string>,
   roomId: string,
-  value: string,
+  value: string
 ): Record<string, string> {
   if (isEmptyDraft(value)) {
     const { [roomId]: _removed, ...rest } = drafts

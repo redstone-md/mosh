@@ -13,8 +13,8 @@ function createTransferPayload(extraCipherText = '123') {
         salt: 'abc',
         iv: 'def',
         cipherText: extraCipherText,
-      }),
-    ),
+      })
+    )
   )
 }
 
@@ -30,7 +30,13 @@ describe('identityTransferHandoff', () => {
     const payload = createTransferPayload()
     const handoff = buildIdentityTransferHandoff(payload)
 
-    expect(handoff.shortCode).toBe(payload.slice(0, 16).toUpperCase().match(/.{1,4}/g)?.join('-'))
+    expect(handoff.shortCode).toBe(
+      payload
+        .slice(0, 16)
+        .toUpperCase()
+        .match(/.{1,4}/g)
+        ?.join('-')
+    )
     expect(handoff.summary.sourceFingerprint).toBe('ab:cd:ef')
   })
 
@@ -38,6 +44,8 @@ describe('identityTransferHandoff', () => {
     const handoff = buildIdentityTransferHandoff(createTransferPayload('1234567890abcdefghijklmnopqrstuvwxyz'))
 
     expect(handoff.previewLines.length).toBeGreaterThan(1)
-    expect(handoff.previewLines[0]).toBe(`mosh-identity://transfer/${createTransferPayload('1234567890abcdefghijklmnopqrstuvwxyz').slice(0, 3)}`)
+    expect(handoff.previewLines[0]).toBe(
+      `mosh-identity://transfer/${createTransferPayload('1234567890abcdefghijklmnopqrstuvwxyz').slice(0, 3)}`
+    )
   })
 })

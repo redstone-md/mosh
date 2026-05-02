@@ -19,7 +19,7 @@ export function createPendingOutgoingMessage(
   roomId: string,
   author: string,
   body: string,
-  liveMessages: Message[],
+  liveMessages: Message[]
 ): PendingOutgoingMessage {
   const queuedAt = new Date().toISOString()
   return {
@@ -38,7 +38,7 @@ export function createPendingOutgoingMessage(
 
 export function resolvePendingOutgoingMessages(
   pendingMessages: PendingOutgoingMessage[],
-  liveMessages: Message[],
+  liveMessages: Message[]
 ): PendingOutgoingMessage[] {
   const usedLiveIds = new Set<string>()
 
@@ -53,7 +53,7 @@ export function resolvePendingOutgoingMessages(
         !pendingMessage.baselineMessageIds.includes(message.id) &&
         message.roomId === pendingMessage.roomId &&
         normalizeAuthor(message.author) === normalizeAuthor(pendingMessage.author) &&
-        message.body === pendingMessage.body,
+        message.body === pendingMessage.body
     )
 
     if (!matchedMessage) {
@@ -69,7 +69,7 @@ export function decorateMessagesWithDeliveryState(
   messages: Message[],
   pendingMessages: PendingOutgoingMessage[],
   currentUser: string,
-  archivedMessageIds: string[],
+  archivedMessageIds: string[]
 ): DisplayMessage[] {
   const archivedIds = new Set(archivedMessageIds)
   const normalizedCurrentUser = normalizeAuthor(currentUser)
@@ -99,7 +99,7 @@ export function decorateMessagesWithDeliveryState(
 export function retryPendingOutgoingMessage(
   pendingMessages: PendingOutgoingMessage[],
   clientId: string,
-  liveMessages: Message[],
+  liveMessages: Message[]
 ): PendingOutgoingMessage[] {
   return pendingMessages.map((pendingMessage) =>
     pendingMessage.clientId === clientId
@@ -112,22 +112,22 @@ export function retryPendingOutgoingMessage(
             .map((message) => message.id),
           deliveryState: 'sending',
         }
-      : pendingMessage,
+      : pendingMessage
   )
 }
 
 export function failPendingOutgoingMessage(
   pendingMessages: PendingOutgoingMessage[],
-  clientId: string,
+  clientId: string
 ): PendingOutgoingMessage[] {
   return pendingMessages.map((pendingMessage) =>
-    pendingMessage.clientId === clientId ? { ...pendingMessage, deliveryState: 'failed' } : pendingMessage,
+    pendingMessage.clientId === clientId ? { ...pendingMessage, deliveryState: 'failed' } : pendingMessage
   )
 }
 
 export function removePendingOutgoingMessage(
   pendingMessages: PendingOutgoingMessage[],
-  clientId: string,
+  clientId: string
 ): PendingOutgoingMessage[] {
   return pendingMessages.filter((pendingMessage) => pendingMessage.clientId !== clientId)
 }

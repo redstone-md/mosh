@@ -11,11 +11,11 @@ mod storage;
 use std::env;
 
 use crate::ffi::library_file_name;
-use tauri_plugin_deep_link::DeepLinkExt;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::path::BaseDirectory;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
@@ -36,13 +36,10 @@ fn configure_bundled_runtime_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) 
         return;
     }
 
-    if let Ok(path) = app
-        .path()
-        .resolve(
-            format!("moss/{}", library_file_name()),
-            BaseDirectory::Resource,
-        )
-    {
+    if let Ok(path) = app.path().resolve(
+        format!("moss/{}", library_file_name()),
+        BaseDirectory::Resource,
+    ) {
         if path.exists() {
             env::set_var("MOSS_SHARED_PATH", path);
         }

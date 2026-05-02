@@ -62,7 +62,9 @@ export function useIdentityTransferFlow({
         packageExportedAt: pendingTransfer.handoff.summary.exportedAt,
       })
       dismissPendingTransfer()
-      await queryClient.invalidateQueries({ queryKey: ['signing-identity-summary'] })
+      await queryClient.invalidateQueries({
+        queryKey: ['signing-identity-summary'],
+      })
       await onImported()
       toast.success(copy.imported)
     },

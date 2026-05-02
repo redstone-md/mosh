@@ -15,7 +15,7 @@ export type MeshInvitePayload = z.infer<typeof meshInvitePayloadSchema>
 export function buildMeshInvite(
   inviterName: string,
   runtime: z.input<typeof updateRuntimeSettingsInputSchema>,
-  inviterFingerprint?: string,
+  inviterFingerprint?: string
 ): MeshInvitePayload {
   return meshInvitePayloadSchema.parse({
     version: 1,
@@ -34,9 +34,7 @@ export function encodeMeshInvite(payload: MeshInvitePayload): string {
 
 export function decodeMeshInvite(value: string): MeshInvitePayload {
   const normalized = value.trim()
-  const encoded = normalized.startsWith('mosh://invite/')
-    ? normalized.slice('mosh://invite/'.length)
-    : normalized
+  const encoded = normalized.startsWith('mosh://invite/') ? normalized.slice('mosh://invite/'.length) : normalized
 
   if (!encoded) {
     throw new Error('Invite is empty.')

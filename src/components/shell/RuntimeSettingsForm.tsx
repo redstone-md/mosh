@@ -85,9 +85,7 @@ export function RuntimeSettingsForm({
           <Label htmlFor="tracker-mode">{copy.form.trackerBootstrap}</Label>
           <Select
             value={draft.trackerMode}
-            onValueChange={(value: 'default' | 'disabled') =>
-              onDraftChange({ ...draft, trackerMode: value })
-            }
+            onValueChange={(value: 'default' | 'disabled') => onDraftChange({ ...draft, trackerMode: value })}
           >
             <SelectTrigger id="tracker-mode">
               <SelectValue />

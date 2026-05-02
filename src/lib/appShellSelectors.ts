@@ -3,10 +3,7 @@ import type { DesktopSnapshot, PeerSummary, RoomSummary, UpdateRuntimeSettingsIn
 
 export type DockMode = 'home' | 'group'
 
-export function sameRuntimeDraft(
-  snapshot: DesktopSnapshot['settings'],
-  draft: UpdateRuntimeSettingsInput,
-) {
+export function sameRuntimeDraft(snapshot: DesktopSnapshot['settings'], draft: UpdateRuntimeSettingsInput) {
   return (
     snapshot.nickname === draft.nickname &&
     snapshot.meshId === draft.meshId &&
@@ -40,7 +37,7 @@ export function selectRoomFallback(
   groups: RoomGroup[],
   selectedGroupId: string,
   selectedRoomId: string,
-  initialRoomId: string,
+  initialRoomId: string
 ) {
   const activeGroup = groups.find((group) => group.id === selectedGroupId) ?? groups[0]
   const homeRooms = rooms.filter((room) => room.kind === 'dm')

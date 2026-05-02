@@ -6,14 +6,7 @@ import { channelTypeSchema, groupAccentSchema, roomGroupSchema } from '../../lib
 import type { PeerSummary, RoomSummary, UpdateRuntimeSettingsInput } from '../../lib/schemas'
 import { useI18n } from '../I18nProvider'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -85,7 +78,7 @@ export function CreateSpaceDialog({
         .slice(0, 4)
         .map((peer) => peer.displayName)
         .join(', '),
-    [peers],
+    [peers]
   )
 
   function handleCreateChannel() {
@@ -268,7 +261,7 @@ export function CreateSpaceDialog({
                             setGroupRoomIds((current) =>
                               event.target.checked
                                 ? [...current, room.id]
-                                : current.filter((roomId) => roomId !== room.id),
+                                : current.filter((roomId) => roomId !== room.id)
                             )
                           }
                         />
@@ -289,12 +282,7 @@ export function CreateSpaceDialog({
           <TabsContent value="invite" className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="invite-export">{copy.createSpace.shareInvite}</Label>
-              <Textarea
-                id="invite-export"
-                value={inviteCode}
-                readOnly
-                className="min-h-28 font-mono text-xs"
-              />
+              <Textarea id="invite-export" value={inviteCode} readOnly className="min-h-28 font-mono text-xs" />
               <div className="rounded-md border border-border bg-[var(--panel-strong)] px-3 py-2 text-sm text-[var(--muted-foreground)]">
                 {copy.createSpace.invitePreview(runtimeDraft.meshId, activeRoom.id)}
               </div>

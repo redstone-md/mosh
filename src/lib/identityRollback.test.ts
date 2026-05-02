@@ -2,13 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import { appendIdentityRollbackSnapshot, promoteRollbackSnapshot } from './identityRollback'
 
-const identity = (fingerprint: string) =>
-  ({
-    algorithm: 'ECDSA-P256' as const,
-    fingerprint,
-    publicKeyJwk: { kty: 'EC' },
-    privateKeyJwk: { kty: 'EC' },
-  })
+const identity = (fingerprint: string) => ({
+  algorithm: 'ECDSA-P256' as const,
+  fingerprint,
+  publicKeyJwk: { kty: 'EC' },
+  privateKeyJwk: { kty: 'EC' },
+})
 
 describe('identityRollback', () => {
   it('prepends snapshots and deduplicates by fingerprint', () => {

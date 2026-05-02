@@ -34,7 +34,7 @@ export function useMeshInviteActions({
       const invite = decodeMeshInvite(value)
       await onApplyInvite(invite)
     },
-    [onApplyInvite],
+    [onApplyInvite]
   )
 
   return {

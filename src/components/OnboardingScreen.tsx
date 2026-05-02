@@ -53,10 +53,10 @@ export function OnboardingScreen({
           </div>
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">MOSH</h1>
           <p className="text-lg text-foreground/60 max-w-2xl mx-auto">
-            Configure your node once and launch straight into a live MOSS session.
-            This onboarding is the primary entry flow for the desktop app.
+            Configure your node once and launch straight into a live MOSS session. This onboarding is the primary entry
+            flow for the desktop app.
           </p>
-          
+
           <div className="flex flex-wrap justify-center gap-6 pt-4">
             <div className="flex items-center gap-2 text-sm font-medium text-foreground/40">
               <Zap size={16} className="text-accent" />
