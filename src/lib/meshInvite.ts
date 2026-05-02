@@ -3,10 +3,15 @@ import { z } from 'zod'
 import { decodeBase64UrlToBytes, encodeBytesToBase64Url } from './base64Url'
 import { updateRuntimeSettingsInputSchema } from './schemas'
 
+const optionalInviterFingerprintSchema = z.preprocess(
+  (value) => (typeof value === 'string' && value.trim().length === 0 ? undefined : value),
+  z.string().min(1).optional()
+)
+
 const meshInvitePayloadSchema = z.object({
   version: z.literal(1),
   inviterName: z.string().trim().min(1).max(128),
-  inviterFingerprint: z.string().min(1).optional(),
+  inviterFingerprint: optionalInviterFingerprintSchema,
   runtime: updateRuntimeSettingsInputSchema,
 })
 

@@ -57,4 +57,23 @@ describe('meshInvite', () => {
 
     expect(decodeMeshInvite(encoded).inviterFingerprint).toBeUndefined()
   })
+
+  it('omits a blank inviter fingerprint while identity is loading', () => {
+    const encoded = encodeMeshInvite({
+      version: 1,
+      inviterName: 'operator',
+      inviterFingerprint: '',
+      runtime: {
+        nickname: 'operator',
+        meshId: 'mosh-chat',
+        listenPort: 0,
+        initialRoom: 'lobby',
+        startupPeer: '',
+        trackerMode: 'default',
+        lanDiscoveryEnabled: true,
+      },
+    })
+
+    expect(decodeMeshInvite(encoded).inviterFingerprint).toBeUndefined()
+  })
 })
