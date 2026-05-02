@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -11,6 +12,7 @@ use tauri::{AppHandle, Manager};
 const SETTINGS_PATH: &str = "config/settings.json";
 const IDENTITY_PATH: &str = "keys/signing-identity.json";
 const ARCHIVES_DIR: &str = "data/archives";
+const MAX_IMPORTED_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -230,8 +232,7 @@ fn import_backup_from_path(paths: &StoragePaths, input_path: &Path) -> Result<()
         return Err("backup path is required".to_string());
     }
 
-    let raw = fs::read_to_string(input_path)
-        .map_err(|err| format!("failed to read {}: {err}", input_path.display()))?;
+    let raw = read_backup_file(input_path)?;
     let backup: ImportedStorageBackup = serde_json::from_str(&raw)
         .map_err(|err| format!("failed to parse {}: {err}", input_path.display()))?;
 
@@ -275,6 +276,55 @@ fn import_backup_from_path(paths: &StoragePaths, input_path: &Path) -> Result<()
     }
 
     Ok(())
+}
+
+fn read_backup_file(input_path: &Path) -> Result<String, String> {
+    if !input_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err(format!(
+            "backup path must point to a .json file: {}",
+            input_path.display()
+        ));
+    }
+
+    let metadata = fs::metadata(input_path)
+        .map_err(|err| format!("failed to inspect {}: {err}", input_path.display()))?;
+
+    if !metadata.is_file() {
+        return Err(format!(
+            "backup path must be a regular file: {}",
+            input_path.display()
+        ));
+    }
+
+    if metadata.len() > MAX_IMPORTED_BACKUP_BYTES {
+        return Err(format!(
+            "backup file {} exceeds {} byte limit",
+            input_path.display(),
+            MAX_IMPORTED_BACKUP_BYTES
+        ));
+    }
+
+    let mut file = fs::File::open(input_path)
+        .map_err(|err| format!("failed to open {}: {err}", input_path.display()))?;
+    let mut raw = String::new();
+    file.by_ref()
+        .take(MAX_IMPORTED_BACKUP_BYTES + 1)
+        .read_to_string(&mut raw)
+        .map_err(|err| format!("failed to read {}: {err}", input_path.display()))?;
+
+    if raw.len() as u64 > MAX_IMPORTED_BACKUP_BYTES {
+        return Err(format!(
+            "backup file {} exceeds {} byte limit",
+            input_path.display(),
+            MAX_IMPORTED_BACKUP_BYTES
+        ));
+    }
+
+    Ok(raw)
 }
 
 fn build_backup(paths: &StoragePaths) -> Result<StorageBackup, String> {
