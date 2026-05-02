@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { encodeBytesToBase64Url } from './base64Url'
-import { buildIdentityTransferHandoff } from './identityTransferHandoff'
+import { buildIdentityTransferHandoff, tryBuildIdentityTransferHandoff } from './identityTransferHandoff'
 
 function createTransferPayload(extraCipherText = '123') {
   return encodeBytesToBase64Url(
@@ -47,5 +47,10 @@ describe('identityTransferHandoff', () => {
     expect(handoff.previewLines[0]).toBe(
       `mosh-identity://transfer/${createTransferPayload('1234567890abcdefghijklmnopqrstuvwxyz').slice(0, 3)}`
     )
+  })
+
+  it('returns null for whitespace or malformed handoff values in safe mode', () => {
+    expect(tryBuildIdentityTransferHandoff('   ')).toBeNull()
+    expect(tryBuildIdentityTransferHandoff('not-json')).toBeNull()
   })
 })

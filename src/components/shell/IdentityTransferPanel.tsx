@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { Copy, RefreshCw, ScanQrCode } from 'lucide-react'
 
 import { ensureSigningIdentity, replaceSigningIdentity } from '../../lib/appShellStorage'
-import { buildIdentityTransferHandoff } from '../../lib/identityTransferHandoff'
+import { tryBuildIdentityTransferHandoff } from '../../lib/identityTransferHandoff'
 import {
   exportIdentityTransferPackage,
   importIdentityTransferPackage,
@@ -99,10 +99,8 @@ export function IdentityTransferPanel({
     () => identityQuery.data?.fingerprint ?? copy.identityTransfer.unavailable,
     [copy.identityTransfer.unavailable, identityQuery.data?.fingerprint]
   )
-  const handoff = useMemo(
-    () => (transferPackage ? buildIdentityTransferHandoff(transferPackage) : null),
-    [transferPackage]
-  )
+  const normalizedTransferPackage = transferPackage.trim()
+  const handoff = useMemo(() => tryBuildIdentityTransferHandoff(transferPackage), [transferPackage])
 
   async function handleCopyPackage() {
     await navigator.clipboard.writeText(transferPackage)
@@ -162,7 +160,7 @@ export function IdentityTransferPanel({
               type="button"
               className="w-full"
               variant="outline"
-              disabled={!transferPackage || exportTransfer.isPending || importTransfer.isPending}
+              disabled={!normalizedTransferPackage || exportTransfer.isPending || importTransfer.isPending}
               onClick={() => setHandoffOpen(true)}
             >
               <ScanQrCode className="mr-2 h-4 w-4" />
@@ -172,7 +170,7 @@ export function IdentityTransferPanel({
               type="button"
               className="w-full"
               variant="outline"
-              disabled={!transferPackage || exportTransfer.isPending || importTransfer.isPending}
+              disabled={!normalizedTransferPackage || exportTransfer.isPending || importTransfer.isPending}
               onClick={() => void handleCopyPackage()}
             >
               <Copy className="mr-2 h-4 w-4" />
@@ -181,7 +179,7 @@ export function IdentityTransferPanel({
             <Button
               type="button"
               className="w-full"
-              disabled={exportTransfer.isPending || importTransfer.isPending}
+              disabled={!normalizedTransferPackage || exportTransfer.isPending || importTransfer.isPending}
               onClick={() => importTransfer.mutate()}
             >
               {importTransfer.isPending ? copy.identityTransfer.importing : copy.identityTransfer.import}
