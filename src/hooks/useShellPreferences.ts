@@ -11,11 +11,13 @@ import {
 } from '../lib/appShellStorage'
 import { appendIdentityTransferEvent, type IdentityTransferEventInput } from '../lib/identityTransferHistory'
 import { appendIdentityRollbackSnapshot, promoteRollbackSnapshot } from '../lib/identityRollback'
+import type { SigningIdentity } from '../lib/appShellSchemas'
 
 export function useShellPreferences() {
   const bootstrapHydratedRef = useRef(false)
   const [preferences, setPreferences] = useState(createDefaultPreferences)
   const [identityFingerprint, setIdentityFingerprint] = useState('')
+  const [identity, setIdentity] = useState<SigningIdentity | null>(null)
   const bootstrap = useQuery({
     queryKey: ['shell-storage-bootstrap'],
     queryFn: () => loadShellBootstrap(),
@@ -51,6 +53,7 @@ export function useShellPreferences() {
 
     void ensureSigningIdentity().then((identity) => {
       setIdentityFingerprint(identity.fingerprint)
+      setIdentity(identity)
     })
   }, [bootstrap.data])
 
@@ -58,12 +61,14 @@ export function useShellPreferences() {
     preferences,
     setPreferences,
     identityFingerprint,
+    identity,
     isPending: bootstrap.isPending || (bootstrap.isSuccess && !bootstrapHydratedRef.current),
     error: bootstrap.error,
     hasPersistedPreferences: bootstrap.data?.hasPersistedPreferences ?? false,
     regenerateIdentity: async () => {
       const identity = await regenerateSigningIdentity()
       setIdentityFingerprint(identity.fingerprint)
+      setIdentity(identity)
       return identity
     },
     saveIdentityRollbackSnapshot: (
@@ -84,6 +89,7 @@ export function useShellPreferences() {
       const currentIdentity = await ensureSigningIdentity()
       const restoredIdentity = await replaceSigningIdentity(selectedSnapshot.identity)
       setIdentityFingerprint(restoredIdentity.fingerprint)
+      setIdentity(restoredIdentity)
       setPreferences((current) => ({
         ...current,
         identityRollbackSnapshots: promoteRollbackSnapshot(
@@ -107,6 +113,7 @@ export function useShellPreferences() {
         setPreferences(result.data.preferences)
         const identity = await ensureSigningIdentity()
         setIdentityFingerprint(identity.fingerprint)
+        setIdentity(identity)
       }
     },
   }

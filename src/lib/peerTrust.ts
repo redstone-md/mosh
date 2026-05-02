@@ -25,7 +25,7 @@ export function formatPeerApprovedAt(approvedAt: string, formatter: Intl.DateTim
 
 export function getPeerTrustState(
   trustedPeers: Record<string, TrustedPeerRecord>,
-  peer: Pick<PeerSummary, 'id' | 'displayName' | 'status'>
+  peer: Pick<PeerSummary, 'id' | 'displayName' | 'status' | 'secureFingerprint'>
 ): PeerTrustState {
   if (peer.status === 'self') {
     return 'trusted'
@@ -36,20 +36,47 @@ export function getPeerTrustState(
     return 'new'
   }
 
+  if (
+    trustedPeer.secureFingerprint &&
+    peer.secureFingerprint &&
+    trustedPeer.secureFingerprint !== peer.secureFingerprint
+  ) {
+    return 'renamed'
+  }
+
   return trustedPeer.displayName === peer.displayName ? 'trusted' : 'renamed'
 }
 
 export function trustPeer(
   trustedPeers: Record<string, TrustedPeerRecord>,
-  peer: Pick<PeerSummary, 'id' | 'displayName'>
+  peer: Pick<PeerSummary, 'id' | 'displayName' | 'secureFingerprint' | 'signingPublicKeyJwk' | 'encryptionPublicKeyJwk'>
 ): Record<string, TrustedPeerRecord> {
   return {
     ...trustedPeers,
     [peer.id]: {
       displayName: peer.displayName,
       approvedAt: new Date().toISOString(),
+      secureFingerprint: peer.secureFingerprint ?? undefined,
+      signingPublicKeyJwk: peer.signingPublicKeyJwk ?? undefined,
+      encryptionPublicKeyJwk: peer.encryptionPublicKeyJwk ?? undefined,
     },
   }
+}
+
+export function isPeerTrustedForSecret(
+  trustedPeers: Record<string, TrustedPeerRecord>,
+  peer: Pick<PeerSummary, 'id' | 'secureFingerprint' | 'signingPublicKeyJwk' | 'encryptionPublicKeyJwk'>
+): boolean {
+  const trusted = trustedPeers[peer.id]
+  return Boolean(
+    trusted?.secureFingerprint &&
+    peer.secureFingerprint &&
+    trusted.secureFingerprint === peer.secureFingerprint &&
+    trusted.signingPublicKeyJwk &&
+    trusted.encryptionPublicKeyJwk &&
+    peer.signingPublicKeyJwk &&
+    peer.encryptionPublicKeyJwk
+  )
 }
 
 export function untrustPeer(

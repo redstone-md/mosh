@@ -3,11 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { desktopStatusClient } from '../lib/desktopStatusClient'
 import type { DesktopSnapshot, SignalingEvent, VoiceRoom } from '../lib/schemas'
-import {
-  isWebRtcSignalType,
-  parseIceCandidateInit,
-  parseSessionDescriptionInit,
-} from '../lib/webrtcSignals'
+import { isWebRtcSignalType, parseIceCandidateInit, parseSessionDescriptionInit } from '../lib/webrtcSignals'
 
 type MediaMode = 'voice' | 'screen'
 type MediaStatus = 'idle' | 'requesting' | 'live' | 'error'

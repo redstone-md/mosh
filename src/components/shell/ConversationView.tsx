@@ -33,7 +33,10 @@ type ConversationViewProps = {
   pinnedMessages: Message[]
   pinnedMessageIds: string[]
   errorNote?: string
+  secretArchiveLocked: boolean
+  secretArchivePassphrase: string
   onDraftChange: (value: string) => void
+  onUnlockSecretArchive: (passphrase: string) => void
   onSend: () => void
   onTogglePinMessage: (messageId: string) => void
   onRetryMessage: (clientId: string) => void
@@ -64,7 +67,10 @@ export function ConversationView({
   pinnedMessages,
   pinnedMessageIds,
   errorNote,
+  secretArchiveLocked,
+  secretArchivePassphrase,
   onDraftChange,
+  onUnlockSecretArchive,
   onSend,
   onTogglePinMessage,
   onRetryMessage,
@@ -275,6 +281,10 @@ export function ConversationView({
         onResolveExternalFocus={onResolveExternalFocus}
         isSending={isSending}
         errorNote={errorNote}
+        disabled={secretArchiveLocked}
+        disabledNote={secretArchiveLocked ? copy.messages.secretLocked : undefined}
+        unlockPassphrase={secretArchivePassphrase}
+        onUnlockPassphraseChange={onUnlockSecretArchive}
       />
     </section>
   )

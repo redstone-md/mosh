@@ -13,6 +13,7 @@ import {
   createSigningIdentity,
   parseSigningIdentity,
   signSerializedPayload,
+  upgradeSigningIdentity,
   verifySerializedPayload,
 } from './cryptoIdentity'
 import { desktopStorageClient } from './desktopStorageClient'
@@ -181,16 +182,23 @@ export async function ensureSigningIdentity() {
 
     const storedIdentity = await desktopStorageClient.loadSigningIdentity()
     if (storedIdentity) {
-      return storedIdentity
+      const upgraded = await upgradeSigningIdentity(storedIdentity)
+      if (upgraded !== storedIdentity) {
+        await desktopStorageClient.saveSigningIdentity(upgraded)
+      }
+      return upgraded
     }
   }
 
   const legacyIdentity = loadLegacySigningIdentity()
   if (legacyIdentity) {
+    const upgraded = await upgradeSigningIdentity(legacyIdentity)
     if (isTauriEnvironment()) {
-      await desktopStorageClient.saveSigningIdentity(legacyIdentity)
+      await desktopStorageClient.saveSigningIdentity(upgraded)
+    } else {
+      getLocalStorage()?.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(upgraded))
     }
-    return legacyIdentity
+    return upgraded
   }
 
   const identity = await createSigningIdentity()
@@ -216,14 +224,15 @@ export async function replaceSigningIdentity(identity: SigningIdentity) {
   if (!normalized) {
     throw new Error('Imported signing identity is invalid.')
   }
+  const upgraded = await upgradeSigningIdentity(normalized)
 
   if (isTauriEnvironment()) {
-    await desktopStorageClient.saveSigningIdentity(normalized)
+    await desktopStorageClient.saveSigningIdentity(upgraded)
   } else {
-    getLocalStorage()?.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(normalized))
+    getLocalStorage()?.setItem(SIGNING_IDENTITY_KEY, JSON.stringify(upgraded))
   }
 
-  return normalized
+  return upgraded
 }
 
 export async function readVerifiedArchive(roomId: string): Promise<VerifiedArchive | null> {

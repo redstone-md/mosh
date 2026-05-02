@@ -40,7 +40,7 @@ export function selectRoomFallback(
   initialRoomId: string
 ) {
   const activeGroup = groups.find((group) => group.id === selectedGroupId) ?? groups[0]
-  const homeRooms = rooms.filter((room) => room.kind === 'dm')
+  const homeRooms = rooms.filter((room) => room.kind === 'dm' || room.kind === 'secret-dm')
   const groupRooms =
     selectedDock === 'group'
       ? rooms.filter((room) => room.kind === 'system' || activeGroup?.roomIds.includes(room.id))

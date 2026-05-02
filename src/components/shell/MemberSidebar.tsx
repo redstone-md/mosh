@@ -1,4 +1,4 @@
-import { Fingerprint, MessageSquare, Radio, ShieldCheck, ShieldQuestion } from 'lucide-react'
+import { Fingerprint, LockKeyhole, MessageSquare, Radio, ShieldCheck, ShieldQuestion } from 'lucide-react'
 
 import { describeArchiveStateLabel, localizePeerStatus } from '../../lib/i18n'
 import { initialsFromName } from '../../lib/chatPresentation'
@@ -24,6 +24,7 @@ type MemberSidebarProps = {
   activeVoiceRoom: VoiceRoom | null
   onTogglePeerTrust: (peer: PeerSummary) => void
   onOpenDirectRoom: (target: string) => void
+  onOpenSecretRoom: (peer: PeerSummary) => void
 }
 
 export function MemberSidebar({
@@ -38,6 +39,7 @@ export function MemberSidebar({
   activeVoiceRoom,
   onTogglePeerTrust,
   onOpenDirectRoom,
+  onOpenSecretRoom,
 }: MemberSidebarProps) {
   const { copy } = useI18n()
 
@@ -118,6 +120,14 @@ export function MemberSidebar({
                     title={`${copy.sidebar.directMessages}: ${peer.displayName}`}
                   >
                     <MessageSquare className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => onOpenSecretRoom(peer)}
+                    title={copy.messages.openSecretChat(peer.displayName)}
+                  >
+                    <LockKeyhole className="h-4 w-4" />
                   </Button>
                   {activeVoiceRoom?.participants.some((participant) => participant.peerId === peer.id) ? (
                     <Badge variant="default">{copy.common.voice.toLowerCase()}</Badge>

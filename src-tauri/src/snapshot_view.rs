@@ -3,7 +3,7 @@ use crate::{
     ffi::MeshInfo,
     models::{
         CallStateSummary, DesktopSnapshot, Message, PeerSummary, RoomSummary, RuntimeDiagnostics,
-        RuntimeSettings, RuntimeStatus, SignalingEvent, VoiceRoomSummary,
+        RuntimeSettings, RuntimeStatus, SecretMessageEvent, SignalingEvent, VoiceRoomSummary,
     },
 };
 
@@ -14,7 +14,7 @@ pub fn online_snapshot(
     bridge_path: String,
     branch: &str,
 ) -> DesktopSnapshot {
-    let (rooms, messages, peers, call_state, signaling_events, voice_rooms) =
+    let (rooms, messages, secret_messages, peers, call_state, signaling_events, voice_rooms) =
         live_callback_rows(mesh);
     DesktopSnapshot {
         app_name: "MOSH".to_string(),
@@ -45,6 +45,7 @@ pub fn online_snapshot(
         settings,
         rooms,
         messages,
+        secret_messages,
         peers,
         call_state,
         signaling_events,
@@ -76,6 +77,7 @@ pub fn offline_snapshot(
         settings,
         rooms: base_rooms(),
         messages: base_messages(),
+        secret_messages: Vec::new(),
         peers: base_peers(),
         call_state: None,
         signaling_events: Vec::new(),
@@ -112,6 +114,7 @@ pub fn failed_snapshot(
             timestamp: "now".to_string(),
             emphasis: "system".to_string(),
         }],
+        secret_messages: Vec::new(),
         peers: base_peers(),
         call_state: None,
         signaling_events: Vec::new(),
@@ -146,6 +149,10 @@ fn base_peers() -> Vec<PeerSummary> {
         latency: "--".to_string(),
         status: "self".to_string(),
         rooms: vec!["#lobby".to_string()],
+        identity_version: None,
+        secure_fingerprint: None,
+        signing_public_key_jwk: None,
+        encryption_public_key_jwk: None,
     }]
 }
 
@@ -177,6 +184,7 @@ fn live_callback_rows(
 ) -> (
     Vec<RoomSummary>,
     Vec<Message>,
+    Vec<SecretMessageEvent>,
     Vec<PeerSummary>,
     Option<CallStateSummary>,
     Vec<SignalingEvent>,
@@ -186,6 +194,7 @@ fn live_callback_rows(
     if let Ok(state) = callback_state.lock() {
         let mut rooms = state.rooms();
         let messages = state.messages();
+        let secret_messages = state.secret_messages();
         let mut peers = state.peers();
         let call_state = state.current_call();
         let signaling_events = state.signaling_events();
@@ -201,6 +210,7 @@ fn live_callback_rows(
         return (
             rooms,
             messages,
+            secret_messages,
             peers,
             call_state,
             signaling_events,
@@ -209,6 +219,7 @@ fn live_callback_rows(
     }
     (
         live_room_rows(mesh),
+        Vec::new(),
         Vec::new(),
         Vec::new(),
         None,
@@ -278,6 +289,10 @@ fn merge_peer_rows(peers: &mut Vec<PeerSummary>, mesh: &MeshInfo) {
                     .iter()
                     .map(|channel| format!("#{channel}"))
                     .collect(),
+                identity_version: None,
+                secure_fingerprint: None,
+                signing_public_key_jwk: None,
+                encryption_public_key_jwk: None,
             },
         );
     }
@@ -299,6 +314,10 @@ fn merge_peer_rows(peers: &mut Vec<PeerSummary>, mesh: &MeshInfo) {
                 .iter()
                 .map(|channel| format!("#{channel}"))
                 .collect(),
+            identity_version: None,
+            secure_fingerprint: None,
+            signing_public_key_jwk: None,
+            encryption_public_key_jwk: None,
         });
     }
 }

@@ -10,6 +10,7 @@ import { useIdentityTransferFlow } from './hooks/useIdentityTransferFlow'
 import { useInviteFlow } from './hooks/useInviteFlow'
 import { useMessageOutbox } from './hooks/useMessageOutbox'
 import { useMediaSession } from './hooks/useMediaSession'
+import { findSecretPeerForRoom, useSecretRoomMessages } from './hooks/useSecretRoomMessages'
 import { useDocumentAppearance } from './hooks/useDocumentAppearance'
 import { useMessageOverlayState } from './hooks/useMessageOverlayState'
 import { usePeerTrustState } from './hooks/usePeerTrustState'
@@ -28,11 +29,17 @@ import {
 import { reconcileGroups, reconcileRoomTypes } from './lib/appShellStorage'
 import { dedupeMessages, formatRoomTitle } from './lib/chatPresentation'
 import { desktopStatusClient } from './lib/desktopStatusClient'
+import { desktopStorageClient } from './lib/desktopStorageClient'
 import { getFallbackRoom } from './lib/fallbacks'
 import { detectSystemLanguage, getI18nCopy } from './lib/i18n'
 import { resolvePinnedMessages, togglePinnedMessage } from './lib/messagePins'
-import type { ChannelType, RoomGroup, ThemeId } from './lib/appShellSchemas'
-import type { UpdateRuntimeSettingsInput } from './lib/schemas'
+import { hasEncryptionIdentity, signingIdentityPublicBundle } from './lib/cryptoIdentity'
+import { isPeerTrustedForSecret } from './lib/peerTrust'
+import { decryptSecretArchive, encryptSecretArchive } from './lib/secretArchive'
+import { encryptSecretMessage, secretRoomName, serializeSecretEnvelope } from './lib/secretMessages'
+import type { ChannelType, RoomGroup, StoredMessage, ThemeId } from './lib/appShellSchemas'
+import type { PeerSummary, UpdateRuntimeSettingsInput } from './lib/schemas'
+import { SecretPeerVerificationDialog } from './components/shell/SecretPeerVerificationDialog'
 
 export function App() {
   const queryClient = useQueryClient()
@@ -43,6 +50,7 @@ export function App() {
     preferences,
     setPreferences,
     identityFingerprint,
+    identity,
     regenerateIdentity,
     saveIdentityRollbackSnapshot,
     restoreIdentityRollbackSnapshot,
@@ -52,6 +60,10 @@ export function App() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [archiveRefreshKey, setArchiveRefreshKey] = useState(0)
+  const [secretArchivePassphrase, setSecretArchivePassphrase] = useState('')
+  const [secretArchiveMessages, setSecretArchiveMessages] = useState<StoredMessage[]>([])
+  const [secretArchiveError, setSecretArchiveError] = useState<string | undefined>()
+  const [pendingSecretPeer, setPendingSecretPeer] = useState<PeerSummary | null>(null)
   const systemLanguage = useMemo(() => detectSystemLanguage(), [])
 
   const snapshot = useQuery({
@@ -108,11 +120,40 @@ export function App() {
     },
   })
 
+  const openSecretRoom = useMutation({
+    mutationFn: (target: string) => desktopStatusClient.openSecretRoom({ target }),
+    onSuccess: (data, target) => {
+      queryClient.setQueryData(['desktop-snapshot'], data)
+      const selfPeerId = data.peers.find((peer) => peer.status === 'self')?.id ?? localPeerId
+      const nextRoomId = selfPeerId ? secretRoomName(selfPeerId, target) : ''
+      const nextRoom =
+        data.rooms.find((room) => room.id === nextRoomId) ?? data.rooms.find((room) => room.kind === 'secret-dm')
+      if (nextRoom) {
+        setPreferences((current) => ({
+          ...current,
+          selectedDock: 'home',
+          selectedRoomId: nextRoom.id,
+        }))
+      }
+    },
+  })
+
   const publishMessage = useMutation({
     mutationFn: ({ roomId, body }: { roomId: string; body: string }) =>
       desktopStatusClient.publishMessage({
         room: roomId,
         body,
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['desktop-snapshot'], data)
+    },
+  })
+
+  const publishSecretMessage = useMutation({
+    mutationFn: ({ roomId, payloadJson }: { roomId: string; payloadJson: string }) =>
+      desktopStatusClient.publishSecretMessage({
+        room: roomId,
+        payloadJson,
       }),
     onSuccess: (data) => {
       queryClient.setQueryData(['desktop-snapshot'], data)
@@ -173,7 +214,9 @@ export function App() {
       updateRuntimeSettings.error?.message,
       subscribeRoom.error?.message,
       openDirectRoom.error?.message,
+      openSecretRoom.error?.message,
       publishMessage.error?.message,
+      publishSecretMessage.error?.message,
       connectPeer.error?.message,
       mediaSession.state.error ?? undefined,
     ].filter((value): value is string => Boolean(value)),
@@ -217,13 +260,27 @@ export function App() {
     ]
   )
   const visiblePeers = useMemo(() => (data ? getVisiblePeers(activeRoom, data.peers) : []), [activeRoom, data])
+  const localPeerId = useMemo(() => data?.peers.find((peer) => peer.status === 'self')?.id ?? '', [data?.peers])
+  const peersById = useMemo(() => new Map((data?.peers ?? []).map((peer) => [peer.id, peer] as const)), [data?.peers])
+  const secretPeerId = useMemo(
+    () =>
+      data && localPeerId
+        ? findSecretPeerForRoom(
+            activeRoom.id,
+            localPeerId,
+            data.peers.filter((peer) => peer.status !== 'self').map((peer) => peer.id)
+          )
+        : null,
+    [activeRoom.id, data, localPeerId]
+  )
+  const activeRoomIsSecret = activeRoom.kind === 'secret-dm'
   const liveMessages = useMemo(
     () => (data ? dedupeMessages(data.messages.filter((message) => message.roomId === activeRoom.id)) : []),
     [activeRoom.id, data?.messages]
   )
   const archiveState = useSignedChatArchive(
-    showOnboarding ? '__inactive__' : activeRoom.id,
-    showOnboarding ? [] : liveMessages,
+    showOnboarding || activeRoomIsSecret ? '__inactive__' : activeRoom.id,
+    showOnboarding || activeRoomIsSecret ? [] : liveMessages,
     archiveRefreshKey
   )
   const activePinnedMessageIds = preferences.pinnedMessages[activeRoom.id] ?? []
@@ -252,6 +309,18 @@ export function App() {
     () => messageOverlayState.applyOverlays(archiveState.mergedMessages),
     [archiveState.mergedMessages, messageOverlayState.applyOverlays]
   )
+  const secretMessages = useSecretRoomMessages({
+    roomId: activeRoom.id,
+    events: data?.secretMessages ?? [],
+    peersById,
+    trustedPeers: preferences.trustedPeers,
+    localPeerId,
+    localDisplayName: runtimeDraft.nickname,
+    identity,
+    archiveMessages: secretArchiveMessages,
+    unlocked: Boolean(secretArchivePassphrase.trim()),
+    decryptErrorMessage: activeCopy.messages.secretDecryptFailed,
+  })
   const pinnedMessages = useMemo(
     () => resolvePinnedMessages(preferences.pinnedMessages, activeRoom.id, overlaidMessages),
     [activeRoom.id, overlaidMessages, preferences.pinnedMessages]
@@ -265,12 +334,21 @@ export function App() {
   })
   const displayMessages = useMemo(
     () =>
-      messageOutbox.buildDisplayMessages(
-        activeRoom.id,
-        overlaidMessages,
-        archiveState.archive?.messages.map((message) => message.id) ?? []
-      ),
-    [activeRoom.id, archiveState.archive?.messages, overlaidMessages, messageOutbox.buildDisplayMessages]
+      activeRoomIsSecret
+        ? secretMessages
+        : messageOutbox.buildDisplayMessages(
+            activeRoom.id,
+            overlaidMessages,
+            archiveState.archive?.messages.map((message) => message.id) ?? []
+          ),
+    [
+      activeRoom.id,
+      activeRoomIsSecret,
+      archiveState.archive?.messages,
+      overlaidMessages,
+      messageOutbox.buildDisplayMessages,
+      secretMessages,
+    ]
   )
   const messageDraft = roomDraftState.getDraft(activeRoom.id)
   useEffect(() => {
@@ -292,6 +370,63 @@ export function App() {
       roomTypes: reconciledRoomTypes,
     }))
   }, [preferences.roomTypes, reconciledRoomTypes])
+
+  useEffect(() => {
+    const publicBundle = identity ? signingIdentityPublicBundle(identity) : null
+    if (!data || data.runtime.state !== 'Runtime online' || !publicBundle) {
+      return
+    }
+    void desktopStatusClient.setIdentityPresence(publicBundle).catch((error) => {
+      void debugLogError(`Identity presence update failed: ${describeUnknownError(error)}`)
+    })
+  }, [data?.runtime.state, identity])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadSecretArchive() {
+      setSecretArchiveError(undefined)
+      setSecretArchiveMessages([])
+      if (!activeRoomIsSecret || !secretArchivePassphrase.trim()) {
+        return
+      }
+      try {
+        const archive = await desktopStorageClient.loadSecretArchive(activeRoom.id)
+        if (!archive || cancelled) {
+          return
+        }
+        const messages = await decryptSecretArchive(archive, secretArchivePassphrase)
+        if (!cancelled) {
+          setSecretArchiveMessages(messages)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setSecretArchiveError(describeUnknownError(error))
+        }
+      }
+    }
+
+    void loadSecretArchive()
+    return () => {
+      cancelled = true
+    }
+  }, [activeRoom.id, activeRoomIsSecret, secretArchivePassphrase])
+
+  useEffect(() => {
+    if (!activeRoomIsSecret || !secretArchivePassphrase.trim() || secretMessages.length === 0) {
+      return
+    }
+    const storedMessages = secretMessages.map((message) => ({
+      ...message,
+      storedAt: 'storedAt' in message ? String(message.storedAt) : new Date().toISOString(),
+    }))
+    const timeout = window.setTimeout(() => {
+      void encryptSecretArchive(activeRoom.id, storedMessages, secretArchivePassphrase)
+        .then((archive) => desktopStorageClient.saveSecretArchive(activeRoom.id, archive))
+        .catch((error) => setSecretArchiveError(describeUnknownError(error)))
+    }, 250)
+
+    return () => window.clearTimeout(timeout)
+  }, [activeRoom.id, activeRoomIsSecret, secretArchivePassphrase, secretMessages])
   const inviteFlow = useInviteFlow({
     copy: {
       inviteApplied: activeCopy.createSpace.inviteApplied,
@@ -399,10 +534,73 @@ export function App() {
     const nextDraft = messageDraft.trim()
     roomDraftState.clearDraft(activeRoom.id)
     try {
+      if (activeRoom.kind === 'secret-dm') {
+        if (!data) {
+          throw new Error(activeCopy.messages.desktopSnapshotNotReady)
+        }
+        if (!identity || !hasEncryptionIdentity(identity)) {
+          throw new Error(activeCopy.messages.localE2eeNotReady)
+        }
+        if (!secretArchivePassphrase.trim()) {
+          throw new Error(activeCopy.messages.secretArchiveUnlockRequired)
+        }
+        const targetPeerId = secretPeerId
+        const trustedPeer = targetPeerId ? preferences.trustedPeers[targetPeerId] : null
+        if (!targetPeerId || !trustedPeer) {
+          throw new Error(activeCopy.messages.secretRecipientUntrusted)
+        }
+        const envelope = await encryptSecretMessage({
+          meshId: data.settings.meshId,
+          roomId: activeRoom.id,
+          senderPeerId: localPeerId,
+          recipientPeerId: targetPeerId,
+          body: nextDraft,
+          senderIdentity: identity,
+          recipient: trustedPeer,
+        })
+        await publishSecretMessage.mutateAsync({
+          roomId: activeRoom.id,
+          payloadJson: serializeSecretEnvelope(envelope),
+        })
+        return
+      }
       await messageOutbox.sendMessage(activeRoom.id, nextDraft)
     } catch (error) {
+      if (activeRoom.kind === 'secret-dm') {
+        setSecretArchiveError(describeUnknownError(error))
+      }
       void debugLogError(`Message send failed: ${describeUnknownError(error)}`)
     }
+  }
+
+  function handleOpenSecretRoom(peer: PeerSummary) {
+    if (!peer.secureFingerprint || !peer.signingPublicKeyJwk || !peer.encryptionPublicKeyJwk) {
+      setSecretArchiveError(activeCopy.messages.secretChatUnavailable(peer.displayName))
+      return
+    }
+    if (!isPeerTrustedForSecret(preferences.trustedPeers, peer)) {
+      setPendingSecretPeer(peer)
+      return
+    }
+    openSecretRoom.mutate(peer.id)
+  }
+
+  function handleApproveSecretPeer(peer: PeerSummary) {
+    setPreferences((current) => ({
+      ...current,
+      trustedPeers: {
+        ...current.trustedPeers,
+        [peer.id]: {
+          displayName: peer.displayName,
+          approvedAt: new Date().toISOString(),
+          secureFingerprint: peer.secureFingerprint ?? undefined,
+          signingPublicKeyJwk: peer.signingPublicKeyJwk ?? undefined,
+          encryptionPublicKeyJwk: peer.encryptionPublicKeyJwk ?? undefined,
+        },
+      },
+    }))
+    setPendingSecretPeer(null)
+    openSecretRoom.mutate(peer.id)
   }
 
   async function handleRetryMessage(clientId: string) {
@@ -537,8 +735,14 @@ export function App() {
         identityRollbackSnapshots={preferences.identityRollbackSnapshots}
         pinnedMessages={pinnedMessages}
         pinnedMessageIds={activePinnedMessageIds}
-        publishPending={publishMessage.isPending}
-        publishError={publishMessage.error?.message}
+        publishPending={activeRoomIsSecret ? publishSecretMessage.isPending : publishMessage.isPending}
+        publishError={
+          activeRoomIsSecret
+            ? (publishSecretMessage.error?.message ?? secretArchiveError)
+            : publishMessage.error?.message
+        }
+        secretArchiveLocked={activeRoomIsSecret && !secretArchivePassphrase.trim()}
+        secretArchivePassphrase={secretArchivePassphrase}
         runtimeTogglePending={toggleRuntime.isPending}
         runtimeToggleError={toggleRuntime.error?.message}
         runtimeSettingsPending={updateRuntimeSettings.isPending}
@@ -548,10 +752,9 @@ export function App() {
           setPreferences((current) => ({
             ...current,
             selectedDock: 'home',
-            selectedRoomId:
-              findRoomById(visibleRooms, current.selectedRoomId)?.kind === 'dm'
-                ? current.selectedRoomId
-                : (visibleRooms.find((room) => room.kind === 'dm')?.id ?? current.selectedRoomId),
+            selectedRoomId: ['dm', 'secret-dm'].includes(findRoomById(visibleRooms, current.selectedRoomId)?.kind ?? '')
+              ? current.selectedRoomId
+              : (visibleRooms.find((room) => ['dm', 'secret-dm'].includes(room.kind))?.id ?? current.selectedRoomId),
           }))
         }
         onSelectGroup={(groupId) =>
@@ -568,10 +771,13 @@ export function App() {
           setPreferences((current) => ({
             ...current,
             selectedRoomId: roomId,
-            selectedDock: findRoomById(visibleRooms, roomId)?.kind === 'dm' ? 'home' : current.selectedDock,
+            selectedDock: ['dm', 'secret-dm'].includes(findRoomById(visibleRooms, roomId)?.kind ?? '')
+              ? 'home'
+              : current.selectedDock,
           }))
         }
         onOpenDirectRoom={(target) => openDirectRoom.mutate(target)}
+        onOpenSecretRoom={handleOpenSecretRoom}
         onCreateChannel={(room, channelType) => {
           setPreferences((current) => ({
             ...current,
@@ -585,6 +791,7 @@ export function App() {
         onCreateGroup={handleCreateGroup}
         onApplyInvite={inviteFlow.applyInvite}
         onDraftChange={(value) => roomDraftState.setDraft(activeRoom.id, value)}
+        onUnlockSecretArchive={setSecretArchivePassphrase}
         onSendMessage={() => void handleSendMessage()}
         onRetryMessage={(clientId) => void handleRetryMessage(clientId)}
         onDismissMessage={messageOutbox.dismissMessage}
@@ -614,6 +821,11 @@ export function App() {
             onboardingCompleted: false,
           }))
         }
+      />
+      <SecretPeerVerificationDialog
+        peer={pendingSecretPeer}
+        onApprove={handleApproveSecretPeer}
+        onDismiss={() => setPendingSecretPeer(null)}
       />
     </ShellI18nFrame>
   )

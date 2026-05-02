@@ -1,6 +1,8 @@
 use crate::{
     callback_state::shared_callback_state,
-    chat_protocol::{direct_room_name, ChatPayload, CONTROL_ROOM},
+    chat_protocol::{
+        direct_room_name, secret_room_name, ChatPayload, IdentityPresence, CONTROL_ROOM,
+    },
     ffi::{MeshInfo, MossLibrary},
     models::DesktopSnapshot,
     runtime_settings::{DesktopRuntimeConfig, RuntimeSettingsInput},
@@ -15,6 +17,7 @@ pub struct DesktopShellState {
     library_error: Option<String>,
     handle: Option<i64>,
     settings: DesktopRuntimeConfig,
+    identity_presence: Option<IdentityPresence>,
 }
 
 impl DesktopShellState {
@@ -24,6 +27,7 @@ impl DesktopShellState {
             library_error: None,
             handle: None,
             settings: DesktopRuntimeConfig::default(),
+            identity_presence: None,
         };
         state.reload_library();
         if let Ok(mut callbacks) = shared_callback_state().lock() {
@@ -187,6 +191,17 @@ impl DesktopShellState {
         Ok(self.snapshot())
     }
 
+    pub fn set_identity_presence(
+        &mut self,
+        identity: IdentityPresence,
+    ) -> Result<DesktopSnapshot, String> {
+        self.identity_presence = Some(identity);
+        if let (Some(handle), Some(library)) = (self.handle, self.library.as_ref()) {
+            self.publish_presence(library, handle)?;
+        }
+        Ok(self.snapshot())
+    }
+
     pub fn open_direct_room(&mut self, target: &str) -> Result<DesktopSnapshot, String> {
         let handle = self
             .handle
@@ -200,6 +215,80 @@ impl DesktopShellState {
             self.ensure_direct_room_for_target(library, handle, target)?;
         if let Ok(mut callbacks) = shared_callback_state().lock() {
             callbacks.note_runtime(format!("Direct chat opened with {target_label}."));
+        }
+        Ok(self.snapshot())
+    }
+
+    pub fn open_secret_room(&mut self, target: &str) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+
+        let (target_peer, target_label) = {
+            let callback_state = shared_callback_state();
+            let state = callback_state
+                .lock()
+                .map_err(|_| "callback state lock poisoned".to_string())?;
+            state.resolve_peer_target(target).ok_or_else(|| {
+                format!("peer {target:?} not found; wait for presence or use connect")
+            })?
+        };
+        let mesh = self
+            .live_mesh_info()?
+            .ok_or_else(|| "runtime mesh info unavailable".to_string())?;
+        let room = secret_room_name(&mesh.public_key, &target_peer);
+        library.subscribe(handle, &room)?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.record_secret_room(&room, &target_peer, &target_label);
+        }
+        let invite = serde_json::to_vec(&ChatPayload::secret_dm_invite(
+            self.settings.nickname(),
+            &room,
+            &target_peer,
+        ))
+        .map_err(|err| format!("failed to encode secret chat invite: {err}"))?;
+        self.publish_control_payload(
+            library,
+            handle,
+            &invite,
+            format!("Queued secret-chat invite for {target_label} until a peer path is ready."),
+        )?;
+        self.publish_presence(library, handle)?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.note_runtime(format!("Secret chat opened with {target_label}."));
+        }
+        Ok(self.snapshot())
+    }
+
+    pub fn publish_secret_message(
+        &mut self,
+        room: &str,
+        payload_json: &str,
+    ) -> Result<DesktopSnapshot, String> {
+        let handle = self
+            .handle
+            .ok_or_else(|| "runtime is offline; start it first".to_string())?;
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        library
+            .publish(handle, room, payload_json.as_bytes())
+            .map_err(|err| {
+                if MossLibrary::is_no_peers_error(&err) {
+                    "No connected peers yet. Secret message stayed local until another peer joins."
+                        .to_string()
+                } else {
+                    err
+                }
+            })?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.record_secret_message(room, payload_json.to_string());
+            callbacks.note_runtime(format!("Published encrypted secret message to #{room}."));
         }
         Ok(self.snapshot())
     }
@@ -579,8 +668,12 @@ impl DesktopShellState {
                 .map_err(|_| "callback state lock poisoned".to_string())?;
             callbacks.subscribed_rooms()
         };
-        let payload = serde_json::to_vec(&ChatPayload::presence(self.settings.nickname(), &rooms))
-            .map_err(|err| format!("failed to encode presence payload: {err}"))?;
+        let payload = serde_json::to_vec(&ChatPayload::presence(
+            self.settings.nickname(),
+            &rooms,
+            self.identity_presence.as_ref(),
+        ))
+        .map_err(|err| format!("failed to encode presence payload: {err}"))?;
         self.publish_control_payload(
             library,
             handle,

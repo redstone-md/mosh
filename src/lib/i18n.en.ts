@@ -236,6 +236,23 @@ export const enTranslations = {
     insertEmoji: 'Insert emoji',
     attachmentTooLarge: 'File is too large. Embedded attachments are limited to 40KB in this build.',
     imageTooLarge: 'File is too large. Base64 attachments are limited to 40KB in this demo.',
+    secretLocked: 'Unlock the secret archive to read and send Secret DM.',
+    secretArchivePassphrase: 'Secret archive passphrase',
+    openSecretChat: (peerName: string) => `Open secret chat: ${peerName}`,
+    secretChatUnavailable: (peerName: string) => `${peerName} has not announced E2EE keys yet.`,
+    desktopSnapshotNotReady: 'Desktop snapshot is not ready yet.',
+    localE2eeNotReady: 'Local E2EE identity is not ready yet.',
+    secretArchiveUnlockRequired: 'Unlock the secret archive before sending.',
+    secretRecipientUntrusted: 'Secret recipient is not trusted yet.',
+    secretDecryptFailed: 'Secret message could not be decrypted or verified.',
+  },
+  secretVerify: {
+    title: 'Verify secret chat fingerprint',
+    description: 'Compare this fingerprint with the other person over a trusted channel before opening Secret DM.',
+    noFallback:
+      "Secret DM has no plaintext fallback. Approving stores this peer's signing and encryption public keys locally.",
+    cancel: 'Cancel',
+    approve: 'Approve and open',
   },
   settings: {
     description: 'Appearance, runtime boot settings, and signed local archive metadata.',

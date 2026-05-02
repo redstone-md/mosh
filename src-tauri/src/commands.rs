@@ -5,6 +5,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
+    chat_protocol::IdentityPresence,
     models::DesktopSnapshot,
     runtime_settings::RuntimeSettingsInput,
     state::SharedDesktopState,
@@ -19,6 +20,15 @@ pub struct CallSignalInput {
     pub room: String,
     pub signal_type: String,
     pub signal_data: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPresenceInput {
+    pub identity_version: Option<u8>,
+    pub secure_fingerprint: String,
+    pub signing_public_key_jwk: Option<Value>,
+    pub encryption_public_key_jwk: Option<Value>,
 }
 
 #[derive(serde::Serialize)]
@@ -142,6 +152,69 @@ pub fn publish_message(
         .lock()
         .map_err(|_| "desktop state lock poisoned".to_string())?;
     Ok(state.publish_message(&room, &body)?)
+}
+
+#[tauri::command]
+pub fn set_identity_presence(
+    state: State<'_, SharedDesktopState>,
+    payload: IdentityPresenceInput,
+) -> Result<DesktopSnapshot, String> {
+    if payload.identity_version != Some(2) {
+        return Err("identity v2 is required for secret chat presence".to_string());
+    }
+    if payload.secure_fingerprint.trim().is_empty() {
+        return Err("secure fingerprint is required".to_string());
+    }
+    if payload.signing_public_key_jwk.is_none() || payload.encryption_public_key_jwk.is_none() {
+        return Err("public E2EE keys are required".to_string());
+    }
+    let mut state = state
+        .lock()
+        .map_err(|_| "desktop state lock poisoned".to_string())?;
+    Ok(state.set_identity_presence(IdentityPresence {
+        identity_version: payload.identity_version,
+        secure_fingerprint: payload.secure_fingerprint.trim().to_string(),
+        signing_public_key_jwk: payload.signing_public_key_jwk,
+        encryption_public_key_jwk: payload.encryption_public_key_jwk,
+    })?)
+}
+
+#[tauri::command]
+pub fn open_secret_room(
+    state: State<'_, SharedDesktopState>,
+    target: String,
+) -> Result<DesktopSnapshot, String> {
+    let target = target.trim().to_string();
+    if target.is_empty() {
+        return Err("secret message target is required".to_string());
+    }
+    let mut state = state
+        .lock()
+        .map_err(|_| "desktop state lock poisoned".to_string())?;
+    Ok(state.open_secret_room(&target)?)
+}
+
+#[tauri::command]
+pub fn publish_secret_message(
+    state: State<'_, SharedDesktopState>,
+    room: String,
+    payload_json: String,
+) -> Result<DesktopSnapshot, String> {
+    let room = room.trim().trim_start_matches('#').to_lowercase();
+    let payload_json = payload_json.trim().to_string();
+    if room.is_empty() {
+        return Err("room is required".to_string());
+    }
+    if payload_json.is_empty() {
+        return Err("secret message payload is required".to_string());
+    }
+    if serde_json::from_str::<Value>(&payload_json).is_err() {
+        return Err("secret message payload must be JSON".to_string());
+    }
+    let mut state = state
+        .lock()
+        .map_err(|_| "desktop state lock poisoned".to_string())?;
+    Ok(state.publish_secret_message(&room, &payload_json)?)
 }
 
 #[tauri::command]
@@ -279,6 +352,24 @@ pub fn save_room_archive(app: AppHandle, room: String, payload: Value) -> Result
         return Err("room is required".to_string());
     }
     storage::save_room_archive(&app, room, payload)
+}
+
+#[tauri::command]
+pub fn load_secret_archive(app: AppHandle, room: String) -> Result<Option<Value>, String> {
+    let room = room.trim();
+    if room.is_empty() {
+        return Err("room is required".to_string());
+    }
+    storage::load_secret_archive(&app, room)
+}
+
+#[tauri::command]
+pub fn save_secret_archive(app: AppHandle, room: String, payload: Value) -> Result<(), String> {
+    let room = room.trim();
+    if room.is_empty() {
+        return Err("room is required".to_string());
+    }
+    storage::save_secret_archive(&app, room, payload)
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-import { BellOff, Hash, PenSquare, Plus, Search, Settings, UserRound, Volume2 } from 'lucide-react'
+import { BellOff, Hash, LockKeyhole, PenSquare, Plus, Search, Settings, UserRound, Volume2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
@@ -59,7 +59,7 @@ export function ConversationSidebar({
   const filteredRooms = useMemo(() => {
     const baseRooms =
       selectedDock === 'home'
-        ? rooms.filter((room) => room.kind === 'dm')
+        ? rooms.filter((room) => room.kind === 'dm' || room.kind === 'secret-dm')
         : rooms.filter((room) => activeGroup?.roomIds.includes(room.id))
 
     if (!search.trim()) {
@@ -271,7 +271,9 @@ function RoomButton({
       onClick={onClick}
     >
       <span className="flex min-w-0 items-center gap-2">
-        {room.kind === 'dm' ? (
+        {room.kind === 'secret-dm' ? (
+          <LockKeyhole className="h-4 w-4 shrink-0" />
+        ) : room.kind === 'dm' ? (
           <UserRound className="h-4 w-4 shrink-0" />
         ) : channelType === 'voice' ? (
           <Volume2 className="h-4 w-4 shrink-0" />

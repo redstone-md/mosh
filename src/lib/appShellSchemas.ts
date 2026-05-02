@@ -41,9 +41,13 @@ export const identityTransferEventSchema = z.object({
 
 export const signingIdentitySchema = z.object({
   algorithm: z.literal('ECDSA-P256'),
+  identityVersion: z.literal(2).optional(),
   fingerprint: z.string().min(1),
+  secureFingerprint: z.string().min(1).optional(),
   publicKeyJwk: z.record(z.string(), z.unknown()),
   privateKeyJwk: z.record(z.string(), z.unknown()),
+  encryptionPublicKeyJwk: z.record(z.string(), z.unknown()).optional(),
+  encryptionPrivateKeyJwk: z.record(z.string(), z.unknown()).optional(),
 })
 
 export const identityRollbackSnapshotSchema = z.object({
@@ -85,9 +89,28 @@ export const shellPreferencesSchema = z.object({
       z.object({
         displayName: z.string().trim().min(1).max(128),
         approvedAt: z.string().transform(normalizeIsoDateString),
+        secureFingerprint: z.string().min(1).optional(),
+        signingPublicKeyJwk: z.record(z.string(), z.unknown()).optional(),
+        encryptionPublicKeyJwk: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .default({}),
+})
+
+export const encryptedSecretArchiveSchema = z.object({
+  schemaVersion: z.literal(1),
+  roomId: z.string().min(1),
+  kdf: z.object({
+    name: z.literal('PBKDF2-SHA256'),
+    salt: z.string().min(1),
+    iterations: z.number().int().min(100_000),
+  }),
+  cipher: z.object({
+    name: z.literal('AES-GCM'),
+    iv: z.string().min(1),
+  }),
+  ciphertext: z.string().min(1),
+  updatedAt: z.string().min(1),
 })
 
 export const storedMessageSchema = messageSchema.extend({
@@ -110,7 +133,9 @@ export const storageOverviewSchema = z.object({
   settingsPath: z.string().min(1),
   identityPath: z.string().min(1),
   archivesDir: z.string().min(1),
+  secretArchivesDir: z.string().min(1).optional().default('not available'),
   archiveCount: z.number().int().nonnegative(),
+  secretArchiveCount: z.number().int().nonnegative().optional().default(0),
   hasSettings: z.boolean(),
   hasSigningIdentity: z.boolean(),
 })
@@ -124,6 +149,7 @@ export type ShellPreferences = z.infer<typeof shellPreferencesSchema>
 export type StoredMessage = z.infer<typeof storedMessageSchema>
 export type TrustedPeerRecord = NonNullable<ShellPreferences['trustedPeers'][string]>
 export type SigningIdentity = z.infer<typeof signingIdentitySchema>
+export type EncryptedSecretArchive = z.infer<typeof encryptedSecretArchiveSchema>
 export type IdentityTransferEvent = z.infer<typeof identityTransferEventSchema>
 export type IdentityRollbackSnapshot = z.infer<typeof identityRollbackSnapshotSchema>
 export type MessageOverlay = z.infer<typeof messageOverlaySchema>

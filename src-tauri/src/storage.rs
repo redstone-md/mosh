@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager};
 const SETTINGS_PATH: &str = "config/settings.json";
 const IDENTITY_PATH: &str = "keys/signing-identity.json";
 const ARCHIVES_DIR: &str = "data/archives";
+const SECRET_ARCHIVES_DIR: &str = "data/secret-archives";
 const MAX_IMPORTED_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Serialize)]
@@ -22,7 +23,9 @@ pub struct StorageOverview {
     pub settings_path: String,
     pub identity_path: String,
     pub archives_dir: String,
+    pub secret_archives_dir: String,
     pub archive_count: usize,
+    pub secret_archive_count: usize,
     pub has_settings: bool,
     pub has_signing_identity: bool,
 }
@@ -33,6 +36,7 @@ struct StoragePaths {
     settings_path: PathBuf,
     identity_path: PathBuf,
     archives_dir: PathBuf,
+    secret_archives_dir: PathBuf,
 }
 
 impl StoragePaths {
@@ -59,6 +63,7 @@ impl StoragePaths {
             settings_path: base_dir.join(SETTINGS_PATH),
             identity_path: base_dir.join(IDENTITY_PATH),
             archives_dir: base_dir.join(ARCHIVES_DIR),
+            secret_archives_dir: base_dir.join(SECRET_ARCHIVES_DIR),
             logs_dir,
             base_dir,
         }
@@ -72,6 +77,10 @@ impl StoragePaths {
         self.archives_dir.join(legacy_archive_file_name(room_id))
     }
 
+    fn secret_archive_path(&self, room_id: &str) -> PathBuf {
+        self.secret_archives_dir.join(archive_file_name(room_id))
+    }
+
     fn overview(&self) -> StorageOverview {
         StorageOverview {
             base_dir: self.base_dir.display().to_string(),
@@ -79,7 +88,11 @@ impl StoragePaths {
             settings_path: self.settings_path.display().to_string(),
             identity_path: self.identity_path.display().to_string(),
             archives_dir: self.archives_dir.display().to_string(),
+            secret_archives_dir: self.secret_archives_dir.display().to_string(),
             archive_count: archive_paths(&self.archives_dir)
+                .map(|archives| archives.len())
+                .unwrap_or(0),
+            secret_archive_count: archive_paths(&self.secret_archives_dir)
                 .map(|archives| archives.len())
                 .unwrap_or(0),
             has_settings: self.settings_path.exists(),
@@ -95,6 +108,7 @@ struct StorageBackup {
     settings: Option<Value>,
     signing_identity: Option<Value>,
     archives: Vec<Value>,
+    secret_archives: Vec<Value>,
 }
 
 #[derive(Deserialize)]
@@ -103,6 +117,8 @@ struct ImportedStorageBackup {
     settings: Option<Value>,
     signing_identity: Option<Value>,
     archives: Vec<Value>,
+    #[serde(default)]
+    secret_archives: Vec<Value>,
 }
 
 pub fn load_shell_preferences<R: tauri::Runtime>(
@@ -155,6 +171,23 @@ pub fn save_room_archive<R: tauri::Runtime>(
 pub fn load_all_room_archives<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<Value>, String> {
     let paths = StoragePaths::resolve(app)?;
     read_archives(&paths.archives_dir)
+}
+
+pub fn load_secret_archive<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    room_id: &str,
+) -> Result<Option<Value>, String> {
+    let paths = StoragePaths::resolve(app)?;
+    read_json(&paths.secret_archive_path(room_id))
+}
+
+pub fn save_secret_archive<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    room_id: &str,
+    payload: Value,
+) -> Result<(), String> {
+    let paths = StoragePaths::resolve(app)?;
+    write_json(&paths.secret_archive_path(room_id), &payload)
 }
 
 pub fn storage_overview<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<StorageOverview, String> {
@@ -238,6 +271,14 @@ fn clear_existing_storage(paths: &StoragePaths) -> Result<(), String> {
         fs::remove_dir_all(&paths.archives_dir)
             .map_err(|err| format!("failed to clear {}: {err}", paths.archives_dir.display()))?;
     }
+    if paths.secret_archives_dir.exists() {
+        fs::remove_dir_all(&paths.secret_archives_dir).map_err(|err| {
+            format!(
+                "failed to clear {}: {err}",
+                paths.secret_archives_dir.display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -271,6 +312,20 @@ fn import_backup_from_path(paths: &StoragePaths, input_path: &Path) -> Result<()
         }
     }
 
+    for archive in &backup.secret_archives {
+        let room_id = archive
+            .get("roomId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "backup secret archive room id is required".to_string())?
+            .trim();
+        if room_id.is_empty() {
+            return Err("backup secret archive room id is required".to_string());
+        }
+        if !archive.is_object() {
+            return Err("backup secret archive payload must be an object".to_string());
+        }
+    }
+
     clear_existing_storage(paths)?;
 
     if let Some(settings) = backup.settings {
@@ -287,6 +342,14 @@ fn import_backup_from_path(paths: &StoragePaths, input_path: &Path) -> Result<()
             .and_then(Value::as_str)
             .expect("validated above");
         write_json(&paths.archive_path(room_id), &archive)?;
+    }
+
+    for archive in backup.secret_archives {
+        let room_id = archive
+            .get("roomId")
+            .and_then(Value::as_str)
+            .expect("validated above");
+        write_json(&paths.secret_archive_path(room_id), &archive)?;
     }
 
     Ok(())
@@ -351,6 +414,7 @@ fn build_backup(paths: &StoragePaths) -> Result<StorageBackup, String> {
         settings: read_json(&paths.settings_path)?,
         signing_identity: read_json(&paths.identity_path)?,
         archives: read_archives(&paths.archives_dir)?,
+        secret_archives: read_archives(&paths.secret_archives_dir)?,
     })
 }
 

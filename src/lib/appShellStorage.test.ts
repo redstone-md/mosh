@@ -27,6 +27,7 @@ vi.mock('./tauriEnv', () => ({
 vi.mock('./cryptoIdentity', () => ({
   createSigningIdentity,
   parseSigningIdentity: (value: unknown) => value,
+  upgradeSigningIdentity: (value: unknown) => value,
   signSerializedPayload: vi.fn(),
   verifySerializedPayload: vi.fn(),
 }))

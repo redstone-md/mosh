@@ -5,10 +5,12 @@ import {
   shellPreferencesSchema,
   signedRoomArchiveSchema,
   signingIdentitySchema,
+  encryptedSecretArchiveSchema,
   storageOverviewSchema,
   type ShellPreferences,
   type SignedRoomArchive,
   type SigningIdentity,
+  type EncryptedSecretArchive,
   type StorageOverview,
 } from './appShellSchemas'
 
@@ -55,6 +57,19 @@ export class DesktopStorageClient {
   async saveRoomArchive(room: string, value: SignedRoomArchive): Promise<void> {
     const payload = signedRoomArchiveSchema.parse(value)
     await invoke('save_room_archive', { room, payload })
+  }
+
+  async loadSecretArchive(room: string): Promise<EncryptedSecretArchive | null> {
+    const payload = await invoke('load_secret_archive', { room })
+    if (payload === null) {
+      return null
+    }
+    return encryptedSecretArchiveSchema.parse(payload)
+  }
+
+  async saveSecretArchive(room: string, value: EncryptedSecretArchive): Promise<void> {
+    const payload = encryptedSecretArchiveSchema.parse(value)
+    await invoke('save_secret_archive', { room, payload })
   }
 
   async getStorageOverview(): Promise<StorageOverview> {

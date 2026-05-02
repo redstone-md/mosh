@@ -6,9 +6,9 @@ use std::{
 use serde_json::Value;
 
 use crate::{
-    chat_protocol::{format_peer, normalize_room_id, ChatPayload, CONTROL_ROOM},
+    chat_protocol::{format_peer, is_secret_room, normalize_room_id, ChatPayload, CONTROL_ROOM},
     models::{
-        CallStateSummary, Message, PeerSummary, RoomSummary, SignalingEvent,
+        CallStateSummary, Message, PeerSummary, RoomSummary, SecretMessageEvent, SignalingEvent,
         VoiceParticipantSummary, VoiceRoomSummary,
     },
 };
@@ -27,6 +27,7 @@ pub struct CallbackState {
     local_voice_room: Option<String>,
     voice_room_members: BTreeMap<String, BTreeSet<String>>,
     messages: Vec<Message>,
+    secret_messages: Vec<SecretMessageEvent>,
     rooms: BTreeMap<String, RoomSummary>,
     peers: BTreeMap<String, PeerSummary>,
     call_state: Option<CallStateSummary>,
@@ -54,6 +55,7 @@ impl CallbackState {
         self.local_voice_room = None;
         self.voice_room_members.clear();
         self.messages.clear();
+        self.secret_messages.clear();
         self.rooms.clear();
         self.peers.clear();
         self.call_state = None;
@@ -91,6 +93,10 @@ impl CallbackState {
                 latency: "--".to_string(),
                 status: "self".to_string(),
                 rooms: room_labels,
+                identity_version: None,
+                secure_fingerprint: None,
+                signing_public_key_jwk: None,
+                encryption_public_key_jwk: None,
             },
         );
 
@@ -136,6 +142,19 @@ impl CallbackState {
         }
 
         let room_id = normalize_room_id(&channel);
+        if is_secret_room(&room_id) {
+            self.ensure_room(&room_id, &format!("secret #{room_id}"), "secret-dm");
+            let payload_json = String::from_utf8_lossy(&data).into_owned();
+            let id = self.next_message_id();
+            self.secret_messages.push(SecretMessageEvent {
+                id,
+                room_id,
+                sender_peer_id: sender_hex,
+                payload_json,
+                received_at: "now".to_string(),
+            });
+            return;
+        }
         self.ensure_room(&room_id, &format!("#{room_id}"), "channel");
 
         let parsed_payload = serde_json::from_slice::<ChatPayload>(&data).ok();
@@ -195,6 +214,10 @@ impl CallbackState {
                         latency: "live".to_string(),
                         status: "connected".to_string(),
                         rooms: vec!["#lobby".to_string()],
+                        identity_version: None,
+                        secure_fingerprint: None,
+                        signing_public_key_jwk: None,
+                        encryption_public_key_jwk: None,
                     },
                 );
                 self.bump_room_participants();
@@ -270,6 +293,10 @@ impl CallbackState {
 
     pub fn messages(&self) -> Vec<Message> {
         self.messages.clone()
+    }
+
+    pub fn secret_messages(&self) -> Vec<SecretMessageEvent> {
+        self.secret_messages.clone()
     }
 
     pub fn peers(&self) -> Vec<PeerSummary> {
@@ -399,6 +426,47 @@ impl CallbackState {
         None
     }
 
+    pub fn record_secret_room(&mut self, room: &str, target_peer: &str, target_label: &str) {
+        let room = normalize_room_id(room);
+        self.self_rooms.insert(room.clone());
+        self.ensure_room(&room, &format!("secret @{target_label}"), "secret-dm");
+        if let Some(summary) = self.rooms.get_mut(&room) {
+            summary.label = format!("secret @{target_label}");
+            summary.kind = "secret-dm".to_string();
+        }
+        self.peer_rooms
+            .entry(target_peer.to_string())
+            .or_default()
+            .insert(room.clone());
+        if let Some(peer) = self.peers.get_mut(target_peer) {
+            let label = format!("#{room}");
+            if !peer.rooms.iter().any(|candidate| candidate == &label) {
+                peer.rooms.push(label);
+                peer.rooms.sort();
+            }
+        }
+        if let Some(peer) = self.self_peer_mut() {
+            let label = format!("#{room}");
+            if !peer.rooms.iter().any(|candidate| candidate == &label) {
+                peer.rooms.push(label);
+                peer.rooms.sort();
+            }
+        }
+        self.bump_room_participants();
+    }
+
+    pub fn record_secret_message(&mut self, room: &str, payload_json: String) {
+        let room_id = normalize_room_id(room);
+        let id = self.next_message_id();
+        self.secret_messages.push(SecretMessageEvent {
+            id,
+            room_id,
+            sender_peer_id: self.local_peer_id.clone(),
+            payload_json,
+            received_at: "now".to_string(),
+        });
+    }
+
     fn handle_control_message(&mut self, sender_hex: String, data: Vec<u8>) {
         let Ok(payload) = serde_json::from_slice::<ChatPayload>(&data) else {
             return;
@@ -434,6 +502,10 @@ impl CallbackState {
                             .iter()
                             .map(|room| format!("#{room}"))
                             .collect::<Vec<_>>();
+                        peer.identity_version = payload.identity_version;
+                        peer.secure_fingerprint = non_empty(payload.secure_fingerprint.clone());
+                        peer.signing_public_key_jwk = payload.signing_public_key_jwk.clone();
+                        peer.encryption_public_key_jwk = payload.encryption_public_key_jwk.clone();
                     })
                     .or_insert(PeerSummary {
                         id: sender_hex.clone(),
@@ -445,6 +517,10 @@ impl CallbackState {
                             .iter()
                             .map(|room| format!("#{room}"))
                             .collect::<Vec<_>>(),
+                        identity_version: payload.identity_version,
+                        secure_fingerprint: non_empty(payload.secure_fingerprint.clone()),
+                        signing_public_key_jwk: payload.signing_public_key_jwk.clone(),
+                        encryption_public_key_jwk: payload.encryption_public_key_jwk.clone(),
                     });
                 for room in peer_rooms {
                     self.ensure_room(&room, &format!("#{room}"), "channel");
@@ -481,6 +557,17 @@ impl CallbackState {
                     "system",
                     "System",
                     format!("Direct chat ready with {peer_name}."),
+                    "system",
+                );
+            }
+            "secret_dm_invite" => {
+                let room = normalize_room_id(&payload.room);
+                let peer_name = self.display_name_for_peer(&sender_hex);
+                self.record_secret_room(&room, &sender_hex, &peer_name);
+                self.push_message(
+                    "system",
+                    "System",
+                    format!("Secret chat ready with {peer_name}."),
                     "system",
                 );
             }
@@ -683,6 +770,15 @@ fn fallback_text(value: &str, fallback: &str) -> String {
         fallback.to_string()
     } else {
         value.to_string()
+    }
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 

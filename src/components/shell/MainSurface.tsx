@@ -92,6 +92,8 @@ type MainSurfaceProps = {
   pinnedMessageIds: string[]
   publishPending: boolean
   publishError?: string
+  secretArchiveLocked: boolean
+  secretArchivePassphrase: string
   runtimeTogglePending: boolean
   runtimeToggleError?: string
   runtimeSettingsPending: boolean
@@ -104,10 +106,12 @@ type MainSurfaceProps = {
   onOpenSettings: (open: boolean) => void
   onSelectRoom: (roomId: string) => void
   onOpenDirectRoom: (target: string) => void
+  onOpenSecretRoom: (peer: PeerSummary) => void
   onCreateChannel: (room: string, channelType: ChannelType) => void
   onCreateGroup: (group: Omit<RoomGroup, 'id'>) => void
   onApplyInvite: (invite: MeshInvitePayload) => Promise<void>
   onDraftChange: (value: string) => void
+  onUnlockSecretArchive: (passphrase: string) => void
   onSendMessage: () => void
   onRetryMessage: (clientId: string) => void
   onDismissMessage: (clientId: string) => void
@@ -163,6 +167,8 @@ export function MainSurface({
   pinnedMessageIds,
   publishPending,
   publishError,
+  secretArchiveLocked,
+  secretArchivePassphrase,
   runtimeTogglePending,
   runtimeToggleError,
   runtimeSettingsPending,
@@ -175,10 +181,12 @@ export function MainSurface({
   onOpenSettings,
   onSelectRoom,
   onOpenDirectRoom,
+  onOpenSecretRoom,
   onCreateChannel,
   onCreateGroup,
   onApplyInvite,
   onDraftChange,
+  onUnlockSecretArchive,
   onSendMessage,
   onRetryMessage,
   onDismissMessage,
@@ -302,7 +310,10 @@ export function MainSurface({
           pinnedMessages={pinnedMessages}
           pinnedMessageIds={pinnedMessageIds}
           errorNote={publishError}
+          secretArchiveLocked={secretArchiveLocked}
+          secretArchivePassphrase={secretArchivePassphrase}
           onDraftChange={onDraftChange}
+          onUnlockSecretArchive={onUnlockSecretArchive}
           onSend={onSendMessage}
           onRetryMessage={onRetryMessage}
           onDismissMessage={onDismissMessage}
@@ -343,6 +354,7 @@ export function MainSurface({
           activeVoiceRoom={activeVoiceRoom}
           onTogglePeerTrust={onTogglePeerTrust}
           onOpenDirectRoom={onOpenDirectRoom}
+          onOpenSecretRoom={onOpenSecretRoom}
         />
       </section>
       <CreateSpaceDialog
