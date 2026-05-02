@@ -19,6 +19,8 @@ const identityTransferPayloadSchema = z.object({
   identity: signingIdentitySchema,
 })
 
+const decoder = new TextDecoder()
+
 export type IdentityTransferEnvelope = z.infer<typeof identityTransferEnvelopeSchema>
 export const IDENTITY_TRANSFER_PREFIX = 'mosh-identity://transfer/'
 export type IdentityTransferSummary = Pick<IdentityTransferEnvelope, 'exportedAt' | 'sourceFingerprint'>
@@ -66,10 +68,7 @@ export async function importIdentityTransferPackage(
   passphrase: string
 ): Promise<SigningIdentity> {
   const normalizedPassphrase = normalizePassphrase(passphrase)
-  const encodedEnvelope = normalizeIdentityTransferPackage(transferPackage).slice(IDENTITY_TRANSFER_PREFIX.length)
-  const envelope = identityTransferEnvelopeSchema.parse(
-    JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope)))
-  )
+  const envelope = readIdentityTransferEnvelope(transferPackage)
   const key = await deriveTransferKey(normalizedPassphrase, decodeBase64UrlToBytes(envelope.salt))
 
   try {
@@ -83,9 +82,10 @@ export async function importIdentityTransferPackage(
       key,
       cipherText
     )
-    const payload = identityTransferPayloadSchema.parse(
-      JSON.parse(new TextDecoder().decode(new Uint8Array(payloadBuffer)))
-    )
+    const payload = identityTransferPayloadSchema.parse(JSON.parse(decoder.decode(new Uint8Array(payloadBuffer))))
+    if (payload.identity.fingerprint !== envelope.sourceFingerprint) {
+      throw new Error('Identity transfer package fingerprint mismatch.')
+    }
     return payload.identity
   } catch {
     throw new Error('Unable to decrypt the identity transfer package.')
@@ -130,13 +130,15 @@ export function normalizeIdentityTransferPackage(value: string) {
 }
 
 export function readIdentityTransferSummary(value: string): IdentityTransferSummary {
-  const encodedEnvelope = normalizeIdentityTransferPackage(value).slice(IDENTITY_TRANSFER_PREFIX.length)
-  const envelope = identityTransferEnvelopeSchema.parse(
-    JSON.parse(new TextDecoder().decode(decodeBase64UrlToBytes(encodedEnvelope)))
-  )
+  const envelope = readIdentityTransferEnvelope(value)
 
   return {
     exportedAt: envelope.exportedAt,
     sourceFingerprint: envelope.sourceFingerprint,
   }
+}
+
+function readIdentityTransferEnvelope(value: string): IdentityTransferEnvelope {
+  const encodedEnvelope = normalizeIdentityTransferPackage(value).slice(IDENTITY_TRANSFER_PREFIX.length)
+  return identityTransferEnvelopeSchema.parse(JSON.parse(decoder.decode(decodeBase64UrlToBytes(encodedEnvelope))))
 }

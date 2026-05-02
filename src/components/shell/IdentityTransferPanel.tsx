@@ -83,7 +83,7 @@ export function IdentityTransferPanel({
         channel: 'manual',
         activeFingerprint: importedFingerprint,
         replacedFingerprint: previousFingerprint,
-        packageSourceFingerprint: summary.sourceFingerprint,
+        packageSourceFingerprint: importedFingerprint,
         packageExportedAt: summary.exportedAt,
       })
       await onImported()
