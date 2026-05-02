@@ -63,53 +63,12 @@ impl DesktopShellState {
     }
 
     pub fn toggle_runtime(&mut self) -> Result<DesktopSnapshot, String> {
-        if let Some(handle) = self.handle.take() {
-            let library = self
-                .library
-                .as_ref()
-                .ok_or_else(|| "shared library is not loaded".to_string())?;
-            library.clear_callbacks(handle);
-            library.stop(handle)?;
-            if let Ok(mut callbacks) = shared_callback_state().lock() {
-                callbacks.note_runtime("Runtime stopped from desktop shell.");
-            }
+        if self.handle.is_some() {
+            self.stop_runtime("Runtime stopped from desktop shell.")?;
             return Ok(self.snapshot());
         }
 
-        if self.library.is_none() {
-            self.reload_library();
-        }
-        let library = self
-            .library
-            .as_ref()
-            .ok_or_else(|| self.shared_bridge_summary())?;
-        let config_json = self.settings.config_json()?;
-
-        if let Ok(mut callbacks) = shared_callback_state().lock() {
-            callbacks.reset();
-            callbacks.note_runtime(format!(
-                "Starting live runtime for mesh {}.",
-                self.settings.mesh_id()
-            ));
-        }
-
-        let handle = library.init_handle(self.settings.mesh_id(), &config_json)?;
-        library.set_callbacks(handle)?;
-        library.start(handle)?;
-        library.subscribe(handle, CONTROL_ROOM)?;
-        library.subscribe(handle, self.settings.initial_room())?;
-        self.configure_live_chat_identity(library, handle)?;
-        self.publish_presence(library, handle)?;
-        if let Some(startup_peer) = self.settings.startup_peer() {
-            if let Err(err) = library.connect(handle, startup_peer) {
-                if let Ok(mut callbacks) = shared_callback_state().lock() {
-                    callbacks.note_runtime(format!(
-                        "Startup peer {startup_peer} did not connect immediately: {err}"
-                    ));
-                }
-            }
-        }
-        self.handle = Some(handle);
+        self.start_runtime()?;
         Ok(self.snapshot())
     }
 
@@ -117,22 +76,36 @@ impl DesktopShellState {
         &mut self,
         input: RuntimeSettingsInput,
     ) -> Result<DesktopSnapshot, String> {
+        let previous_settings = self.settings.clone();
         let previous_nickname = self.settings.nickname().to_string();
+        let was_running = self.handle.is_some();
         self.settings.apply(input)?;
-        if let Ok(mut callbacks) = shared_callback_state().lock() {
-            if self.handle.is_some() {
+
+        if was_running && self.settings.requires_runtime_restart(&previous_settings) {
+            if let Ok(mut callbacks) = shared_callback_state().lock() {
                 callbacks.note_runtime(
-                    "Updated desktop runtime settings. Restart the runtime to apply them.",
+                    "Updated desktop runtime settings. Restarting runtime to join the new mesh.",
                 );
-            } else {
-                callbacks.note_runtime("Updated desktop runtime settings.");
             }
+            self.stop_runtime("Runtime restarting to apply desktop runtime settings.")?;
+            self.start_runtime()?;
+            return Ok(self.snapshot());
         }
-        if self.handle.is_some() && previous_nickname != self.settings.nickname() {
+
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.note_runtime("Updated desktop runtime settings.");
+        }
+
+        if was_running {
             if let Some(handle) = self.handle {
                 if let Some(library) = self.library.as_ref() {
-                    let _ = self.configure_live_chat_identity(library, handle);
-                    let _ = self.publish_presence(library, handle);
+                    if previous_nickname != self.settings.nickname() {
+                        let _ = self.configure_live_chat_identity(library, handle);
+                        let _ = self.publish_presence(library, handle);
+                    }
+                    if previous_settings.startup_peer() != self.settings.startup_peer() {
+                        self.connect_startup_peer(library, handle);
+                    }
                 }
             }
         }
@@ -473,6 +446,65 @@ impl DesktopShellState {
             "Queued voice-room leave until a peer path is ready.".to_string(),
         )?;
         Ok(self.snapshot())
+    }
+
+    fn start_runtime(&mut self) -> Result<(), String> {
+        if self.library.is_none() {
+            self.reload_library();
+        }
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| self.shared_bridge_summary())?;
+        let config_json = self.settings.config_json()?;
+
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.reset();
+            callbacks.note_runtime(format!(
+                "Starting live runtime for mesh {}.",
+                self.settings.mesh_id()
+            ));
+        }
+
+        let handle = library.init_handle(self.settings.mesh_id(), &config_json)?;
+        library.set_callbacks(handle)?;
+        library.start(handle)?;
+        library.subscribe(handle, CONTROL_ROOM)?;
+        library.subscribe(handle, self.settings.initial_room())?;
+        self.configure_live_chat_identity(library, handle)?;
+        self.publish_presence(library, handle)?;
+        self.connect_startup_peer(library, handle);
+        self.handle = Some(handle);
+        Ok(())
+    }
+
+    fn stop_runtime(&mut self, note: &str) -> Result<(), String> {
+        let Some(handle) = self.handle.take() else {
+            return Ok(());
+        };
+        let library = self
+            .library
+            .as_ref()
+            .ok_or_else(|| "shared library is not loaded".to_string())?;
+        library.clear_callbacks(handle);
+        library.stop(handle)?;
+        if let Ok(mut callbacks) = shared_callback_state().lock() {
+            callbacks.note_runtime(note);
+        }
+        Ok(())
+    }
+
+    fn connect_startup_peer(&self, library: &MossLibrary, handle: i64) {
+        let Some(startup_peer) = self.settings.startup_peer() else {
+            return;
+        };
+        if let Err(err) = library.connect(handle, startup_peer) {
+            if let Ok(mut callbacks) = shared_callback_state().lock() {
+                callbacks.note_runtime(format!(
+                    "Startup peer {startup_peer} did not connect immediately: {err}"
+                ));
+            }
+        }
     }
 
     fn live_mesh_info(&self) -> Result<Option<MeshInfo>, String> {

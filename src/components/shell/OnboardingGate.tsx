@@ -215,22 +215,6 @@ export function OnboardingGate({
                 <div className="grid gap-5">
                   <div className="space-y-2">
                     <Label
-                      htmlFor="onboarding-startup-peer"
-                      className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
-                    >
-                      {copy.form.startupPeer}
-                    </Label>
-                    <Input
-                      id="onboarding-startup-peer"
-                      value={runtimeDraft.startupPeer}
-                      placeholder={copy.form.startupPeerPlaceholder}
-                      disabled={isBusy}
-                      onChange={(event) => updateDraft({ startupPeer: event.target.value })}
-                      className="h-12 rounded-xl border-[rgba(74,124,89,0.7)] bg-[rgba(10,23,16,0.62)]"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label
                       htmlFor="onboarding-listen-port"
                       className="text-[0.9rem] text-[color-mix(in_srgb,var(--primary)_85%,white)]"
                     >
