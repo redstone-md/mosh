@@ -22,13 +22,50 @@ export function isImageAttachment(file: File): boolean {
 
 export function createFileAttachmentMarkup(file: File, dataUrl: string): string {
   return [
-    `<a class="message-attachment" href="${escapeHtmlAttribute(dataUrl)}" download="${escapeHtmlAttribute(file.name)}"`,
+    `<a class="message-attachment" href="#" download="${escapeHtmlAttribute(file.name)}"`,
     ` data-attachment="file" data-file-name="${escapeHtmlAttribute(file.name)}"`,
-    ` data-file-size="${file.size}" data-file-type="${escapeHtmlAttribute(file.type || 'application/octet-stream')}">`,
+    ` data-file-size="${file.size}" data-file-type="${escapeHtmlAttribute(file.type || 'application/octet-stream')}"`,
+    ` data-file-url="${escapeHtmlAttribute(dataUrl)}">`,
     `<span class="message-attachment__title">${escapeHtml(file.name)}</span>`,
     `<span class="message-attachment__meta">${escapeHtml(formatAttachmentSize(file.size))} · ${escapeHtml(resolveAttachmentLabel(file.type))}</span>`,
     `</a><p></p>`,
   ].join('')
+}
+
+const BLOCKED_ATTACHMENT_MIME_PREFIXES = [
+  'text/html',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'application/xml',
+  'text/xml',
+]
+
+export function isSafeAttachmentDataUrl(dataUrl: string): boolean {
+  const match = dataUrl.match(/^data:([^;,]+)?(?:;[^,]*)?,/i)
+  if (!match) {
+    return false
+  }
+
+  const mimeType = (match[1] || 'text/plain').trim().toLowerCase()
+  return !BLOCKED_ATTACHMENT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix))
+}
+
+export async function downloadAttachmentDataUrl(dataUrl: string, fileName: string): Promise<boolean> {
+  if (!isSafeAttachmentDataUrl(dataUrl)) {
+    return false
+  }
+
+  const response = await fetch(dataUrl)
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = fileName || 'attachment'
+  document.body.append(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
+  return true
 }
 
 function resolveAttachmentLabel(mimeType: string): string {
