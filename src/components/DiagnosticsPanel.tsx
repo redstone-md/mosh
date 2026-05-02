@@ -36,14 +36,37 @@ export function DiagnosticsPanel({ diagnostics }: DiagnosticsPanelProps) {
           <strong className="text-foreground">{diagnostics.activeMeshId}</strong>
           <p className="text-xs text-foreground/50">listen {diagnostics.activeListenPort}</p>
         </div>
-        <div className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-1.5 xl:col-span-2">
-          <span className="text-[10px] uppercase tracking-widest text-foreground/40 font-bold">Peer state</span>
-          <strong className="text-foreground">
-            {diagnostics.peerCount} peers / {diagnostics.channelCount} channels
-          </strong>
+        <div className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase tracking-widest text-foreground/40 font-bold">Direct peers</span>
+          <strong className="text-foreground">{diagnostics.directPeerCount}</strong>
+          <p className="text-xs text-foreground/50">{diagnostics.knownPeerCount} known peers</p>
+        </div>
+        <div className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase tracking-widest text-foreground/40 font-bold">Relayed peers</span>
+          <strong className="text-foreground">{diagnostics.relayedPeerCount}</strong>
+          <p className="text-xs text-foreground/50">{diagnostics.relaySessionCount} active sessions</p>
+        </div>
+        <div className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase tracking-widest text-foreground/40 font-bold">Relay-capable</span>
+          <strong className="text-foreground">{diagnostics.relayCapablePeerCount}</strong>
           <p className="text-xs text-foreground/50">
-            {diagnostics.supernodeReady ? 'Relay candidate ready' : 'Relay candidate offline'}
+            {diagnostics.supernodeReady ? 'Local relay ready' : 'Local relay warming up'}
           </p>
+        </div>
+        <div className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase tracking-widest text-foreground/40 font-bold">Relay routes</span>
+          <strong className="text-foreground">{diagnostics.relayRouteCount}</strong>
+          <p className="text-xs text-foreground/50">{diagnostics.peerCount} total peer links</p>
+        </div>
+        <div className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase tracking-widest text-foreground/40 font-bold">NAT</span>
+          <strong className="text-foreground">{diagnostics.natType}</strong>
+          <p className="text-xs text-foreground/50">{diagnostics.advertisedAddr}</p>
+        </div>
+        <div className="bg-background/40 border border-border/20 rounded-xl p-4 flex flex-col gap-1.5">
+          <span className="text-[10px] uppercase tracking-widest text-foreground/40 font-bold">Trackers</span>
+          <strong className="text-foreground">{diagnostics.trackerCandidateCount}</strong>
+          <p className="text-xs text-foreground/50">{diagnostics.trackerConnectedCount} connected at announce</p>
         </div>
       </div>
       <div className="flex flex-wrap gap-2 text-xs">

@@ -37,7 +37,21 @@ pub struct MeshInfo {
     #[serde(default)]
     pub listen_port: u16,
     #[serde(default)]
+    pub advertised_addr: String,
+    #[serde(default)]
     pub peer_count: usize,
+    #[serde(default)]
+    pub known_peer_count: usize,
+    #[serde(default)]
+    pub direct_peer_count: usize,
+    #[serde(default)]
+    pub relayed_peer_count: usize,
+    #[serde(default)]
+    pub relay_capable_peer_count: usize,
+    #[serde(default)]
+    pub relay_session_count: usize,
+    #[serde(default)]
+    pub relay_route_count: usize,
     #[serde(default, deserialize_with = "deserialize_null_vec")]
     pub peers: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_null_vec")]
@@ -438,7 +452,14 @@ mod tests {
         let payload = r#"{
             "mesh_id":"mosh-chat",
             "listen_port":41030,
+            "advertised_addr":"127.0.0.1:41030",
             "peer_count":0,
+            "known_peer_count":0,
+            "direct_peer_count":0,
+            "relayed_peer_count":0,
+            "relay_capable_peer_count":0,
+            "relay_session_count":0,
+            "relay_route_count":0,
             "peers":null,
             "channels":null,
             "nat_type":"unknown",

@@ -31,6 +31,8 @@ pub struct CallbackState {
     peers: BTreeMap<String, PeerSummary>,
     call_state: Option<CallStateSummary>,
     signaling_events: Vec<SignalingEvent>,
+    tracker_candidate_count: usize,
+    tracker_connected_count: usize,
 }
 
 impl CallbackState {
@@ -56,6 +58,8 @@ impl CallbackState {
         self.peers.clear();
         self.call_state = None;
         self.signaling_events.clear();
+        self.tracker_candidate_count = 0;
+        self.tracker_connected_count = 0;
         self.ensure_room("system", "System", "system");
         self.ensure_room("lobby", "#lobby", "channel");
     }
@@ -225,6 +229,8 @@ impl CallbackState {
                     .get("connected_peers")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
+                self.tracker_candidate_count = candidates as usize;
+                self.tracker_connected_count = connected as usize;
                 self.push_message(
                     "system",
                     "System",
@@ -276,6 +282,10 @@ impl CallbackState {
 
     pub fn signaling_events(&self) -> Vec<SignalingEvent> {
         self.signaling_events.clone()
+    }
+
+    pub fn tracker_counters(&self) -> (usize, usize) {
+        (self.tracker_candidate_count, self.tracker_connected_count)
     }
 
     pub fn voice_rooms(&self) -> Vec<VoiceRoomSummary> {
