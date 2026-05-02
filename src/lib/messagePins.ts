@@ -2,12 +2,21 @@ import type { Message } from './schemas'
 
 const MAX_PINNED_MESSAGES_PER_ROOM = 12
 
+export function getPinnedMessageIds(current: Record<string, string[]>, roomId: string): string[] {
+  if (!Object.prototype.hasOwnProperty.call(current, roomId)) {
+    return []
+  }
+
+  const value = current[roomId]
+  return Array.isArray(value) ? value : []
+}
+
 export function togglePinnedMessage(
   current: Record<string, string[]>,
   roomId: string,
   messageId: string
 ): Record<string, string[]> {
-  const roomPins = current[roomId] ?? []
+  const roomPins = getPinnedMessageIds(current, roomId)
 
   if (roomPins.includes(messageId)) {
     const nextRoomPins = roomPins.filter((value) => value !== messageId)
@@ -28,7 +37,7 @@ export function togglePinnedMessage(
 }
 
 export function isMessagePinned(current: Record<string, string[]>, roomId: string, messageId: string): boolean {
-  return (current[roomId] ?? []).includes(messageId)
+  return getPinnedMessageIds(current, roomId).includes(messageId)
 }
 
 export function resolvePinnedMessages(
@@ -36,7 +45,7 @@ export function resolvePinnedMessages(
   roomId: string,
   messages: Message[]
 ): Message[] {
-  const roomPins = current[roomId] ?? []
+  const roomPins = getPinnedMessageIds(current, roomId)
   if (roomPins.length === 0) {
     return []
   }

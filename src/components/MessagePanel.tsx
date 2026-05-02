@@ -76,7 +76,10 @@ export function MessagePanel({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [editingMessage, setEditingMessage] = useState<DisplayMessage | null>(null)
-  const pinnedMessageSet = useMemo(() => new Set(pinnedMessageIds), [pinnedMessageIds])
+  const pinnedMessageSet = useMemo(
+    () => new Set(Array.isArray(pinnedMessageIds) ? pinnedMessageIds : []),
+    [pinnedMessageIds]
+  )
 
   const handleSendRef = useRef(onSend)
   handleSendRef.current = onSend
