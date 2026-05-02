@@ -185,6 +185,43 @@ describe('appShellStorage', () => {
     expect(identity).toEqual(storedIdentity)
   })
 
+  it('excludes placeholder shell messages from archive merges', async () => {
+    const { mergeArchivedMessages } = await loadModule()
+    const messages = mergeArchivedMessages(
+      [
+        {
+          id: 'm-offline-2',
+          roomId: 'lobby',
+          author: 'Moss',
+          body: 'Messages, rooms, and peers are driven by libmoss once the runtime is online.',
+          timestamp: 'now',
+          emphasis: 'normal',
+          storedAt: '2026-05-02T10:00:00.000Z',
+        },
+      ],
+      [
+        {
+          id: 'live-1',
+          roomId: 'lobby',
+          author: 'you',
+          body: '123',
+          timestamp: '10:00',
+          emphasis: 'normal',
+        },
+      ]
+    )
+
+    expect(messages).toEqual([
+      {
+        id: 'live-1',
+        roomId: 'lobby',
+        author: 'you',
+        body: '123',
+        timestamp: '10:00',
+        emphasis: 'normal',
+      },
+    ])
+  })
   it('can regenerate a fresh signing identity and persist it', async () => {
     tauriEnvironment = true
     const freshIdentity = {

@@ -35,7 +35,11 @@ export function useMessageOutbox({ currentUser, liveMessages, publishMessage }: 
       try {
         await publishMessage(roomId, body)
       } catch (error) {
-        setPendingMessages((current) => failPendingOutgoingMessage(current, pendingMessage.clientId))
+        if (isNoConnectedPeersError(error)) {
+          setPendingMessages((current) => removePendingOutgoingMessage(current, pendingMessage.clientId))
+        } else {
+          setPendingMessages((current) => failPendingOutgoingMessage(current, pendingMessage.clientId))
+        }
         throw error
       }
     },
@@ -83,4 +87,8 @@ export function useMessageOutbox({ currentUser, liveMessages, publishMessage }: 
     dismissMessage,
     buildDisplayMessages,
   }
+}
+
+function isNoConnectedPeersError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('No connected peers yet')
 }
