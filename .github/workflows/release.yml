@@ -35,6 +35,9 @@ jobs:
           - os: windows-11-arm
             label: windows-arm64
             rust-target: aarch64-pc-windows-msvc
+            msys2: CLANGARM64
+            msys2-install: >-
+              mingw-w64-clang-aarch64-clang
             moss-cc: clang
           - os: macos-15-intel
             label: macos-amd64
@@ -68,7 +71,7 @@ jobs:
           msystem: ${{ matrix.msys2 }}
           update: true
           install: >-
-            mingw-w64-ucrt-x86_64-gcc
+            ${{ matrix.msys2-install || 'mingw-w64-ucrt-x86_64-gcc' }}
 
       - name: Verify ARM64 Windows clang
         if: matrix.moss-cc
@@ -83,7 +86,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
 
       - name: Install frontend dependencies
         run: npm ci
