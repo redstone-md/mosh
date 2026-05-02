@@ -33,3 +33,5 @@ All notable user-visible changes in this project should be documented in this fi
 - Added persisted per-room draft recovery, so composer content now survives room switches and app restarts, with draft previews visible directly in the conversation sidebar.
 - Added local message overlays for your own messages, including per-device edit and hide/restore actions without mutating the underlying signed room history.
 - Hardened message search indexing and copy text extraction so untrusted message HTML is never parsed through DOM `innerHTML`.
+- Escaped reply quote metadata before reinserting message text into editor HTML, preventing encoded markup from rehydrating in drafts.
+- Raised frontend and Tauri dependency minimums to patched versions after npm and RustSec audit review.

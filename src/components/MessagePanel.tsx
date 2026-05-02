@@ -9,6 +9,7 @@ import {
   isImageAttachment,
 } from '../lib/messageAttachments'
 import { focusMessageElement } from '../lib/messageFocus'
+import { escapeHtml, escapeHtmlAttribute } from '../lib/htmlEscape'
 import type { DisplayMessage } from '../lib/messageDelivery'
 import { serializeEditedMessageBody } from '../lib/messageOverlays'
 import { extractPlainText } from '../lib/messageSearch'
@@ -203,7 +204,7 @@ export function MessagePanel({
 
   const handleReply = useCallback((message: DisplayMessage) => {
     const text = extractPlainText(message.body)
-    const replyHtml = `<blockquote data-reply-to="${message.id}" class="cursor-pointer hover:bg-primary/10 transition-colors" title="${copy.messages.jumpToOriginal}"><strong>${message.author}:</strong> ${text}</blockquote><p></p>`
+    const replyHtml = `<blockquote data-reply-to="${escapeHtmlAttribute(message.id)}" class="cursor-pointer hover:bg-primary/10 transition-colors" title="${escapeHtmlAttribute(copy.messages.jumpToOriginal)}"><strong>${escapeHtml(message.author)}:</strong> ${escapeHtml(text)}</blockquote><p></p>`
     editor?.chain().focus().insertContent(replyHtml).run()
   }, [copy.messages.jumpToOriginal, editor])
 
