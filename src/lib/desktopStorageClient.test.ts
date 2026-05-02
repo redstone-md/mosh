@@ -30,17 +30,14 @@ describe('desktopStorageClient', () => {
     expect(invoke).toHaveBeenCalledWith('storage_overview')
   })
 
-  it('sends validated backup export payloads', async () => {
-    invoke.mockResolvedValue(undefined)
+  it('starts native backup export flow', async () => {
+    invoke.mockResolvedValue(true)
 
     const { desktopStorageClient } = await import('./desktopStorageClient')
-    await desktopStorageClient.exportBackup('C:/backups/mosh.json')
+    const exported = await desktopStorageClient.exportBackup()
 
-    expect(invoke).toHaveBeenCalledWith('export_storage_backup', {
-      payload: {
-        path: 'C:/backups/mosh.json',
-      },
-    })
+    expect(exported).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('export_storage_backup')
   })
 
   it('parses all room archives payloads', async () => {
@@ -62,16 +59,13 @@ describe('desktopStorageClient', () => {
     expect(invoke).toHaveBeenCalledWith('load_all_room_archives')
   })
 
-  it('sends validated backup import payloads', async () => {
-    invoke.mockResolvedValue(undefined)
+  it('starts native backup import flow', async () => {
+    invoke.mockResolvedValue(true)
 
     const { desktopStorageClient } = await import('./desktopStorageClient')
-    await desktopStorageClient.importBackup('C:/backups/mosh.json')
+    const imported = await desktopStorageClient.importBackup()
 
-    expect(invoke).toHaveBeenCalledWith('import_storage_backup', {
-      payload: {
-        path: 'C:/backups/mosh.json',
-      },
-    })
+    expect(imported).toBe(true)
+    expect(invoke).toHaveBeenCalledWith('import_storage_backup')
   })
 })

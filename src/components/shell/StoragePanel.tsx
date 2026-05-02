@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { open, save } from '@tauri-apps/plugin-dialog'
 import toast from 'react-hot-toast'
 
 import type { IdentityRollbackSnapshot, IdentityTransferEvent, SigningIdentity } from '../../lib/appShellSchemas'
@@ -11,11 +10,6 @@ import { Button } from '../ui/button'
 import { IdentityRollbackPanel } from './IdentityRollbackPanel'
 import { IdentityTransferHistoryPanel } from './IdentityTransferHistoryPanel'
 import { IdentityTransferPanel } from './IdentityTransferPanel'
-
-function createBackupFileName() {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `mosh-backup-${timestamp}.json`
-}
 
 type StoragePanelProps = {
   identityTransferHistory: IdentityTransferEvent[]
@@ -46,22 +40,7 @@ export function StoragePanel({
   })
   const exportBackup = useMutation({
     mutationFn: async () => {
-      const path = await save({
-        defaultPath: createBackupFileName(),
-        filters: [
-          {
-            name: 'JSON',
-            extensions: ['json'],
-          },
-        ],
-      })
-
-      if (!path) {
-        return false
-      }
-
-      await desktopStorageClient.exportBackup(path)
-      return true
+      return desktopStorageClient.exportBackup()
     },
     onSuccess: (written) => {
       if (written) {
@@ -75,23 +54,7 @@ export function StoragePanel({
   })
   const importBackup = useMutation({
     mutationFn: async () => {
-      const path = await open({
-        multiple: false,
-        directory: false,
-        filters: [
-          {
-            name: 'JSON',
-            extensions: ['json'],
-          },
-        ],
-      })
-
-      if (!path || Array.isArray(path)) {
-        return false
-      }
-
-      await desktopStorageClient.importBackup(path)
-      return true
+      return desktopStorageClient.importBackup()
     },
     onSuccess: async (restored) => {
       if (!restored) {

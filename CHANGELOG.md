@@ -36,3 +36,4 @@ All notable user-visible changes in this project should be documented in this fi
 - Hardened message search indexing and copy text extraction so untrusted message HTML is never parsed through DOM `innerHTML`.
 - Escaped reply quote metadata before reinserting message text into editor HTML, preventing encoded markup from rehydrating in drafts.
 - Raised frontend and Tauri dependency minimums to patched versions after npm and RustSec audit review.
+- Hardened backup import/export so desktop file dialogs are owned by Rust commands instead of accepting WebView-supplied filesystem paths.
