@@ -36,14 +36,14 @@ export function registerFrontendDebugLogging() {
 
   globalHandlersRegistered = true
   window.addEventListener('error', (event) => {
-    void debugLogError('Unhandled frontend error', {
+    void debugLogError(`Unhandled frontend error: ${describeUnknownError(event.error ?? event.message)}`, {
       file: event.filename || undefined,
       line: event.lineno || undefined,
       keyValues: errorKeyValues(event.error ?? event.message),
     })
   })
   window.addEventListener('unhandledrejection', (event) => {
-    void debugLogError('Unhandled frontend promise rejection', {
+    void debugLogError(`Unhandled frontend promise rejection: ${describeUnknownError(event.reason)}`, {
       keyValues: errorKeyValues(event.reason),
     })
   })
@@ -81,4 +81,16 @@ function safeJson(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+export function describeUnknownError(value: unknown): string {
+  if (value instanceof Error) {
+    return value.message || value.name
+  }
+
+  if (typeof value === 'string') {
+    return value
+  }
+
+  return safeJson(value)
 }

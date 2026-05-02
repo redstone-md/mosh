@@ -17,6 +17,7 @@ import { useRoomDraftState } from './hooks/useRoomDraftState'
 import { useRoomActivityState } from './hooks/useRoomActivityState'
 import { useShellPreferences } from './hooks/useShellPreferences'
 import { useSignedChatArchive } from './hooks/useSignedChatArchive'
+import { debugLogError, describeUnknownError } from './lib/debugLog'
 import {
   findRoomById,
   getVisiblePeers,
@@ -397,7 +398,19 @@ export function App() {
     if (!activeRoom || messageDraft.trim().length === 0) return
     const nextDraft = messageDraft.trim()
     roomDraftState.clearDraft(activeRoom.id)
-    await messageOutbox.sendMessage(activeRoom.id, nextDraft)
+    try {
+      await messageOutbox.sendMessage(activeRoom.id, nextDraft)
+    } catch (error) {
+      void debugLogError(`Message send failed: ${describeUnknownError(error)}`)
+    }
+  }
+
+  async function handleRetryMessage(clientId: string) {
+    try {
+      await messageOutbox.retryMessage(clientId)
+    } catch (error) {
+      void debugLogError(`Message retry failed: ${describeUnknownError(error)}`)
+    }
   }
 
   function handleThemeChange(theme: ThemeId) {
@@ -573,7 +586,7 @@ export function App() {
         onApplyInvite={inviteFlow.applyInvite}
         onDraftChange={(value) => roomDraftState.setDraft(activeRoom.id, value)}
         onSendMessage={() => void handleSendMessage()}
-        onRetryMessage={(clientId) => void messageOutbox.retryMessage(clientId)}
+        onRetryMessage={(clientId) => void handleRetryMessage(clientId)}
         onDismissMessage={messageOutbox.dismissMessage}
         onEditMessage={messageOverlayState.editMessage}
         onToggleMessageHidden={messageOverlayState.toggleMessageHidden}
