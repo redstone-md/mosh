@@ -4,6 +4,18 @@ All notable user-visible changes in this project should be documented in this fi
 
 ## Unreleased
 
+## 0.1.1 - 2026-05-03
+
+- Added Secret DM rooms with app-level E2EE envelopes, explicit peer fingerprint verification, and encrypted local secret archives.
+- Added relay mesh diagnostics for direct, relayed, relay-capable, NAT, supernode, and tracker state.
+- Enabled automatic mesh bootstrap defaults for public trackers and NAT mapping without requiring a managed VPS.
+- Added desktop debug logs written to file for frontend and runtime troubleshooting.
+- Fixed desktop storage command payload shape for saved preferences and signing identities.
+- Fixed no-peer message sending so local failed sends stay recoverable without confusing system echoes.
+- Fixed Windows ARM64 CI runtime bundling by running the cgo build inside MSYS2 CLANGARM64.
+
+## 0.1.0 - 2026-05-02
+
 - Initialized changelog tracking.
 - Added multilingual shell support with system language detection and manual language override in onboarding and settings.
 - Rebuilt onboarding into a cinematic multi-step mesh setup flow with splash animation, progress dots, and step-based configuration.

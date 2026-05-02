@@ -1,6 +1,6 @@
 [package]
 name = "mosh"
-version = "0.1.0"
+version = "0.1.1"
 description = "MOSH desktop chat client powered by the MOSS runtime"
 edition = "2021"
 
