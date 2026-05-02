@@ -81,6 +81,20 @@ pub struct PeerSummary {
     pub latency: String,
     pub status: String,
     pub rooms: Vec<String>,
+    pub identity_version: Option<u8>,
+    pub secure_fingerprint: Option<String>,
+    pub signing_public_key_jwk: Option<serde_json::Value>,
+    pub encryption_public_key_jwk: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretMessageEvent {
+    pub id: String,
+    pub room_id: String,
+    pub sender_peer_id: String,
+    pub payload_json: String,
+    pub received_at: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -134,6 +148,7 @@ pub struct DesktopSnapshot {
     pub diagnostics: RuntimeDiagnostics,
     pub rooms: Vec<RoomSummary>,
     pub messages: Vec<Message>,
+    pub secret_messages: Vec<SecretMessageEvent>,
     pub peers: Vec<PeerSummary>,
     pub call_state: Option<CallStateSummary>,
     pub signaling_events: Vec<SignalingEvent>,

@@ -4,7 +4,10 @@ import {
   joinVoiceRoomInputSchema,
   desktopSnapshotSchema,
   openDirectRoomInputSchema,
+  openSecretRoomInputSchema,
   publishMessageInputSchema,
+  publishSecretMessageInputSchema,
+  identityPresenceInputSchema,
   sendCallSignalInputSchema,
   startCallInputSchema,
   subscribeRoomInputSchema,
@@ -15,7 +18,10 @@ import {
   type DesktopSnapshot,
   type JoinVoiceRoomInput,
   type OpenDirectRoomInput,
+  type OpenSecretRoomInput,
   type PublishMessageInput,
+  type PublishSecretMessageInput,
+  type IdentityPresenceInput,
   type SubscribeRoomInput,
   type UpdateRuntimeSettingsInput,
 } from './schemas'
@@ -91,12 +97,42 @@ export class DesktopStatusClient {
     return result.data
   }
 
+  async setIdentityPresence(input: IdentityPresenceInput): Promise<DesktopSnapshot> {
+    const parsed = identityPresenceInputSchema.parse(input)
+    const payload = await invoke('set_identity_presence', { payload: parsed })
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid identity-presence payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async openSecretRoom(input: OpenSecretRoomInput): Promise<DesktopSnapshot> {
+    const parsed = openSecretRoomInputSchema.parse(input)
+    const payload = await invoke('open_secret_room', parsed)
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid secret-room payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
   async publishMessage(input: PublishMessageInput): Promise<DesktopSnapshot> {
     const parsed = publishMessageInputSchema.parse(input)
     const payload = await invoke('publish_message', parsed)
     const result = desktopSnapshotSchema.safeParse(payload)
     if (!result.success) {
       throw new Error(`Invalid publish payload: ${result.error.message}`)
+    }
+    return result.data
+  }
+
+  async publishSecretMessage(input: PublishSecretMessageInput): Promise<DesktopSnapshot> {
+    const parsed = publishSecretMessageInputSchema.parse(input)
+    const payload = await invoke('publish_secret_message', parsed)
+    const result = desktopSnapshotSchema.safeParse(payload)
+    if (!result.success) {
+      throw new Error(`Invalid secret publish payload: ${result.error.message}`)
     }
     return result.data
   }

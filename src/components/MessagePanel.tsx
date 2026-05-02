@@ -47,6 +47,10 @@ type MessagePanelProps = {
   onResolveExternalFocus?: () => void
   isSending: boolean
   errorNote?: string
+  disabled?: boolean
+  disabledNote?: string
+  unlockPassphrase?: string
+  onUnlockPassphraseChange?: (value: string) => void
 }
 
 export function MessagePanel({
@@ -70,6 +74,10 @@ export function MessagePanel({
   onResolveExternalFocus,
   isSending,
   errorNote,
+  disabled = false,
+  disabledNote,
+  unlockPassphrase = '',
+  onUnlockPassphraseChange,
 }: MessagePanelProps) {
   const { copy } = useI18n()
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -85,6 +93,8 @@ export function MessagePanel({
   handleSendRef.current = onSend
   const isSendingRef = useRef(isSending)
   isSendingRef.current = isSending
+  const disabledRef = useRef(disabled)
+  disabledRef.current = disabled
   const draftRef = useRef(draft)
   draftRef.current = draft
 
@@ -118,7 +128,12 @@ export function MessagePanel({
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault()
             const currentDraft = draftRef.current
-            if (!isSendingRef.current && currentDraft.trim() !== '' && currentDraft !== '<p></p>') {
+            if (
+              !disabledRef.current &&
+              !isSendingRef.current &&
+              currentDraft.trim() !== '' &&
+              currentDraft !== '<p></p>'
+            ) {
               handleSendRef.current()
             }
             return true // Stop ProseMirror from inserting a newline
@@ -392,10 +407,28 @@ export function MessagePanel({
             </div>
           )}
 
+          {disabled ? (
+            <div className="mb-3 rounded-md border border-border bg-[var(--panel-strong)] px-4 py-3">
+              <p className="text-sm font-medium">{disabledNote}</p>
+              {onUnlockPassphraseChange ? (
+                <input
+                  type="password"
+                  value={unlockPassphrase}
+                  onChange={(event) => onUnlockPassphraseChange(event.target.value)}
+                  placeholder={copy.messages.secretArchivePassphrase}
+                  className="mt-3 h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus:border-primary"
+                />
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="relative group">
             <div className="absolute -inset-1 bg-gradient-to-r from-primary/20 to-accent/20 rounded-2xl blur opacity-0 group-focus-within:opacity-100 transition duration-1000 group-focus-within:duration-200"></div>
             <div className="relative bg-muted/80 backdrop-blur-xl border border-border/50 rounded-2xl flex items-end gap-2 shadow-2xl pr-2 min-h-[52px]">
-              <div className="flex-1 min-w-0 flex items-center cursor-text" onClick={() => editor?.commands.focus()}>
+              <div
+                className="flex-1 min-w-0 flex items-center cursor-text"
+                onClick={() => !disabled && editor?.commands.focus()}
+              >
                 <EditorContent editor={editor} className="w-full" />
               </div>
 
@@ -406,6 +439,7 @@ export function MessagePanel({
                   className="p-2.5 text-foreground/40 hover:text-foreground hover:bg-foreground/5 rounded-xl transition-colors"
                   onClick={() => fileInputRef.current?.click()}
                   title={copy.messages.attachFile}
+                  disabled={disabled}
                 >
                   <Paperclip size={18} />
                 </button>
@@ -414,6 +448,7 @@ export function MessagePanel({
                   className="p-2.5 text-foreground/40 hover:text-foreground hover:bg-foreground/5 rounded-xl transition-colors"
                   onClick={() => setShowEmojiPicker(!showEmojiPicker)}
                   title={copy.messages.insertEmoji}
+                  disabled={disabled}
                 >
                   <Smile size={18} />
                 </button>
@@ -425,7 +460,7 @@ export function MessagePanel({
                       : 'bg-foreground/5 text-foreground/20'
                   )}
                   onClick={onSend}
-                  disabled={isSending || !draft.trim() || draft === '<p></p>'}
+                  disabled={disabled || isSending || !draft.trim() || draft === '<p></p>'}
                   type="button"
                 >
                   {isSending ? (

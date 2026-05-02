@@ -440,12 +440,14 @@ fn error_message(code: i32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, path::PathBuf};
+    use std::{env, path::PathBuf, sync::Mutex};
 
     use super::{
         clear_bundled_runtime_path, set_bundled_runtime_path, shared_candidates, MeshInfo,
         DEV_RUNTIME_PATH_ENV,
     };
+
+    static TEST_RUNTIME_PATH_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn mesh_info_allows_null_collections() {
@@ -475,6 +477,9 @@ mod tests {
 
     #[test]
     fn bundled_runtime_path_is_prioritized() {
+        let _guard = TEST_RUNTIME_PATH_LOCK
+            .lock()
+            .expect("test lock should be available");
         let bundled = env::temp_dir()
             .join("mosh-bundled-runtime-test")
             .join(super::library_file_name());
@@ -488,6 +493,9 @@ mod tests {
 
     #[test]
     fn dev_runtime_path_requires_absolute_path() {
+        let _guard = TEST_RUNTIME_PATH_LOCK
+            .lock()
+            .expect("test lock should be available");
         clear_bundled_runtime_path();
         env::set_var(DEV_RUNTIME_PATH_ENV, super::library_file_name());
 
@@ -501,6 +509,9 @@ mod tests {
 
     #[test]
     fn shared_candidates_do_not_trust_current_directory() {
+        let _guard = TEST_RUNTIME_PATH_LOCK
+            .lock()
+            .expect("test lock should be available");
         clear_bundled_runtime_path();
         env::remove_var(DEV_RUNTIME_PATH_ENV);
         let cwd = env::current_dir().expect("current dir should resolve");

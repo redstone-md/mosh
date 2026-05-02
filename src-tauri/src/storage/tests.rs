@@ -109,6 +109,11 @@ fn backup_collects_settings_identity_and_archives() {
         &json!({ "roomId": "lobby", "signature": "sig" }),
     )
     .expect("archive write should succeed");
+    write_json(
+        &paths.secret_archive_path("secret-dm-a-b"),
+        &json!({ "roomId": "secret-dm-a-b", "ciphertext": "sealed" }),
+    )
+    .expect("secret archive write should succeed");
 
     let backup = build_backup(&paths).expect("backup build should succeed");
 
@@ -122,6 +127,11 @@ fn backup_collects_settings_identity_and_archives() {
     assert_eq!(
         backup.archives[0],
         json!({ "roomId": "lobby", "signature": "sig" })
+    );
+    assert_eq!(backup.secret_archives.len(), 1);
+    assert_eq!(
+        backup.secret_archives[0],
+        json!({ "roomId": "secret-dm-a-b", "ciphertext": "sealed" })
     );
 
     let _ = fs::remove_dir_all(base_dir);
@@ -138,12 +148,18 @@ fn clearing_storage_removes_existing_files() {
         .expect("identity write should succeed");
     write_json(&paths.archive_path("lobby"), &json!({ "roomId": "lobby" }))
         .expect("archive write should succeed");
+    write_json(
+        &paths.secret_archive_path("secret-dm-a-b"),
+        &json!({ "roomId": "secret-dm-a-b" }),
+    )
+    .expect("secret archive write should succeed");
 
     clear_existing_storage(&paths).expect("clear should succeed");
 
     assert!(!paths.settings_path.exists());
     assert!(!paths.identity_path.exists());
     assert!(!paths.archives_dir.exists());
+    assert!(!paths.secret_archives_dir.exists());
 
     let _ = fs::remove_dir_all(base_dir);
 }
@@ -191,13 +207,19 @@ fn import_backup_replaces_existing_storage_contents() {
     )
     .expect("stale archive write should succeed");
     write_json(
+        &paths.secret_archive_path("old-secret"),
+        &json!({ "roomId": "old-secret" }),
+    )
+    .expect("stale secret archive write should succeed");
+    write_json(
         &backup_path,
         &json!({
             "schema_version": 1,
             "exported_at_unix_ms": 1,
             "settings": { "theme": "moss" },
             "signing_identity": { "fingerprint": "fresh" },
-            "archives": [{ "roomId": "lobby", "signature": "sig" }]
+            "archives": [{ "roomId": "lobby", "signature": "sig" }],
+            "secret_archives": [{ "roomId": "secret-dm-a-b", "ciphertext": "sealed" }]
         }),
     )
     .expect("backup file write should succeed");
@@ -213,9 +235,15 @@ fn import_backup_replaces_existing_storage_contents() {
         Some(json!({ "fingerprint": "fresh" }))
     );
     assert!(!paths.archive_path("old-room").exists());
+    assert!(!paths.secret_archive_path("old-secret").exists());
     assert_eq!(
         read_json(&paths.archive_path("lobby")).expect("archive read should succeed"),
         Some(json!({ "roomId": "lobby", "signature": "sig" }))
+    );
+    assert_eq!(
+        read_json(&paths.secret_archive_path("secret-dm-a-b"))
+            .expect("secret archive read should succeed"),
+        Some(json!({ "roomId": "secret-dm-a-b", "ciphertext": "sealed" }))
     );
 
     let _ = fs::remove_dir_all(base_dir);

@@ -40,6 +40,18 @@ export const peerSummarySchema = z.object({
   latency: z.string().min(1),
   status: z.string().min(1),
   rooms: z.array(z.string().min(1)),
+  identityVersion: z.number().int().optional().nullable(),
+  secureFingerprint: z.string().min(1).optional().nullable(),
+  signingPublicKeyJwk: z.record(z.string(), z.unknown()).optional().nullable(),
+  encryptionPublicKeyJwk: z.record(z.string(), z.unknown()).optional().nullable(),
+})
+
+export const secretMessageEventSchema = z.object({
+  id: z.string().min(1),
+  roomId: z.string().min(1),
+  senderPeerId: z.string().min(1),
+  payloadJson: z.string().min(1),
+  receivedAt: z.string().min(1),
 })
 
 export const callStateSchema = z.object({
@@ -161,6 +173,17 @@ export const openDirectRoomInputSchema = z.object({
   target: z.string().trim().min(1).max(128),
 })
 
+export const openSecretRoomInputSchema = z.object({
+  target: z.string().trim().min(1).max(128),
+})
+
+export const identityPresenceInputSchema = z.object({
+  identityVersion: z.literal(2),
+  secureFingerprint: z.string().min(1),
+  signingPublicKeyJwk: z.record(z.string(), z.unknown()),
+  encryptionPublicKeyJwk: z.record(z.string(), z.unknown()),
+})
+
 export const publishMessageInputSchema = z.object({
   room: z
     .string()
@@ -168,6 +191,15 @@ export const publishMessageInputSchema = z.object({
     .min(1)
     .transform((value) => value.replace(/^#/, '').toLowerCase()),
   body: z.string().trim().min(1).max(65535),
+})
+
+export const publishSecretMessageInputSchema = z.object({
+  room: z
+    .string()
+    .trim()
+    .min(1)
+    .transform((value) => value.replace(/^#/, '').toLowerCase()),
+  payloadJson: z.string().trim().min(1).max(262_144),
 })
 
 export const startCallInputSchema = z.object({
@@ -202,6 +234,7 @@ export const desktopSnapshotSchema = z.object({
   diagnostics: runtimeDiagnosticsSchema,
   rooms: z.array(roomSummarySchema),
   messages: z.array(messageSchema),
+  secretMessages: z.array(secretMessageEventSchema).default([]),
   peers: z.array(peerSummarySchema),
   callState: callStateSchema.nullable(),
   signalingEvents: z.array(signalingEventSchema),
@@ -215,6 +248,7 @@ export type RuntimeDiagnostics = z.infer<typeof runtimeDiagnosticsSchema>
 export type RoomSummary = z.infer<typeof roomSummarySchema>
 export type Message = z.infer<typeof messageSchema>
 export type PeerSummary = z.infer<typeof peerSummarySchema>
+export type SecretMessageEvent = z.infer<typeof secretMessageEventSchema>
 export type CallState = z.infer<typeof callStateSchema>
 export type SignalingEvent = z.infer<typeof signalingEventSchema>
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>
@@ -225,7 +259,10 @@ export type UpdateRuntimeSettingsInput = z.infer<typeof updateRuntimeSettingsInp
 export type SubscribeRoomInput = z.infer<typeof subscribeRoomInputSchema>
 export type ConnectPeerInput = z.infer<typeof connectPeerInputSchema>
 export type OpenDirectRoomInput = z.infer<typeof openDirectRoomInputSchema>
+export type OpenSecretRoomInput = z.infer<typeof openSecretRoomInputSchema>
+export type IdentityPresenceInput = z.infer<typeof identityPresenceInputSchema>
 export type PublishMessageInput = z.infer<typeof publishMessageInputSchema>
+export type PublishSecretMessageInput = z.infer<typeof publishSecretMessageInputSchema>
 export type StartCallInput = z.infer<typeof startCallInputSchema>
 export type SendCallSignalInput = z.infer<typeof sendCallSignalInputSchema>
 export type JoinVoiceRoomInput = z.infer<typeof joinVoiceRoomInputSchema>

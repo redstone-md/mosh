@@ -236,6 +236,23 @@ export const ruTranslations = {
     insertEmoji: 'Вставить эмодзи',
     attachmentTooLarge: 'Файл слишком большой. В этой сборке встроенные вложения ограничены 40KB.',
     imageTooLarge: 'Файл слишком большой. В этой демо Base64-вложения ограничены 40KB.',
+    secretLocked: 'Разблокируй secret-архив, чтобы читать и отправлять Secret DM.',
+    secretArchivePassphrase: 'Пароль secret-архива',
+    openSecretChat: (peerName: string) => `Открыть секретный чат: ${peerName}`,
+    secretChatUnavailable: (peerName: string) => `${peerName} ещё не объявил E2EE-ключи.`,
+    desktopSnapshotNotReady: 'Снимок desktop-состояния ещё не готов.',
+    localE2eeNotReady: 'Локальная E2EE identity ещё не готова.',
+    secretArchiveUnlockRequired: 'Разблокируй secret-архив перед отправкой.',
+    secretRecipientUntrusted: 'Получатель Secret DM ещё не подтверждён.',
+    secretDecryptFailed: 'Secret-сообщение не удалось расшифровать или проверить.',
+  },
+  secretVerify: {
+    title: 'Проверка отпечатка Secret DM',
+    description: 'Сверь этот отпечаток с другим человеком через доверенный канал перед открытием Secret DM.',
+    noFallback:
+      'У Secret DM нет plaintext fallback. Подтверждение локально сохранит signing и encryption public keys этого пира.',
+    cancel: 'Отмена',
+    approve: 'Подтвердить и открыть',
   },
   settings: {
     description: 'Внешний вид, загрузка рантайма и метаданные подписанного локального архива.',

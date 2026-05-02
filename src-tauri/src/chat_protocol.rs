@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const CONTROL_ROOM: &str = "__moss_chat_control__";
 
@@ -29,6 +30,22 @@ pub struct ChatPayload {
     pub signal_type: String,
     #[serde(default)]
     pub signal_data: String,
+    #[serde(default)]
+    pub identity_version: Option<u8>,
+    #[serde(default)]
+    pub secure_fingerprint: String,
+    #[serde(default)]
+    pub signing_public_key_jwk: Option<Value>,
+    #[serde(default)]
+    pub encryption_public_key_jwk: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct IdentityPresence {
+    pub identity_version: Option<u8>,
+    pub secure_fingerprint: String,
+    pub signing_public_key_jwk: Option<Value>,
+    pub encryption_public_key_jwk: Option<Value>,
 }
 
 impl ChatPayload {
@@ -41,12 +58,19 @@ impl ChatPayload {
         }
     }
 
-    pub fn presence(nick: &str, rooms: &[String]) -> Self {
+    pub fn presence(nick: &str, rooms: &[String], identity: Option<&IdentityPresence>) -> Self {
         Self {
             kind: "presence".to_string(),
             nick: nick.to_string(),
             sent_at: hhmmss_now(),
             rooms: rooms.to_vec(),
+            identity_version: identity.and_then(|value| value.identity_version),
+            secure_fingerprint: identity
+                .map(|value| value.secure_fingerprint.clone())
+                .unwrap_or_default(),
+            signing_public_key_jwk: identity.and_then(|value| value.signing_public_key_jwk.clone()),
+            encryption_public_key_jwk: identity
+                .and_then(|value| value.encryption_public_key_jwk.clone()),
             ..Self::default()
         }
     }
@@ -54,6 +78,17 @@ impl ChatPayload {
     pub fn dm_invite(nick: &str, room: &str, target: &str) -> Self {
         Self {
             kind: "dm_invite".to_string(),
+            nick: nick.to_string(),
+            room: room.to_string(),
+            target: target.to_string(),
+            sent_at: hhmmss_now(),
+            ..Self::default()
+        }
+    }
+
+    pub fn secret_dm_invite(nick: &str, room: &str, target: &str) -> Self {
+        Self {
+            kind: "secret_dm_invite".to_string(),
             nick: nick.to_string(),
             room: room.to_string(),
             target: target.to_string(),
@@ -117,6 +152,22 @@ pub fn direct_room_name(local_peer_id: &str, remote_peer_id: &str) -> String {
         std::mem::swap(&mut a, &mut b);
     }
     format!("dm-{}-{}", truncate_peer(&a), truncate_peer(&b))
+}
+
+pub fn secret_room_name(local_peer_id: &str, remote_peer_id: &str) -> String {
+    let mut a = local_peer_id.trim().to_lowercase();
+    let mut b = remote_peer_id.trim().to_lowercase();
+    if a.is_empty() || b.is_empty() {
+        return "secret-dm".to_string();
+    }
+    if a > b {
+        std::mem::swap(&mut a, &mut b);
+    }
+    format!("secret-dm-{}-{}", truncate_peer(&a), truncate_peer(&b))
+}
+
+pub fn is_secret_room(channel: &str) -> bool {
+    normalize_room_id(channel).starts_with("secret-dm-")
 }
 
 pub fn normalize_room_id(channel: &str) -> String {
