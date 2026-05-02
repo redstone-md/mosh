@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Message } from './schemas'
-import { isMessagePinned, resolvePinnedMessages, togglePinnedMessage } from './messagePins'
+import { getPinnedMessageIds, isMessagePinned, resolvePinnedMessages, togglePinnedMessage } from './messagePins'
 
 function createMessage(id: string): Message {
   return {
@@ -46,5 +46,15 @@ describe('messagePins', () => {
     expect(
       resolvePinnedMessages(current, 'lobby', [createMessage('m-1'), createMessage('m-2'), createMessage('m-3')])
     ).toEqual([createMessage('m-3'), createMessage('m-1')])
+  })
+
+  it('treats prototype-named rooms as empty unless they have own array pins', () => {
+    expect(getPinnedMessageIds({}, '__proto__')).toEqual([])
+    expect(isMessagePinned({}, 'constructor', 'm-1')).toBe(false)
+    expect(resolvePinnedMessages({}, '__proto__', [createMessage('m-1')])).toEqual([])
+
+    const pinned = togglePinnedMessage({}, '__proto__', 'm-1')
+    expect(getPinnedMessageIds(pinned, '__proto__')).toEqual(['m-1'])
+    expect(resolvePinnedMessages(pinned, '__proto__', [createMessage('m-1')])).toEqual([createMessage('m-1')])
   })
 })
