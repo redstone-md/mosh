@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
+    callback_state::shared_callback_state,
     ffi::MeshInfo,
     models::{RuntimeDiagnostics, RuntimeSettings},
 };
@@ -81,7 +82,15 @@ impl DesktopRuntimeConfig {
         let (
             active_mesh_id,
             active_listen_port,
+            advertised_addr,
             peer_count,
+            known_peer_count,
+            direct_peer_count,
+            relayed_peer_count,
+            relay_capable_peer_count,
+            relay_session_count,
+            relay_route_count,
+            nat_type,
             channel_count,
             active_channels,
             supernode_ready,
@@ -89,7 +98,15 @@ impl DesktopRuntimeConfig {
             Some(mesh) => (
                 mesh.mesh_id.clone(),
                 mesh.listen_port.to_string(),
+                fallback_label(&mesh.advertised_addr, "not advertised"),
                 mesh.peer_count,
+                mesh.known_peer_count,
+                mesh.direct_peer_count,
+                mesh.relayed_peer_count,
+                mesh.relay_capable_peer_count,
+                mesh.relay_session_count,
+                mesh.relay_route_count,
+                fallback_label(&mesh.nat_type, "unknown"),
                 mesh.channels.len(),
                 mesh.channels.clone(),
                 mesh.supernode_ready,
@@ -97,12 +114,24 @@ impl DesktopRuntimeConfig {
             None => (
                 "offline".to_string(),
                 "offline".to_string(),
+                "offline".to_string(),
                 0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                "unknown".to_string(),
                 0,
                 Vec::new(),
                 false,
             ),
         };
+        let (tracker_candidate_count, tracker_connected_count) = shared_callback_state()
+            .lock()
+            .map(|state| state.tracker_counters())
+            .unwrap_or((0, 0));
 
         RuntimeDiagnostics {
             configured_nickname: self.nickname.clone(),
@@ -122,6 +151,16 @@ impl DesktopRuntimeConfig {
             active_mesh_id,
             active_listen_port,
             peer_count,
+            known_peer_count,
+            direct_peer_count,
+            relayed_peer_count,
+            relay_capable_peer_count,
+            relay_session_count,
+            relay_route_count,
+            tracker_candidate_count,
+            tracker_connected_count,
+            advertised_addr,
+            nat_type,
             channel_count,
             active_channels,
             supernode_ready,
@@ -136,6 +175,7 @@ impl DesktopRuntimeConfig {
                 "upnp_enabled": true,
                 "natpmp_enabled": true,
                 "pcp_enabled": true,
+                "supernode_min_uptime_sec": 60,
             },
         });
         if let Some(startup_peer) = &self.startup_peer {
@@ -233,6 +273,14 @@ fn normalize_peer(value: String) -> Result<Option<String>, String> {
         return Err("startup peer port must be greater than zero".to_string());
     }
     Ok(Some(trimmed.to_string()))
+}
+
+fn fallback_label(value: &str, fallback: &str) -> String {
+    if value.trim().is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn port_label(port: u16) -> String {
