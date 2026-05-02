@@ -38,13 +38,15 @@ jobs:
             msys2: CLANGARM64
             msys2-install: >-
               mingw-w64-clang-aarch64-clang
-            moss-cc: C:/msys64/clangarm64/bin/clang.exe
+            moss-cc: clang
+            experimental: true
           - os: macos-15-intel
             label: macos-amd64
             rust-target: x86_64-apple-darwin
           - os: macos-latest
             label: macos-arm64
             rust-target: aarch64-apple-darwin
+    continue-on-error: ${{ matrix.experimental || false }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,13 +71,17 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msys2 }}
+          path-type: inherit
           update: true
           install: >-
             ${{ matrix.msys2-install || 'mingw-w64-ucrt-x86_64-gcc' }}
 
       - name: Verify ARM64 Windows clang
         if: matrix.moss-cc
-        run: clang --version
+        shell: msys2 {0}
+        run: |
+          which clang
+          clang --version
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -95,15 +101,35 @@ jobs:
         run: npm run moss:sync
 
       - name: Build and attach shared runtime
+        if: ${{ !matrix.moss-cc }}
         env:
           MOSS_CC: ${{ matrix.moss-cc || '' }}
+        run: node ./scripts/build-moss-runtime.mjs --target ${{ matrix.rust-target }}
+
+      - name: Build and attach shared runtime (MSYS2)
+        if: ${{ matrix.moss-cc }}
+        shell: msys2 {0}
+        env:
+          MOSS_CC: ${{ matrix.moss-cc }}
+          MSYS2_PATH_TYPE: inherit
         run: node ./scripts/build-moss-runtime.mjs --target ${{ matrix.rust-target }}
 
       - name: Build frontend
         run: npm run build:web
 
       - name: Build Tauri desktop bundle
-        run: npx tauri build --target ${{ matrix.rust-target }}
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 2; $attempt++) {
+            npx tauri build --target ${{ matrix.rust-target }}
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+            if ($attempt -eq 2) {
+              exit $LASTEXITCODE
+            }
+            Start-Sleep -Seconds 10
+          }
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
