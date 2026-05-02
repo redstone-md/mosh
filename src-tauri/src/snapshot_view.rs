@@ -96,7 +96,7 @@ pub fn failed_snapshot(
         stage: "Desktop runtime".to_string(),
         runtime: RuntimeStatus {
             state: "Runtime unavailable".to_string(),
-            summary: "Desktop backend could not load or query libmoss. Place the shared library next to the executable or set MOSS_SHARED_PATH.".to_string(),
+            summary: "Desktop backend could not load or query libmoss. Bundle the shared runtime or place it next to the executable.".to_string(),
             route: "No active transport".to_string(),
             nat_hint: "Unknown".to_string(),
             shared_bridge: error.clone(),

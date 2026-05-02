@@ -8,9 +8,7 @@ mod snapshot_view;
 mod state;
 mod storage;
 
-use std::env;
-
-use crate::ffi::library_file_name;
+use crate::ffi::{library_file_name, set_bundled_runtime_path};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::path::BaseDirectory;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -32,16 +30,12 @@ fn hide_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 fn configure_bundled_runtime_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    if env::var_os("MOSS_SHARED_PATH").is_some() {
-        return;
-    }
-
     if let Ok(path) = app.path().resolve(
         format!("moss/{}", library_file_name()),
         BaseDirectory::Resource,
     ) {
         if path.exists() {
-            env::set_var("MOSS_SHARED_PATH", path);
+            set_bundled_runtime_path(path);
         }
     }
 }
