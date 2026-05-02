@@ -36,6 +36,9 @@ jobs:
             msys2: UCRT64
           - os: windows-11-arm
             label: windows-arm64
+            msys2: CLANGARM64
+            msys2-install: >-
+              mingw-w64-clang-aarch64-clang
             moss-cc: clang
     steps:
       - name: Checkout
@@ -64,12 +67,14 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msys2 }}
+          path-type: inherit
           update: true
           install: >-
-            mingw-w64-ucrt-x86_64-gcc
+            ${{ matrix.msys2-install || 'mingw-w64-ucrt-x86_64-gcc' }}
 
       - name: Verify ARM64 Windows clang
         if: matrix.moss-cc
+        shell: msys2 {0}
         run: clang --version
 
       - name: Install Linux build dependencies
@@ -82,8 +87,17 @@ jobs:
         run: npm ci
 
       - name: Prepare bundled runtime
+        if: ${{ !matrix.moss-cc }}
         env:
           MOSS_CC: ${{ matrix.moss-cc || '' }}
+        run: npm run desktop:prepare
+
+      - name: Prepare bundled runtime (MSYS2)
+        if: ${{ matrix.moss-cc }}
+        shell: msys2 {0}
+        env:
+          MOSS_CC: ${{ matrix.moss-cc }}
+          MSYS2_PATH_TYPE: inherit
         run: npm run desktop:prepare
 
       - name: Run frontend tests
