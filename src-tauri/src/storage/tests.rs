@@ -8,7 +8,8 @@ use serde_json::json;
 
 use super::{
     archive_file_name, build_backup, clear_existing_storage, import_backup_from_path,
-    read_archives, read_json, read_room_archive, write_json, ImportedStorageBackup, StoragePaths,
+    read_archives, read_backup_file, read_json, read_room_archive, write_json,
+    ImportedStorageBackup, StoragePaths, MAX_IMPORTED_BACKUP_BYTES,
 };
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -215,6 +216,59 @@ fn import_backup_replaces_existing_storage_contents() {
     assert_eq!(
         read_json(&paths.archive_path("lobby")).expect("archive read should succeed"),
         Some(json!({ "roomId": "lobby", "signature": "sig" }))
+    );
+
+    let _ = fs::remove_dir_all(base_dir);
+}
+
+#[test]
+fn import_backup_rejects_non_file_paths() {
+    let base_dir = unique_temp_dir("mosh-import-directory-test");
+    let backup_dir = base_dir.join("backup.json");
+    fs::create_dir_all(&backup_dir).expect("temp directory should be created");
+
+    let error = read_backup_file(&backup_dir).expect_err("directory import should fail");
+
+    assert!(
+        error.contains("backup path must be a regular file"),
+        "unexpected error: {error}"
+    );
+
+    let _ = fs::remove_dir_all(base_dir);
+}
+
+#[test]
+fn import_backup_rejects_non_json_paths() {
+    let base_dir = unique_temp_dir("mosh-import-type-test");
+    let backup_path = base_dir.join("backup.txt");
+    fs::create_dir_all(&base_dir).expect("temp directory should be created");
+    fs::write(&backup_path, "{}").expect("backup file should be written");
+
+    let error = read_backup_file(&backup_path).expect_err("non-json import should fail");
+
+    assert!(
+        error.contains("backup path must point to a .json file"),
+        "unexpected error: {error}"
+    );
+
+    let _ = fs::remove_dir_all(base_dir);
+}
+
+#[test]
+fn import_backup_rejects_files_over_size_limit() {
+    let base_dir = unique_temp_dir("mosh-import-size-test");
+    let backup_path = base_dir.join("backup.json");
+    fs::create_dir_all(&base_dir).expect("temp directory should be created");
+
+    let file = fs::File::create(&backup_path).expect("oversized backup should be created");
+    file.set_len(MAX_IMPORTED_BACKUP_BYTES + 1)
+        .expect("oversized backup length should be set");
+
+    let error = read_backup_file(&backup_path).expect_err("oversized import should fail");
+
+    assert!(
+        error.contains("exceeds 67108864 byte limit"),
+        "unexpected error: {error}"
     );
 
     let _ = fs::remove_dir_all(base_dir);
