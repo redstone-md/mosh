@@ -59,11 +59,11 @@ export function useInviteFlow({
         return
       }
 
-      const updatedSnapshot = sameRuntimeDraft(data.settings, invitePatch.runtimeDraft)
-        ? data
-        : await updateRuntimeSettings.mutateAsync(invitePatch.runtimeDraft)
+      const startupPeer = resolveInviteStartupPeer(invite, data.settings.startupPeer)
 
-      const startupPeer = resolveInviteStartupPeer(invite, updatedSnapshot.settings.startupPeer)
+      if (!sameRuntimeDraft(data.settings, invitePatch.runtimeDraft)) {
+        await updateRuntimeSettings.mutateAsync(invitePatch.runtimeDraft)
+      }
       if (startupPeer) {
         await connectPeer.mutateAsync(startupPeer)
       }
