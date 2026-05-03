@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { mkdir, stat } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -23,7 +23,13 @@ async function main() {
     process.exit(result.status ?? 1);
   }
 
+  await removeGeneratedHeader();
   console.log(`moss.runtime=${OUTPUT_PATH}`);
+}
+
+async function removeGeneratedHeader() {
+  const headerName = process.platform === "win32" ? "moss.h" : "libmoss.h";
+  await rm(path.join(TARGET_DIR, headerName), { force: true });
 }
 
 async function ensureMossCheckout() {
