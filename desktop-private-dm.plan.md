@@ -148,7 +148,7 @@ Verification:
 - [x] Run broader test suite.
 - [x] Run any configured lint/analyzer/coverage commands.
 - [x] Review `git diff` for unrelated changes.
-- [ ] Commit atomically if all relevant gates pass.
+- [x] Commit atomically if all relevant gates pass.
 
 ## Baseline Results
 

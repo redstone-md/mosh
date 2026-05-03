@@ -1,0 +1,42 @@
+:root {
+  --bg-0: #0b0c0d;
+  --bg-1: #111315;
+  --bg-2: #16181b;
+  --bg-3: #1d2024;
+  --bg-4: #262a2f;
+  --line: rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(255, 255, 255, 0.1);
+  --fg-1: #eceeea;
+  --fg-2: #a8aeb0;
+  --fg-3: #6b7075;
+  --fg-4: #474b50;
+  --moss: #b7d84a;
+  --moss-300: #d4eb7a;
+  --moss-glow: rgba(183, 216, 74, 0.14);
+  --moss-ink: #0e1707;
+  --warn: #e8b65a;
+  --danger: #e86a5a;
+  --info: #6cb7e8;
+  --font-sans: "Inter Tight", "Geist", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+  font-family: var(--font-sans);
+  color: var(--fg-1);
+  background: var(--bg-0);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 960px;
+  min-height: 100vh;
+  background: var(--bg-0);
+}
+
+button,
+input { font: inherit; }
+

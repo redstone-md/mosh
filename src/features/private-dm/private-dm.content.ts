@@ -1,69 +1,107 @@
-export const appShellText = {
+export const shellText = {
   productName: "MOSH",
-  sectionLabel: "Private DM tracer",
-  statusLabel: "Desktop first",
-  navDirect: "Direct",
-  navInvite: "Invite",
-  navDiagnostics: "Diagnostics",
-  localUser: "nevermore.local",
+  windowSubtitle: "DM · Alice Park",
+  directTooltip: "Direct messages",
+  exploreTooltip: "Explore",
+  settingsTooltip: "Settings",
+  userName: "Juno",
+  userKey: "6e872f...c2b1",
 } as const;
 
-export const invitePanelText = {
-  title: "Start a private session",
-  subtitle: "Create or paste a copyable invite URI, then confirm the peer fingerprint before the MLS welcome is accepted.",
-  createLabel: "Create invite",
-  pasteLabel: "Paste invite",
+export const contacts = [
+  {
+    id: "alice",
+    name: "Alice Park",
+    handle: "alice",
+    preview: "fingerprint matches on my side",
+    time: "14:08",
+    presence: "online",
+    active: true,
+    unread: 0,
+  },
+  {
+    id: "bao",
+    name: "Bao Nguyen",
+    handle: "bao",
+    preview: "tracker announce looks healthy",
+    time: "13:40",
+    presence: "online",
+    active: false,
+    unread: 2,
+  },
+  {
+    id: "devon",
+    name: "Devon Liu",
+    handle: "devon",
+    preview: "routing...",
+    time: "--",
+    presence: "pending",
+    active: false,
+    unread: 0,
+  },
+] as const;
+
+export const inviteText = {
+  header: "Direct messages",
+  searchPlaceholder: "Search people",
+  pinnedLabel: "Pinned",
+  recentLabel: "Recent",
   inviteValue: "mosh://invite?mesh=7x9v&session=drift-41&peer=alice#fp=91A4-D2C8-77B0",
+  pasteLabel: "Paste invite",
+  createLabel: "Create invite",
+  confirmLabel: "Confirm fingerprint",
   fingerprintLabel: "Peer fingerprint",
   fingerprintValue: "91A4 D2C8 77B0 4F19",
-  confirmLabel: "Confirm fingerprint",
+  confirmedLabel: "Fingerprint confirmed",
 } as const;
 
 export const dmText = {
-  contactName: "Alice Ives",
-  contactStatus: "Private DM · MLS group pending · tracker discovery",
-  bannerTitle: "OpenMLS message encryption over Moss transport",
-  bannerBody: "Moss finds peers and carries ciphertext. OpenMLS protects private message content. Public trackers help discovery but do not hide metadata.",
-  composerPlaceholder: "Encrypted message draft",
-  sendLabel: "Send",
+  contactName: "Alice Park",
+  contactSubtitle: "Direct · tracker discovery · MLS pending",
+  bannerTitle: "OpenMLS E2EE over Moss transport",
+  bannerBody: "Moss discovers peers and carries ciphertext. OpenMLS protects private message content. Public trackers help discovery but do not hide metadata.",
+  dayLabel: "Today",
+  composerPlaceholder: "Message Alice Park",
+  footerCrypto: "OpenMLS group · ciphertext history · Moss public trackers",
 } as const;
 
-export const diagnosticsText = {
-  title: "Runtime diagnostics",
-  mossLinkLabel: "Moss link",
-  mossLinkValue: "dynamic release pin",
-  discoveryLabel: "Discovery",
-  discoveryValue: "default public trackers",
-  storageLabel: "Secrets",
-  storageValue: "native secure storage planned",
-  mlsLabel: "Private crypto",
-  mlsValue: "OpenMLS adapter boundary",
-} as const;
+export const diagnostics = [
+  ["Moss link", "dynamic release pin"],
+  ["Discovery", "default public trackers"],
+  ["Secrets", "native secure storage planned"],
+  ["Private crypto", "OpenMLS adapter boundary"],
+] as const;
 
 export const messages = [
   {
     id: "m1",
-    author: "system",
+    from: "alice",
+    name: "Alice Park",
+    key: "91a4d2...77b0",
     time: "14:02",
-    body: "Invite prepared. Waiting for fingerprint confirmation.",
+    body: "I pasted the invite. My side shows the same short fingerprint.",
   },
   {
     id: "m2",
-    author: "alice",
-    time: "14:04",
-    body: "I can see the same fingerprint on my side.",
+    from: "me",
+    name: "Juno",
+    key: "6e872f...c2b1",
+    time: "14:05",
+    body: "Confirmed. The next implementation step is turning this shell into real MLS application messages.",
   },
   {
     id: "m3",
-    author: "you",
-    time: "14:05",
-    body: "Confirmed. Next message should travel as MLS ciphertext.",
+    from: "alice",
+    name: "Alice Park",
+    key: "91a4d2...77b0",
+    time: "14:08",
+    body: "Good. Also keep the tracker metadata warning visible. It is calm enough here.",
   },
 ] as const;
 
 export const trustSteps = [
-  "Invite URI",
-  "Fingerprint",
-  "MLS welcome",
-  "Moss delivery",
+  ["Invite URI", "copied"],
+  ["Fingerprint", "manual check"],
+  ["MLS welcome", "next slice"],
+  ["Moss delivery", "tracker discovery"],
 ] as const;
