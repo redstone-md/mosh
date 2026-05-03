@@ -177,3 +177,34 @@
 .user-card strong { display: block; font-size: 13px; }
 .user-card code { color: var(--fg-3); font-size: 11px; }
 
+
+.runtime-fields {
+  display: grid;
+  gap: 8px;
+  margin: 10px 2px 6px;
+}
+
+.runtime-fields input,
+.runtime-fields textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font: inherit;
+  font-size: 12px;
+}
+
+.runtime-fields textarea {
+  min-height: 68px;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.diagnostic-error strong { color: var(--danger); }
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
