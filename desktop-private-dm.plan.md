@@ -18,6 +18,7 @@ In scope:
 - Establish frontend, Rust, docs, and test structure.
 - Create architecture documentation with Mermaid diagrams.
 - Define adapter boundaries for Moss, OpenMLS, secure storage, invite links, and diagnostics.
+- Add concrete native adapter contracts for Moss dynamic loading, OpenMLS private-message smoke coverage, and OS secure storage.
 - Port only the minimum design direction needed for onboarding, invite/fingerprint confirmation, private DM, and diagnostics.
 
 Out of scope:
@@ -134,11 +135,16 @@ Verification:
 - [x] Create Rust command boundary for app diagnostics and future Moss state.
 - [x] Define TypeScript command client around Tauri `invoke`.
 - [x] Document Moss/OpenMLS/secure-storage adapter responsibilities.
+- [x] Add concrete Rust Moss dynamic runtime adapter with platform library candidate and required FFI symbol checks.
+- [x] Add concrete Rust OpenMLS private-message adapter smoke test using `openmls_rust_crypto`.
+- [x] Add concrete Rust secure-storage adapter backed by the native OS credential store.
+- [x] Expose native runtime status through typed Tauri and TypeScript contracts.
 
 Verification:
 
 - [x] Rust command tests pass.
 - [x] Frontend calls use typed contracts and typed errors.
+- [x] Rust adapter tests exercise Moss dynamic link status and required symbol listing, OpenMLS message protection, and secure-storage byte roundtrip.
 
 ### 7. Final Validation
 
@@ -176,6 +182,7 @@ Verification:
 - `npm run format`: succeeded after the Mosh design transfer pass.
 - Vite dev server was started for visual spot-check setup and then stopped; port `1420` is free.
 - Build/test/format commands are now configured in `package.json` and `AGENTS.md`.
+- `cargo test --manifest-path src-tauri/Cargo.toml`: succeeded with 6 Rust tests covering diagnostics, Moss dynamic runtime status and FFI symbol expectations, OpenMLS private application message creation, and native secure-storage byte roundtrip.
 
 ## Already Failing Tests
 

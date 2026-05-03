@@ -1,3 +1,9 @@
+pub mod adapters;
+
+use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
+use adapters::openmls_crypto::{run_openmls_smoke_test, OpenMlsSmokeStatus};
+use adapters::secure_storage::{OsSecureSecretStore, SecureStorageStatus};
+
 const APP_NAME: &str = "Mosh";
 const PRIVACY_MODEL: &str = "OpenMLS private messages over Moss transport";
 const DISCOVERY_MODEL: &str = "default public Moss trackers";
@@ -10,6 +16,13 @@ struct AppDiagnostics {
     privacy_model: &'static str,
     discovery_model: &'static str,
     moss_link_mode: &'static str,
+}
+
+#[derive(serde::Serialize)]
+struct NativeRuntimeStatus {
+    moss: MossRuntimeStatus,
+    secure_storage: SecureStorageStatus,
+    openmls_smoke: Result<OpenMlsSmokeStatus, String>,
 }
 
 fn current_diagnostics() -> AppDiagnostics {
@@ -26,11 +39,23 @@ fn app_diagnostics() -> AppDiagnostics {
     current_diagnostics()
 }
 
+#[tauri::command]
+fn native_runtime_status() -> NativeRuntimeStatus {
+    NativeRuntimeStatus {
+        moss: MossDynamicRuntime::from_default_candidates().status(),
+        secure_storage: OsSecureSecretStore::status(),
+        openmls_smoke: run_openmls_smoke_test().map_err(|error| error.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![app_diagnostics])
+        .invoke_handler(tauri::generate_handler![
+            app_diagnostics,
+            native_runtime_status
+        ])
         .run(tauri::generate_context!())
         .expect(RUN_ERROR);
 }
@@ -47,5 +72,14 @@ mod tests {
         assert_eq!(diagnostics.privacy_model, PRIVACY_MODEL);
         assert_eq!(diagnostics.discovery_model, DISCOVERY_MODEL);
         assert_eq!(diagnostics.moss_link_mode, MOSS_LINK_MODE);
+    }
+
+    #[test]
+    fn runtime_status_checks_native_adapters() {
+        let status = native_runtime_status();
+
+        assert_eq!(status.moss.link_mode, MOSS_LINK_MODE);
+        assert_eq!(status.secure_storage.backend, "os-keychain");
+        assert!(status.openmls_smoke.is_ok());
     }
 }
