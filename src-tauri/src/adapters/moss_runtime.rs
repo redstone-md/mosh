@@ -74,14 +74,18 @@ impl MossDynamicRuntime {
 
         Ok(LoadedMossRuntime { _library: library })
     }
+
+    pub fn first_available_path(&self) -> Option<PathBuf> {
+        self.candidate_paths
+            .iter()
+            .find(|path| path.exists() && Self::load_from_path(path).is_ok())
+            .cloned()
+    }
 }
 
 impl MossRuntime for MossDynamicRuntime {
     fn status(&self) -> MossRuntimeStatus {
-        let available = self
-            .candidate_paths
-            .iter()
-            .any(|path| path.exists() && Self::load_from_path(path).is_ok());
+        let available = self.first_available_path().is_some();
 
         MossRuntimeStatus {
             link_mode: LINK_MODE,
@@ -102,6 +106,13 @@ fn default_candidate_paths() -> Vec<PathBuf> {
 
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir.join(MOSS_LIBRARY_NAME));
+        candidates.push(
+            current_dir
+                .join("src-tauri")
+                .join("target")
+                .join("moss-test")
+                .join(MOSS_LIBRARY_NAME),
+        );
         candidates.push(current_dir.join("..").join("moss").join(MOSS_LIBRARY_NAME));
     }
 

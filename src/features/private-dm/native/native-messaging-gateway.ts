@@ -24,6 +24,7 @@ export interface NativeRuntimeStatus {
     readonly available: boolean;
   };
   readonly openmls_smoke: OpenMlsSmokeResult;
+  readonly openmls_roundtrip: OpenMlsRoundTripResult;
 }
 
 export type OpenMlsSmokeResult =
@@ -32,6 +33,17 @@ export type OpenMlsSmokeResult =
         readonly provider: string;
         readonly ciphersuite: string;
         readonly protected_message_created: boolean;
+      };
+    }
+  | { readonly Err: string };
+
+export type OpenMlsRoundTripResult =
+  | {
+      readonly Ok: {
+        readonly provider: string;
+        readonly ciphersuite: string;
+        readonly welcome_joined: boolean;
+        readonly plaintext_roundtrip: boolean;
       };
     }
   | { readonly Err: string };

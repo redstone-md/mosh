@@ -1,7 +1,10 @@
 pub mod adapters;
 
 use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
-use adapters::openmls_crypto::{run_openmls_smoke_test, OpenMlsSmokeStatus};
+use adapters::openmls_crypto::{
+    run_openmls_alice_bob_roundtrip, run_openmls_smoke_test, OpenMlsRoundTripStatus,
+    OpenMlsSmokeStatus,
+};
 use adapters::secure_storage::{OsSecureSecretStore, SecureStorageStatus};
 
 const APP_NAME: &str = "Mosh";
@@ -23,6 +26,7 @@ struct NativeRuntimeStatus {
     moss: MossRuntimeStatus,
     secure_storage: SecureStorageStatus,
     openmls_smoke: Result<OpenMlsSmokeStatus, String>,
+    openmls_roundtrip: Result<OpenMlsRoundTripStatus, String>,
 }
 
 fn current_diagnostics() -> AppDiagnostics {
@@ -45,6 +49,7 @@ fn native_runtime_status() -> NativeRuntimeStatus {
         moss: MossDynamicRuntime::from_default_candidates().status(),
         secure_storage: OsSecureSecretStore::status(),
         openmls_smoke: run_openmls_smoke_test().map_err(|error| error.to_string()),
+        openmls_roundtrip: run_openmls_alice_bob_roundtrip().map_err(|error| error.to_string()),
     }
 }
 
@@ -81,5 +86,6 @@ mod tests {
         assert_eq!(status.moss.link_mode, MOSS_LINK_MODE);
         assert_eq!(status.secure_storage.backend, "os-keychain");
         assert!(status.openmls_smoke.is_ok());
+        assert!(status.openmls_roundtrip.is_ok());
     }
 }

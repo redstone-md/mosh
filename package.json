@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "npm run typecheck && vitest run && cargo test --manifest-path src-tauri/Cargo.toml",
     "format": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "moss:update": "node --experimental-strip-types scripts/moss-update.mjs"
   },
   "dependencies": {
     "@tabler/icons-react": "^3.41.1",
