@@ -1,4 +1,10 @@
-use std::{ffi::CString, os::raw::c_char, sync::Mutex, time::Duration};
+use std::{
+    ffi::CString,
+    mem::ManuallyDrop,
+    os::raw::c_char,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use libloading::{Library, Symbol};
 
@@ -57,7 +63,7 @@ impl From<MossRuntimeError> for MossFfiError {
 }
 
 pub struct MossFfiRuntime {
-    _library: Library,
+    _library: ManuallyDrop<Library>,
     init: MossInit,
     start: MossStart,
     stop: MossStop,
@@ -67,14 +73,30 @@ pub struct MossFfiRuntime {
     set_callback: MossSetCallback,
 }
 
-pub struct MossNode<'runtime> {
-    runtime: &'runtime MossFfiRuntime,
+pub struct MossNode {
+    runtime: Arc<MossFfiRuntime>,
     handle: MossHandle,
+}
+
+#[derive(Debug, Clone)]
+pub struct MossNodeConfig {
+    pub listen_port: u16,
+    pub static_peer: Option<String>,
 }
 
 impl MossFfiRuntime {
     pub fn load_default() -> Result<Self, MossFfiError> {
         let path = MossDynamicRuntime::from_default_candidates()
+            .first_available_path()
+            .ok_or_else(|| {
+                MossFfiError::Runtime(MossRuntimeError::Load("library not found".into()))
+            })?;
+
+        Self::load_from_path(&path)
+    }
+
+    pub fn load_from_app_handle(handle: &tauri::AppHandle) -> Result<Self, MossFfiError> {
+        let path = MossDynamicRuntime::from_app_handle(handle)
             .first_available_path()
             .ok_or_else(|| {
                 MossFfiError::Runtime(MossRuntimeError::Load("library not found".into()))
@@ -95,15 +117,15 @@ impl MossFfiRuntime {
             connect: load_symbol(&library, b"Moss_Connect\0")?,
             publish: load_symbol(&library, b"Moss_Publish\0")?,
             set_callback: load_symbol(&library, b"Moss_SetCallback\0")?,
-            _library: library,
+            _library: ManuallyDrop::new(library),
         })
     }
 
     pub fn init_node(
-        &self,
+        self: &Arc<Self>,
         mesh_id: &str,
         config_json: &str,
-    ) -> Result<MossNode<'_>, MossFfiError> {
+    ) -> Result<MossNode, MossFfiError> {
         let mesh_id = c_string(mesh_id)?;
         let config = c_string(config_json)?;
         let handle = unsafe { (self.init)(mesh_id.as_ptr(), std::ptr::null(), config.as_ptr()) };
@@ -116,13 +138,21 @@ impl MossFfiRuntime {
         }
 
         Ok(MossNode {
-            runtime: self,
+            runtime: Arc::clone(self),
             handle,
         })
     }
+
+    pub fn init_default_node(
+        self: &Arc<Self>,
+        mesh_id: &str,
+        config: &MossNodeConfig,
+    ) -> Result<MossNode, MossFfiError> {
+        self.init_node(mesh_id, &node_config_json(config))
+    }
 }
 
-impl MossNode<'_> {
+impl MossNode {
     pub fn start(&self) -> Result<(), MossFfiError> {
         check_code("start", unsafe { (self.runtime.start)(self.handle) })
     }
@@ -164,7 +194,7 @@ impl MossNode<'_> {
     }
 }
 
-impl Drop for MossNode<'_> {
+impl Drop for MossNode {
     fn drop(&mut self) {
         unsafe {
             (self.runtime.stop)(self.handle);
@@ -194,6 +224,18 @@ pub fn wait_for_payload(payload: &[u8]) -> Result<MossReceivedMessage, MossFfiEr
     }
 
     Err(MossFfiError::DeliveryTimeout)
+}
+
+pub fn node_config_json(config: &MossNodeConfig) -> String {
+    let peers = match &config.static_peer {
+        Some(peer) => format!("[\"{peer}\"]"),
+        None => "[]".to_string(),
+    };
+
+    format!(
+        r#"{{"listen_port":{},"static_peers":{},"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":false,"natpmp_enabled":false,"pcp_enabled":false}}}}"#,
+        config.listen_port, peers
+    )
 }
 
 fn load_symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T, MossFfiError> {
@@ -271,8 +313,9 @@ mod tests {
     #[test]
     fn two_local_moss_peers_exchange_payload() {
         let library_path = build_test_moss_library();
-        let runtime =
-            MossFfiRuntime::load_from_path(&library_path).expect("Moss library should load");
+        let runtime = Arc::new(
+            MossFfiRuntime::load_from_path(&library_path).expect("Moss library should load"),
+        );
 
         drain_received_messages();
         let alice = runtime

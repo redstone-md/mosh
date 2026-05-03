@@ -7,11 +7,13 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
+    "build:app": "npm run moss:prepare && npm run tauri build",
     "preview": "vite preview",
     "test": "npm run typecheck && vitest run && cargo test --manifest-path src-tauri/Cargo.toml",
     "format": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
     "tauri": "tauri",
-    "moss:update": "node --experimental-strip-types scripts/moss-update.mjs"
+    "moss:update": "node --experimental-strip-types scripts/moss-update.mjs",
+    "moss:prepare": "node scripts/moss-prepare.mjs"
   },
   "dependencies": {
     "@tabler/icons-react": "^3.41.1",

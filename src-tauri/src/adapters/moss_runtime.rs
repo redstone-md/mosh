@@ -66,6 +66,16 @@ impl MossDynamicRuntime {
         }
     }
 
+    pub fn from_app_handle(handle: &tauri::AppHandle) -> Self {
+        let mut candidate_paths = default_candidate_paths();
+
+        if let Some(path) = resource_library_path(handle) {
+            candidate_paths.insert(0, path);
+        }
+
+        Self { candidate_paths }
+    }
+
     pub fn load_from_path(path: &Path) -> Result<LoadedMossRuntime, MossRuntimeError> {
         let library = unsafe { Library::new(path) }
             .map_err(|error| MossRuntimeError::Load(error.to_string()))?;
@@ -78,7 +88,7 @@ impl MossDynamicRuntime {
     pub fn first_available_path(&self) -> Option<PathBuf> {
         self.candidate_paths
             .iter()
-            .find(|path| path.exists() && Self::load_from_path(path).is_ok())
+            .find(|path| path.exists())
             .cloned()
     }
 }
@@ -106,11 +116,18 @@ fn default_candidate_paths() -> Vec<PathBuf> {
 
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir.join(MOSS_LIBRARY_NAME));
+        candidates.push(current_dir.join("moss-runtime").join(MOSS_LIBRARY_NAME));
         candidates.push(
             current_dir
                 .join("src-tauri")
                 .join("target")
                 .join("moss-test")
+                .join(MOSS_LIBRARY_NAME),
+        );
+        candidates.push(
+            current_dir
+                .join("src-tauri")
+                .join("moss-runtime")
                 .join(MOSS_LIBRARY_NAME),
         );
         candidates.push(current_dir.join("..").join("moss").join(MOSS_LIBRARY_NAME));
@@ -123,6 +140,18 @@ fn default_candidate_paths() -> Vec<PathBuf> {
     }
 
     candidates
+}
+
+fn resource_library_path(handle: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri::{path::BaseDirectory, Manager};
+
+    handle
+        .path()
+        .resolve(
+            format!("moss-runtime/{MOSS_LIBRARY_NAME}"),
+            BaseDirectory::Resource,
+        )
+        .ok()
 }
 
 fn verify_required_symbols(library: &Library) -> Result<(), MossRuntimeError> {

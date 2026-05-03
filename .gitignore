@@ -11,6 +11,10 @@ target/
 src-tauri/target/
 
 # Local native runtime artifacts
+moss-runtime/
+src-tauri/moss-runtime/*
+!src-tauri/moss-runtime/
+!src-tauri/moss-runtime/.gitkeep
 moss.dll
 moss.h
 libmoss.so
@@ -27,3 +31,5 @@ Thumbs.db
 # Agent scratch space
 .codex/*
 !.codex/.gitkeep
+
+
