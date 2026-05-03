@@ -196,3 +196,33 @@ None recorded.
 - Source control review: confirm only Mosh repo files changed and commit is atomic.
 
 Commands will be finalized after the scaffold establishes package scripts and Rust commands.
+
+## 2026-05-03 Runtime Completion Update
+
+Completed after the initial desktop tracer bullet:
+
+- [x] `moss.dll` is built automatically by `npm run moss:prepare` from `../moss/cmd/moss-ffi`.
+- [x] `npm run build:app` runs `moss:prepare` before Tauri packaging.
+- [x] `tauri dev` runs `moss:prepare` before starting the Vite dev server.
+- [x] Tauri bundle resources include `moss-runtime/moss.dll`; MSI and NSIS installer scripts both install it under `moss-runtime`.
+- [x] Rust keeps the Go shared library loaded for the process lifetime to avoid Windows `STATUS_ACCESS_VIOLATION` during Go runtime shutdown.
+- [x] Private DM runtime now proves Alice/Bob OpenMLS Welcome, encrypted application message, and Moss delivery in `private_dm_runtime_exchanges_e2ee_message_over_moss`.
+- [x] Tauri commands are wired for create invite, accept invite, send message, and poll session.
+- [x] TypeScript Tauri gateway exposes typed request/response contracts for the private DM flow.
+- [x] Desktop UI can create/copy invite URI, paste/accept invite after manual fingerprint confirmation, send, and poll decrypted messages.
+
+Validation completed:
+
+- [x] `npm run build` passed.
+- [x] `npm test` passed with 17 frontend tests and 12 Rust tests.
+- [x] `npm run format` passed.
+- [x] `npm run build:app` passed and produced:
+  - `src-tauri/target/release/bundle/msi/Mosh_0.1.0_x64_en-US.msi`
+  - `src-tauri/target/release/bundle/nsis/Mosh_0.1.0_x64-setup.exe`
+- [x] Bundle scripts were inspected and include `moss-runtime\\moss.dll`.
+
+Remaining known limitations:
+
+- [ ] Real two-machine NAT/tracker field test is still required outside automated local tests.
+- [ ] v1 stores each device as its own identity; multi-device account identity remains out of scope.
+- [ ] The current UI uses manual polling; event-driven live updates are a later slice.
