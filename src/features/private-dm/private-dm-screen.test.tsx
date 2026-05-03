@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { NativeMessagingGateway } from "./native/native-messaging-gateway";
@@ -72,6 +72,16 @@ describe("PrivateDmScreen", () => {
     expect(screen.getByText("ready")).toBeInTheDocument();
   });
 
+  it("automatically polls after a session starts", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway();
+
+    render(<PrivateDmScreen gateway={gateway} />);
+    await user.click(screen.getAllByRole("button", { name: "Create invite" })[1]);
+
+    await waitFor(() => expect(gateway.pollPrivateSession).toHaveBeenCalled());
+    expect(await screen.findByText("hello from moss")).toBeInTheDocument();
+  });
   it("sends through the native private DM gateway and renders polled plaintext", async () => {
     const user = userEvent.setup();
     const gateway = createGateway();

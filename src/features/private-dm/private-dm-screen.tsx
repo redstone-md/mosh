@@ -18,7 +18,7 @@ import {
   IconShieldCheck,
   IconVideo,
 } from "@tabler/icons-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { contacts, diagnostics, dmText, inviteText, messages, shellText, trustSteps } from "./private-dm.content";
 import { ChatMessage, NativeMessagingGateway, SessionSnapshot, nativeMessagingGateway } from "./native/native-messaging-gateway";
 
@@ -27,6 +27,7 @@ const RAIL_ICON_SIZE = 20;
 const DEFAULT_LISTEN_PORT = 42130;
 const DEFAULT_DISPLAY_NAME = "Mosh Device";
 const READY_STATE = "ready";
+const AUTO_POLL_MS = 1000;
 
 interface RuntimeUiState {
   readonly createdInvite?: string;
@@ -43,7 +44,9 @@ export function PrivateDmScreen({ gateway = nativeMessagingGateway }: { gateway?
   const [staticPeer, setStaticPeer] = useState("");
   const [inviteUri, setInviteUri] = useState("");
   const [composer, setComposer] = useState("");
+  const [sessionActive, setSessionActive] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeUiState>({ busy: false });
+  const pollInFlight = useRef(false);
 
   const run = async (action: () => Promise<Partial<RuntimeUiState>>) => {
     setRuntime((state) => ({ ...state, busy: true, error: undefined }));
@@ -55,6 +58,40 @@ export function PrivateDmScreen({ gateway = nativeMessagingGateway }: { gateway?
     }
   };
 
+  const refreshSession = useCallback(
+    async (quiet = false) => {
+      if (pollInFlight.current) {
+        return;
+      }
+
+      pollInFlight.current = true;
+      if (!quiet) {
+        setRuntime((state) => ({ ...state, busy: true, error: undefined }));
+      }
+
+      try {
+        const snapshot = await gateway.pollPrivateSession();
+        setRuntime((state) => ({ ...state, snapshot, busy: quiet ? state.busy : false, error: undefined }));
+      } catch (error) {
+        setRuntime((state) => ({ ...state, busy: quiet ? state.busy : false, error: readableError(error) }));
+      } finally {
+        pollInFlight.current = false;
+      }
+    },
+    [gateway],
+  );
+
+  useEffect(() => {
+    if (!sessionActive) {
+      return;
+    }
+
+    void refreshSession(true);
+    const intervalId = window.setInterval(() => void refreshSession(true), AUTO_POLL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [refreshSession, sessionActive]);
+
   const createInvite = () =>
     run(async () => {
       const invite = await gateway.createPrivateInvite({
@@ -63,20 +100,23 @@ export function PrivateDmScreen({ gateway = nativeMessagingGateway }: { gateway?
         static_peer: emptyToNull(staticPeer),
       });
       await copyText(invite.invite_uri);
+      setSessionActive(true);
       return { createdInvite: invite.invite_uri, listenAddress: invite.listen_address };
     });
 
   const acceptInvite = () =>
-    run(async () => ({
-      snapshot: await gateway.acceptPrivateInvite({
+    run(async () => {
+      const snapshot = await gateway.acceptPrivateInvite({
         invite_uri: inviteUri,
         display_name: displayName,
         listen_port: listenPort,
         static_peer: emptyToNull(staticPeer),
-      }),
-    }));
+      });
+      setSessionActive(true);
+      return { snapshot };
+    });
 
-  const poll = () => run(async () => ({ snapshot: await gateway.pollPrivateSession() }));
+  const poll = () => void refreshSession(false);
 
   const send = (event: FormEvent) => {
     event.preventDefault();
