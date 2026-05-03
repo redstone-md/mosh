@@ -75,23 +75,23 @@ Quality bar:
 
 - [x] Create `desktop-private-dm.brainstorm.md` with options, risks, and chosen direction.
 - [x] Create this `desktop-private-dm.plan.md`.
-- [ ] Create `docs/Architecture.md` with Mermaid diagrams for system boundaries, interface contracts, and key type boundaries.
-- [ ] Create ADRs for crypto adapter, Moss dynamic linking, and secure storage if implementation begins in those areas.
+- [x] Create `docs/Architecture.md` with Mermaid diagrams for system boundaries, interface contracts, and key type boundaries.
+- [x] Create ADRs for crypto adapter, Moss dynamic linking, and secure storage if implementation begins in those areas.
 
 Verification:
 
-- [ ] Confirm docs exist and contain Mermaid diagrams where required.
-- [ ] Confirm no docs exceed maintainability limits without reason.
+- [x] Confirm docs exist and contain Mermaid diagrams where required.
+- [x] Confirm no docs exceed maintainability limits without reason.
 
 ### 2. Establish Full-Test Baseline
 
-- [ ] Run currently available repo commands.
-- [ ] Record missing commands as baseline gaps.
-- [ ] Run `git status --short --branch` and capture pre-scaffold state.
+- [x] Run currently available repo commands.
+- [x] Record missing commands as baseline gaps.
+- [x] Run `git status --short --branch` and capture pre-scaffold state.
 
 Verification:
 
-- [ ] Baseline command outcomes are recorded below.
+- [x] Baseline command outcomes are recorded below.
 - [x] Already failing tests are tracked individually below.
 
 ### 3. Scaffold Desktop App
@@ -119,26 +119,26 @@ Verification:
 
 ### 5. Add Private DM Feature Slice
 
-- [ ] Create `src/features/private-dm` with contracts, constants, UI, and tests.
-- [ ] Add invite URI parser with valid and invalid test coverage.
-- [ ] Add fingerprint confirmation UI flow with tests.
-- [ ] Add DM shell with diagnostics panel and encrypted-history placeholder state.
+- [x] Create `src/features/private-dm` with contracts, constants, UI, and tests.
+- [x] Add invite URI parser with valid and invalid test coverage.
+- [x] Add fingerprint confirmation UI flow with tests.
+- [x] Add DM shell with diagnostics panel and encrypted-history placeholder state.
 
 Verification:
 
-- [ ] Feature tests cover positive, negative, and edge cases.
-- [ ] Feature is isolated in its vertical slice.
+- [x] Feature tests cover positive, negative, and edge cases.
+- [x] Feature is isolated in its vertical slice.
 
 ### 6. Add Native Boundary Contracts
 
-- [ ] Create Rust command boundary for app diagnostics and future Moss state.
-- [ ] Define TypeScript command client around Tauri `invoke`.
-- [ ] Document Moss/OpenMLS/secure-storage adapter responsibilities.
+- [x] Create Rust command boundary for app diagnostics and future Moss state.
+- [x] Define TypeScript command client around Tauri `invoke`.
+- [x] Document Moss/OpenMLS/secure-storage adapter responsibilities.
 
 Verification:
 
-- [ ] Rust command tests pass.
-- [ ] Frontend calls use typed contracts and typed errors.
+- [x] Rust command tests pass.
+- [x] Frontend calls use typed contracts and typed errors.
 
 ### 7. Final Validation
 
@@ -147,7 +147,7 @@ Verification:
 - [x] Run focused tests.
 - [x] Run broader test suite.
 - [x] Run any configured lint/analyzer/coverage commands.
-- [ ] Review `git diff` for unrelated changes.
+- [x] Review `git diff` for unrelated changes.
 - [ ] Commit atomically if all relevant gates pass.
 
 ## Baseline Results
@@ -170,6 +170,11 @@ Verification:
 - `npm test`: succeeded after cache warmup; TypeScript typecheck and Rust unit tests pass.
 - `npm run build`: succeeded after cache changes.
 - `npm run format`: succeeded after cache changes.
+- Dependencies approved and added: `@tabler/icons-react`, `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`, and `@testing-library/user-event`.
+- `npm test`: succeeded with TypeScript typecheck, 10 frontend tests, and 1 Rust unit test.
+- `npm run build`: succeeded after the Mosh design transfer pass.
+- `npm run format`: succeeded after the Mosh design transfer pass.
+- Vite dev server was started for visual spot-check setup and then stopped; port `1420` is free.
 - Build/test/format commands are now configured in `package.json` and `AGENTS.md`.
 
 ## Already Failing Tests
