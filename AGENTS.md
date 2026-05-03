@@ -124,9 +124,9 @@ If the stack is `.NET`, document skill-management rules explicitly:
 
 ### Commands
 
-- `build`: not configured yet. Add the command when the Tauri/Vite scaffold exists.
-- `test`: not configured yet. Add the command when the test framework exists.
-- `format`: not configured yet. Add the command when formatter tooling exists.
+- `build`: `npm run build`
+- `test`: `npm test`
+- `format`: `npm run format`
 
 If the stack is `.NET`, also document:
 
@@ -310,4 +310,11 @@ Ask first:
 
 ### Likes
 
+- The product name is Mosh. Do not use Quiver/Quier naming for this application.
+- Existing visual direction lives in sibling `../mosh-design`; use it as read-only design source material unless the user explicitly expands scope.
+- Build the desktop app first, then Android, then iOS.
+- Prefer a real Tauri application with the smallest needed screens over building a full design-system library first.
+
 ### Dislikes
+
+- Do not treat `../quiver` or `../quiver-design` as the Mosh product source.

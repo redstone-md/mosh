@@ -1,0 +1,29 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Vite and Tauri frontend builds
+dist/
+.vite/
+
+# Rust and Tauri native builds
+target/
+src-tauri/target/
+
+# Local native runtime artifacts
+moss.dll
+moss.h
+libmoss.so
+libmoss.dylib
+libmoss.h
+
+# Local environment and editor state
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+
+# Agent scratch space
+.codex/*
+!.codex/.gitkeep
