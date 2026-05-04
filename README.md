@@ -12,6 +12,16 @@ The current tracer bullet focuses on a private 1:1 desktop direct-message flow:
 - Moss tracker-based discovery model
 - diagnostics for native/runtime boundaries
 
+## Friend Test Flow
+
+1. Install and open Mosh on both desktops.
+2. One device clicks `Create invite`; Mosh copies a `mosh://invite?...#fp=...` URI.
+3. Send that URI to the friend through any existing channel.
+4. The friend pastes the URI into `Invite URI` and confirms the fingerprint out of band.
+5. Both devices can send messages; receive refresh runs automatically over Moss default/public tracker discovery.
+
+Users should not enter peer hosts, ports, or local listen ports in the primary flow.
+
 ## Commands
 
 ```powershell

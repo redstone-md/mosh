@@ -46,7 +46,7 @@ export const inviteText = {
   searchPlaceholder: "Search people",
   pinnedLabel: "Pinned",
   recentLabel: "Recent",
-  inviteValue: "mosh://invite?mesh=7x9v&session=drift-41&peer=alice#fp=91A4-D2C8-77B0",
+  inviteValue: "mosh://invite?mesh=7x9v&session=drift-41#fp=91A4-D2C8-77B0",
   pasteLabel: "Paste invite",
   createLabel: "Create invite",
   confirmLabel: "Confirm fingerprint",

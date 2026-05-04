@@ -318,3 +318,4 @@ Ask first:
 ### Dislikes
 
 - Do not treat `../quiver` or `../quiver-design` as the Mosh product source.
+- Do not expose manual peer `host:port` or local listen-port fields in the primary user flow; Moss discovery must use default/public trackers automatically unless a separate diagnostics-only tool is explicitly requested.

@@ -9,16 +9,16 @@ function createGateway(): NativeMessagingGateway {
     getDiagnostics: vi.fn(),
     getNativeRuntimeStatus: vi.fn(),
     createPrivateInvite: vi.fn(async () => ({
-      invite_uri: "mosh://invite?mesh=mesh-one&session=session-one&peer=127.0.0.1:42130#fp=AABBCCDDEEFF0011",
+      invite_uri: "mosh://invite?mesh=mesh-one&session=session-one#fp=AABBCCDDEEFF0011",
       session_id: "session-one",
       mesh_id: "mesh-one",
       fingerprint: "AABBCCDDEEFF0011",
-      listen_address: "127.0.0.1:42130",
+      listen_address: "default-public-trackers",
     })),
     acceptPrivateInvite: vi.fn(async () => ({
       role: "bob",
       state: "ready",
-      invite_uri: "mosh://invite?mesh=mesh-one&session=session-one&peer=127.0.0.1:42130#fp=AABBCCDDEEFF0011",
+      invite_uri: "mosh://invite?mesh=mesh-one&session=session-one#fp=AABBCCDDEEFF0011",
       fingerprint: "AABBCCDDEEFF0011",
       messages: [],
     })),
@@ -41,6 +41,9 @@ describe("PrivateDmScreen", () => {
     expect(screen.getByRole("complementary", { name: "Direct messages" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Alice Park" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Peer status" })).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Listen port" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Static peer" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Poll" })).not.toBeInTheDocument();
   });
 
   it("confirms a fingerprint through the visible invite flow", async () => {
@@ -60,12 +63,12 @@ describe("PrivateDmScreen", () => {
     render(<PrivateDmScreen gateway={gateway} />);
     await user.click(screen.getAllByRole("button", { name: "Create invite" })[1]);
     await user.click(screen.getByRole("button", { name: "Confirm fingerprint" }));
-    await user.type(screen.getByRole("textbox", { name: "Invite URI" }), "mosh://invite?mesh=mesh-one&session=session-one&peer=127.0.0.1:42130#fp=AABBCCDDEEFF0011");
+    await user.type(screen.getByRole("textbox", { name: "Invite URI" }), "mosh://invite?mesh=mesh-one&session=session-one#fp=AABBCCDDEEFF0011");
     await user.click(screen.getByRole("button", { name: "Paste invite" }));
 
     expect(gateway.createPrivateInvite).toHaveBeenCalledWith({
       display_name: "Mosh Device",
-      listen_port: 42130,
+      listen_port: 0,
       static_peer: null,
     });
     expect(gateway.acceptPrivateInvite).toHaveBeenCalled();
@@ -101,4 +104,3 @@ describe("PrivateDmScreen", () => {
     expect(screen.getByText("OpenMLS E2EE over Moss transport")).toBeInTheDocument();
   });
 });
-
