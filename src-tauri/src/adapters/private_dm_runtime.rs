@@ -35,6 +35,7 @@ struct PrivateDmSession {
     node: MossNode,
     crypto: MlsSessionCrypto,
     messages: Vec<ChatMessage>,
+    seen_moss_messages: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -64,7 +65,7 @@ impl PrivateDmRuntime {
         let session_id = crypto.random_token("session")?;
         let mesh_id = crypto.random_token("mesh")?;
         let fingerprint = crypto.fingerprint();
-        let invite_uri = build_invite_uri(&mesh_id, &session_id, request.listen_port, &fingerprint);
+        let invite_uri = build_invite_uri(&mesh_id, &session_id, &fingerprint);
         let node = start_node(
             &self.moss,
             &mesh_id,
@@ -82,6 +83,7 @@ impl PrivateDmRuntime {
             node,
             crypto,
             messages: Vec::new(),
+            seen_moss_messages: Vec::new(),
         });
 
         Ok(InviteCreated {
@@ -89,7 +91,7 @@ impl PrivateDmRuntime {
             session_id,
             mesh_id,
             fingerprint,
-            listen_address: listen_address(request.listen_port),
+            listen_address: listen_address(),
         })
     }
 
@@ -104,7 +106,7 @@ impl PrivateDmRuntime {
             &self.moss,
             &invite.mesh_id,
             request.listen_port,
-            Some(request.static_peer.unwrap_or(invite.peer_address)),
+            request.static_peer.or(invite.peer_address),
         )?;
         let envelope = ControlEnvelope::KeyPackage {
             session_id: invite.session_id.clone(),
@@ -123,6 +125,7 @@ impl PrivateDmRuntime {
             node,
             crypto,
             messages: Vec::new(),
+            seen_moss_messages: Vec::new(),
         });
 
         self.poll()
@@ -176,11 +179,26 @@ impl PrivateDmSession {
         &mut self,
         message: MossReceivedMessage,
     ) -> Result<(), PrivateDmRuntimeError> {
+        if self.has_seen_message(&message) {
+            return Ok(());
+        }
+
         match message.channel.as_str() {
             CONTROL_CHANNEL => self.handle_control(message.payload),
             DATA_CHANNEL => self.handle_data(message.payload),
             _ => Ok(()),
         }
+    }
+
+    fn has_seen_message(&mut self, message: &MossReceivedMessage) -> bool {
+        let key = format!("{}:{}", message.channel, encode(&message.payload));
+
+        if self.seen_moss_messages.contains(&key) {
+            return true;
+        }
+
+        self.seen_moss_messages.push(key);
+        false
     }
 
     fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
@@ -331,7 +349,7 @@ mod tests {
             invite_uri: invite.invite_uri,
             display_name: "Bob".to_string(),
             listen_port: 42131,
-            static_peer: Some(invite.listen_address),
+            static_peer: Some("127.0.0.1:42130".to_string()),
         })
         .expect("Bob should accept invite");
 

@@ -233,7 +233,7 @@ pub fn node_config_json(config: &MossNodeConfig) -> String {
     };
 
     format!(
-        r#"{{"listen_port":{},"static_peers":{},"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":false,"natpmp_enabled":false,"pcp_enabled":false}}}}"#,
+        r#"{{"listen_port":{},"static_peers":{},"bootstrap_timeout_sec":8,"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":true,"natpmp_enabled":true,"pcp_enabled":true,"hole_punch_attempts":5,"port_prediction_enabled":true}}}}"#,
         config.listen_port, peers
     )
 }

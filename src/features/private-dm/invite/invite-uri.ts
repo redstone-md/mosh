@@ -14,14 +14,13 @@ export type InviteParseErrorCode =
   | "invalid_scheme"
   | "missing_mesh"
   | "missing_session"
-  | "missing_peer"
   | "missing_fingerprint"
   | "invalid_fingerprint";
 
 export interface MoshInvite {
   readonly meshId: string;
   readonly sessionId: string;
-  readonly peerHint: string;
+  readonly peerHint: string | null;
   readonly fingerprint: string;
 }
 
@@ -41,7 +40,7 @@ export function parseMoshInvite(rawInvite: string): MoshInvite {
 
   const meshId = readToken(url, MESH_PARAM, "missing_mesh");
   const sessionId = readToken(url, SESSION_PARAM, "missing_session");
-  const peerHint = readToken(url, PEER_PARAM, "missing_peer");
+  const peerHint = readOptionalToken(url, PEER_PARAM);
   const fingerprint = readFingerprint(url);
 
   return { meshId, sessionId, peerHint, fingerprint };
@@ -56,13 +55,23 @@ function parseUrl(rawInvite: string): URL {
 }
 
 function readToken(url: URL, param: string, code: InviteParseErrorCode): string {
-  const value = url.searchParams.get(param)?.trim() ?? "";
+  const value = readOptionalToken(url, param);
 
-  if (value.length < MIN_TOKEN_LENGTH || !TOKEN_PATTERN.test(value)) {
+  if (!value) {
     throw new InviteParseError(code);
   }
 
   return value;
+}
+
+function readOptionalToken(url: URL, param: string): string | null {
+  const value = url.searchParams.get(param)?.trim() ?? "";
+
+  if (!value) {
+    return null;
+  }
+
+  return value.length >= MIN_TOKEN_LENGTH && TOKEN_PATTERN.test(value) ? value : null;
 }
 
 function readFingerprint(url: URL): string {
