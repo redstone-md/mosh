@@ -57,6 +57,28 @@ export const cryptoNotice = {
   body: "OpenMLS protects message content. Moss carries ciphertext via public trackers + supernodes for NAT punching — peer discovery metadata is NOT hidden.",
 } as const;
 
+export const groupText = {
+  createCardTitle: "Create private group",
+  createHint: "MLS-encrypted N-member group with random mesh id. Only people you share the invite with can join. You are the admin until membership control is added.",
+  labelLabel: "Group name (optional)",
+  labelHint: "Human-readable label embedded in the invite URI.",
+  labelPlaceholder: "Friends, work, etc.",
+  createButton: "Create group",
+  recreateButton: "Replace group invite",
+  joinCardTitle: "Join private group",
+  joinHint: "Paste a mosh://group invite URI from the admin.",
+  joinPlaceholder: "mosh://group?mesh=...&group=...&name=...#fp=...",
+  joinButton: "Join group",
+  noticeTitle: "End-to-end encrypted group",
+  noticeBody: "OpenMLS protects message content. Only members the admin has admitted can decrypt. New members do not see prior history.",
+  emptyTitle: "No messages in this group yet.",
+  emptyBody: "Once members join via invite, the admin admits them and they decrypt messages from this point onward.",
+  adminBadge: "admin",
+  leaveLabel: "Leave group",
+  copyInvite: "Copy invite",
+  untitled: "Private group",
+} as const;
+
 export const channelText = {
   cardTitle: "Join a public channel",
   cardHint: "Type a channel name to subscribe. Anyone who knows the name can join. Messages are NOT end-to-end encrypted — only Moss transport (Noise) protects in-flight bytes.",

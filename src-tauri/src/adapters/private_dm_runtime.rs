@@ -1,6 +1,5 @@
 mod contracts;
 mod invite;
-mod mls_session;
 mod wire;
 
 use std::collections::HashMap;
@@ -12,7 +11,7 @@ pub use contracts::{
     StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
-use mls_session::MlsSessionCrypto;
+use crate::adapters::mls_crypto::MlsSessionCrypto;
 use wire::{
     channel_session_id, control_channel, data_channel, decode, decode_json, encode, publish_json,
     ControlEnvelope, DataEnvelope,
@@ -469,7 +468,9 @@ mod tests {
 
     #[test]
     fn private_dm_runtime_exchanges_e2ee_message_over_moss() {
-        let _guard = MOSS_TEST_LOCK.lock().expect("moss test lock");
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         drain_received_messages();
         let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
         let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime));

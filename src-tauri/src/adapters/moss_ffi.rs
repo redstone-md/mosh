@@ -440,7 +440,9 @@ mod tests {
 
     #[test]
     fn two_local_moss_peers_exchange_payload() {
-        let _guard = MOSS_TEST_LOCK.lock().expect("moss test lock");
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let library_path = build_test_moss_library();
         let runtime = Arc::new(
             MossFfiRuntime::load_from_path(&library_path).expect("Moss library should load"),

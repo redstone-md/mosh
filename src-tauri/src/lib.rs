@@ -16,6 +16,10 @@ use adapters::private_dm_runtime::{
     AcceptInviteRequest, CloseSessionResult, InviteCreated, PrivateDmRuntime, SendMessageResult,
     SessionListSnapshot, SessionSnapshot, StartSessionRequest,
 };
+use adapters::private_group_runtime::{
+    CreateGroupRequest, GroupCreated, GroupLeaveResult, GroupListSnapshot, GroupSendResult,
+    GroupSnapshot, JoinGroupRequest, PrivateGroupRuntime,
+};
 use adapters::secure_storage::{OsSecureSecretStore, SecureStorageStatus};
 use tauri::Manager;
 
@@ -119,6 +123,46 @@ impl ChannelState {
         match &self.load_error {
             Some(error) => format!("channel runtime unavailable: {error}"),
             None => "channel runtime unavailable".to_string(),
+        }
+    }
+}
+
+struct PrivateGroupState {
+    runtime: Mutex<Option<PrivateGroupRuntime>>,
+    load_error: Option<String>,
+}
+
+impl PrivateGroupState {
+    fn ready(moss: Arc<MossFfiRuntime>) -> Self {
+        Self {
+            runtime: Mutex::new(Some(PrivateGroupRuntime::from_shared(moss))),
+            load_error: None,
+        }
+    }
+
+    fn missing(error: String) -> Self {
+        Self {
+            runtime: Mutex::new(None),
+            load_error: Some(error),
+        }
+    }
+
+    fn with_runtime<T>(
+        &self,
+        action: impl FnOnce(&mut PrivateGroupRuntime) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut guard = self
+            .runtime
+            .lock()
+            .map_err(|_| "private group runtime lock poisoned".to_string())?;
+        let runtime = guard.as_mut().ok_or_else(|| self.unavailable_message())?;
+        action(runtime)
+    }
+
+    fn unavailable_message(&self) -> String {
+        match &self.load_error {
+            Some(error) => format!("private group runtime unavailable: {error}"),
+            None => "private group runtime unavailable".to_string(),
         }
     }
 }
@@ -259,6 +303,70 @@ fn channel_list(
     state.with_runtime(|runtime| runtime.list().map_err(|error| error.to_string()))
 }
 
+#[tauri::command]
+fn private_group_create(
+    state: tauri::State<'_, PrivateGroupState>,
+    request: CreateGroupRequest,
+) -> Result<GroupCreated, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .create_group(request)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_group_join(
+    state: tauri::State<'_, PrivateGroupState>,
+    request: JoinGroupRequest,
+) -> Result<GroupSnapshot, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .join_group(request)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_group_send(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+    body: String,
+) -> Result<GroupSendResult, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .send(&group_id, body)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_group_poll(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+) -> Result<GroupSnapshot, String> {
+    state.with_runtime(|runtime| runtime.poll(&group_id).map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn private_group_list(
+    state: tauri::State<'_, PrivateGroupState>,
+) -> Result<GroupListSnapshot, String> {
+    state.with_runtime(|runtime| runtime.list().map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn private_group_close(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+) -> Result<GroupLeaveResult, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .close(&group_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -268,12 +376,14 @@ pub fn run() {
                 Ok(moss) => {
                     let moss = Arc::new(moss);
                     app.manage(PrivateDmState::ready(Arc::clone(&moss)));
-                    app.manage(ChannelState::ready(moss));
+                    app.manage(ChannelState::ready(Arc::clone(&moss)));
+                    app.manage(PrivateGroupState::ready(moss));
                 }
                 Err(error) => {
                     let message = error.to_string();
                     app.manage(PrivateDmState::missing(message.clone()));
-                    app.manage(ChannelState::missing(message));
+                    app.manage(ChannelState::missing(message.clone()));
+                    app.manage(PrivateGroupState::missing(message));
                 }
             }
             Ok(())
@@ -291,7 +401,13 @@ pub fn run() {
             channel_leave,
             channel_send,
             channel_poll,
-            channel_list
+            channel_list,
+            private_group_create,
+            private_group_join,
+            private_group_send,
+            private_group_poll,
+            private_group_list,
+            private_group_close
         ])
         .run(tauri::generate_context!())
         .expect(RUN_ERROR);

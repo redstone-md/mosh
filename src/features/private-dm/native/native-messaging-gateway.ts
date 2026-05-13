@@ -13,6 +13,12 @@ const CHANNEL_LEAVE_COMMAND = "channel_leave";
 const CHANNEL_SEND_COMMAND = "channel_send";
 const CHANNEL_POLL_COMMAND = "channel_poll";
 const CHANNEL_LIST_COMMAND = "channel_list";
+const PRIVATE_GROUP_CREATE_COMMAND = "private_group_create";
+const PRIVATE_GROUP_JOIN_COMMAND = "private_group_join";
+const PRIVATE_GROUP_SEND_COMMAND = "private_group_send";
+const PRIVATE_GROUP_POLL_COMMAND = "private_group_poll";
+const PRIVATE_GROUP_LIST_COMMAND = "private_group_list";
+const PRIVATE_GROUP_CLOSE_COMMAND = "private_group_close";
 
 export interface DiagnosticsSnapshot {
   readonly app_name: string;
@@ -175,6 +181,64 @@ export interface ChannelLeaveResult {
   readonly closed: boolean;
 }
 
+export interface CreateGroupRequest {
+  readonly label?: string | null;
+  readonly display_name: string;
+  readonly listen_port: number;
+  readonly static_peer?: string | null;
+}
+
+export interface JoinGroupRequest {
+  readonly invite_uri: string;
+  readonly display_name: string;
+  readonly listen_port: number;
+  readonly static_peer?: string | null;
+}
+
+export interface GroupCreated {
+  readonly group_id: string;
+  readonly mesh_id: string;
+  readonly invite_uri: string;
+  readonly fingerprint: string;
+  readonly label: string | null;
+}
+
+export interface GroupMessage {
+  readonly from_device: string;
+  readonly from_fingerprint: string;
+  readonly body: string;
+}
+
+export interface GroupSnapshot {
+  readonly group_id: string;
+  readonly mesh_id: string;
+  readonly label: string | null;
+  readonly display_name: string;
+  readonly device_fingerprint: string;
+  readonly creator_fingerprint: string;
+  readonly is_admin: boolean;
+  readonly state: string;
+  readonly member_count: number;
+  readonly invite_uri: string | null;
+  readonly messages: readonly GroupMessage[];
+  readonly mesh: MeshInfo | null;
+  readonly events: readonly SnapshotEvent[];
+}
+
+export interface GroupListSnapshot {
+  readonly groups: readonly GroupSnapshot[];
+}
+
+export interface GroupSendResult {
+  readonly group_id: string;
+  readonly bytes: number;
+}
+
+export interface GroupLeaveResult {
+  readonly group_id: string;
+  readonly closed: boolean;
+}
+
 export interface NativeMessagingGateway {
   getDiagnostics(): Promise<DiagnosticsSnapshot>;
   getNativeRuntimeStatus(): Promise<NativeRuntimeStatus>;
@@ -189,6 +253,12 @@ export interface NativeMessagingGateway {
   sendChannelMessage(name: string, body: string): Promise<ChannelSendResult>;
   pollChannel(name: string): Promise<ChannelSnapshot>;
   listChannels(): Promise<ChannelListSnapshot>;
+  createPrivateGroup(request: CreateGroupRequest): Promise<GroupCreated>;
+  joinPrivateGroup(request: JoinGroupRequest): Promise<GroupSnapshot>;
+  sendGroupMessage(groupId: string, body: string): Promise<GroupSendResult>;
+  pollPrivateGroup(groupId: string): Promise<GroupSnapshot>;
+  listPrivateGroups(): Promise<GroupListSnapshot>;
+  closePrivateGroup(groupId: string): Promise<GroupLeaveResult>;
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {
@@ -245,6 +315,30 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
 
   async listChannels(): Promise<ChannelListSnapshot> {
     return invoke<ChannelListSnapshot>(CHANNEL_LIST_COMMAND);
+  }
+
+  async createPrivateGroup(request: CreateGroupRequest): Promise<GroupCreated> {
+    return invoke<GroupCreated>(PRIVATE_GROUP_CREATE_COMMAND, { request });
+  }
+
+  async joinPrivateGroup(request: JoinGroupRequest): Promise<GroupSnapshot> {
+    return invoke<GroupSnapshot>(PRIVATE_GROUP_JOIN_COMMAND, { request });
+  }
+
+  async sendGroupMessage(groupId: string, body: string): Promise<GroupSendResult> {
+    return invoke<GroupSendResult>(PRIVATE_GROUP_SEND_COMMAND, { groupId, body });
+  }
+
+  async pollPrivateGroup(groupId: string): Promise<GroupSnapshot> {
+    return invoke<GroupSnapshot>(PRIVATE_GROUP_POLL_COMMAND, { groupId });
+  }
+
+  async listPrivateGroups(): Promise<GroupListSnapshot> {
+    return invoke<GroupListSnapshot>(PRIVATE_GROUP_LIST_COMMAND);
+  }
+
+  async closePrivateGroup(groupId: string): Promise<GroupLeaveResult> {
+    return invoke<GroupLeaveResult>(PRIVATE_GROUP_CLOSE_COMMAND, { groupId });
   }
 }
 

@@ -217,6 +217,55 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   color: var(--info);
 }
 
+.group-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--moss-glow);
+  color: var(--moss);
+}
+
+.rail-group {
+  background: var(--moss-glow);
+  color: var(--moss);
+}
+
+.rail-group:hover {
+  background: rgba(183,216,74,0.20);
+  color: var(--moss);
+}
+
+.rail-group.rail-item-active {
+  box-shadow: inset 0 0 0 2px var(--moss);
+}
+
+.admin-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--moss-glow);
+  color: var(--moss);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.crypto-banner-group {
+  border-color: rgba(183,216,74,0.20);
+  background: rgba(183,216,74,0.04);
+}
+
+.crypto-banner-group .crypto-icon {
+  background: var(--moss-glow);
+  color: var(--moss);
+}
+
 .crypto-banner-public {
   border-color: rgba(108,183,232,0.25);
   background: rgba(108,183,232,0.06);

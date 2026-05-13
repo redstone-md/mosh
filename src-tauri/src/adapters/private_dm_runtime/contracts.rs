@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::mls_crypto::MlsCryptoError;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartSessionRequest {
     pub display_name: String,
@@ -145,3 +147,13 @@ impl std::fmt::Display for PrivateDmRuntimeError {
 }
 
 impl std::error::Error for PrivateDmRuntimeError {}
+
+impl From<MlsCryptoError> for PrivateDmRuntimeError {
+    fn from(error: MlsCryptoError) -> Self {
+        match error {
+            MlsCryptoError::OpenMls(message) => Self::OpenMls(message),
+            MlsCryptoError::Codec(message) => Self::Codec(message),
+            MlsCryptoError::NotReady => Self::NotReady,
+        }
+    }
+}

@@ -2,8 +2,10 @@ import {
   IconActivity,
   IconCheck,
   IconCopy,
+  IconCrown,
   IconHash,
   IconLock,
+  IconLockOpen,
   IconLogout,
   IconMessageCircle,
   IconPlugConnected,
@@ -11,6 +13,7 @@ import {
   IconRefresh,
   IconSend,
   IconShieldCheck,
+  IconUsers,
   IconX,
 } from "@tabler/icons-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -22,11 +25,14 @@ import {
   shellText,
   stateLabels,
   channelText,
+  groupText,
 } from "./private-dm.content";
 import {
   ChannelMessage,
   ChannelSnapshot,
   ChatMessage,
+  GroupMessage,
+  GroupSnapshot,
   MeshInfo,
   NativeMessagingGateway,
   SessionSnapshot,
@@ -40,7 +46,13 @@ const DEFAULT_LISTEN_PORT = 0;
 
 type ActiveItem =
   | { readonly type: "dm"; readonly id: string }
-  | { readonly type: "channel"; readonly name: string };
+  | { readonly type: "channel"; readonly name: string }
+  | { readonly type: "group"; readonly id: string };
+
+interface GroupCreateState {
+  readonly inviteUri?: string;
+  readonly copied: boolean;
+}
 
 function defaultDisplayName(): string {
   const suffix = Math.random().toString(36).slice(2, 8);
@@ -62,12 +74,16 @@ export function PrivateDmScreen({
   const [listenPort, setListenPort] = useState<number>(DEFAULT_LISTEN_PORT);
   const [inviteUri, setInviteUri] = useState("");
   const [channelName, setChannelName] = useState("");
+  const [groupLabel, setGroupLabel] = useState("");
+  const [groupInvite, setGroupInvite] = useState("");
   const [composer, setComposer] = useState("");
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>([]);
   const [channels, setChannels] = useState<readonly ChannelSnapshot[]>([]);
+  const [groups, setGroups] = useState<readonly GroupSnapshot[]>([]);
   const [active, setActive] = useState<ActiveItem | null>(null);
   const [confirmedFingerprints, setConfirmedFingerprints] = useState<Set<string>>(new Set());
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
+  const [groupCreateState, setGroupCreateState] = useState<GroupCreateState>({ copied: false });
   const [error, setError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
@@ -93,12 +109,14 @@ export function PrivateDmScreen({
         setError(undefined);
       }
       try {
-        const [sessionList, channelList] = await Promise.all([
+        const [sessionList, channelList, groupList] = await Promise.all([
           gateway.listPrivateSessions(),
           gateway.listChannels(),
+          gateway.listPrivateGroups(),
         ]);
         setSessions(sessionList.sessions);
         setChannels(channelList.channels);
+        setGroups(groupList.groups);
         setActive((current) => {
           if (current?.type === "dm" && sessionList.sessions.some((s) => s.session_id === current.id)) {
             return current;
@@ -106,8 +124,14 @@ export function PrivateDmScreen({
           if (current?.type === "channel" && channelList.channels.some((c) => c.name === current.name)) {
             return current;
           }
+          if (current?.type === "group" && groupList.groups.some((g) => g.group_id === current.id)) {
+            return current;
+          }
           if (sessionList.sessions.length > 0) {
             return { type: "dm", id: sessionList.sessions[0].session_id };
+          }
+          if (groupList.groups.length > 0) {
+            return { type: "group", id: groupList.groups[0].group_id };
           }
           if (channelList.channels.length > 0) {
             return { type: "channel", name: channelList.channels[0].name };
@@ -185,6 +209,45 @@ export function PrivateDmScreen({
       await refresh(true);
     });
 
+  const createGroup = () =>
+    run(async () => {
+      const created = await gateway.createPrivateGroup({
+        ...requestBase,
+        label: groupLabel.trim() || null,
+      });
+      await copyText(created.invite_uri);
+      setGroupCreateState({ inviteUri: created.invite_uri, copied: true });
+      setActive({ type: "group", id: created.group_id });
+      setShowSetup(true);
+      setGroupLabel("");
+      await refresh(true);
+    });
+
+  const joinGroup = () =>
+    run(async () => {
+      const trimmed = groupInvite.trim();
+      if (!trimmed) {
+        return;
+      }
+      const snapshot = await gateway.joinPrivateGroup({
+        ...requestBase,
+        invite_uri: trimmed,
+      });
+      setGroupInvite("");
+      setActive({ type: "group", id: snapshot.group_id });
+      setShowSetup(false);
+      await refresh(true);
+    });
+
+  const copyGroupInvite = async () => {
+    const uri = groupCreateState.inviteUri;
+    if (!uri) {
+      return;
+    }
+    await copyText(uri);
+    setGroupCreateState((state) => ({ ...state, copied: true }));
+  };
+
   const copyInvite = async () => {
     const uri = createState.inviteUri;
     if (!uri) {
@@ -203,8 +266,10 @@ export function PrivateDmScreen({
     void run(async () => {
       if (active.type === "dm") {
         await gateway.sendPrivateMessage(active.id, body);
-      } else {
+      } else if (active.type === "channel") {
         await gateway.sendChannelMessage(active.name, body);
+      } else {
+        await gateway.sendGroupMessage(active.id, body);
       }
       setComposer("");
       await refresh(true);
@@ -223,8 +288,10 @@ export function PrivateDmScreen({
           next.delete(active.id);
           return next;
         });
-      } else {
+      } else if (active.type === "channel") {
         await gateway.leaveChannel(active.name);
+      } else {
+        await gateway.closePrivateGroup(active.id);
       }
       setActive(null);
       await refresh(true);
@@ -238,7 +305,9 @@ export function PrivateDmScreen({
     active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
   const activeChannel =
     active?.type === "channel" ? channels.find((c) => c.name === active.name) ?? null : null;
-  const showWelcome = (!activeSession && !activeChannel) || showSetup;
+  const activeGroup =
+    active?.type === "group" ? groups.find((g) => g.group_id === active.id) ?? null : null;
+  const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
@@ -258,6 +327,11 @@ export function PrivateDmScreen({
             <span className="state-dot" />
             {channelText.broadcastBadge}
           </span>
+        ) : activeGroup ? (
+          <StatePill
+            state={activeGroup.state}
+            label={stateLabels[activeGroup.state] ?? activeGroup.state}
+          />
         ) : null}
       </header>
 
@@ -265,6 +339,7 @@ export function PrivateDmScreen({
         <SessionRail
           sessions={sessions}
           channels={channels}
+          groups={groups}
           active={active}
           onSelect={(item) => {
             setActive(item);
@@ -274,6 +349,7 @@ export function PrivateDmScreen({
             setShowSetup(true);
             setActive(null);
             setCreateState({ copied: false });
+            setGroupCreateState({ copied: false });
           }}
         />
 
@@ -285,18 +361,26 @@ export function PrivateDmScreen({
               listenPort={listenPort}
               inviteUri={inviteUri}
               channelName={channelName}
+              groupLabel={groupLabel}
+              groupInvite={groupInvite}
               busy={busy}
               createState={createState}
+              groupCreateState={groupCreateState}
               error={error}
               onDisplayName={setDisplayName}
               onStaticPeer={setStaticPeer}
               onListenPort={setListenPort}
               onInviteUri={setInviteUri}
               onChannelName={setChannelName}
+              onGroupLabel={setGroupLabel}
+              onGroupInvite={setGroupInvite}
               onCreate={createInvite}
               onAccept={acceptInvite}
               onJoinChannel={joinChannel}
+              onCreateGroup={createGroup}
+              onJoinGroup={joinGroup}
               onCopyInvite={copyInvite}
+              onCopyGroupInvite={copyGroupInvite}
             />
           ) : activeSession ? (
             <ActiveDmChat
@@ -312,6 +396,15 @@ export function PrivateDmScreen({
           ) : activeChannel ? (
             <ActiveChannelChat
               channel={activeChannel}
+              composer={composer}
+              busy={busy}
+              onComposer={setComposer}
+              onSend={sendMessage}
+              onClose={closeActive}
+            />
+          ) : activeGroup ? (
+            <ActiveGroupChat
+              group={activeGroup}
               composer={composer}
               busy={busy}
               onComposer={setComposer}
@@ -341,6 +434,8 @@ export function PrivateDmScreen({
             <SessionDiagnostics session={activeSession} />
           ) : activeChannel ? (
             <ChannelDiagnostics channel={activeChannel} />
+          ) : activeGroup ? (
+            <GroupDiagnostics group={activeGroup} />
           ) : (
             <div className="diagnostic-group">
               <div className="diagnostic-group-label">Session</div>
@@ -366,12 +461,14 @@ export function PrivateDmScreen({
 function SessionRail({
   sessions,
   channels,
+  groups,
   active,
   onSelect,
   onNew,
 }: {
   sessions: readonly SessionSnapshot[];
   channels: readonly ChannelSnapshot[];
+  groups: readonly GroupSnapshot[];
   active: ActiveItem | null;
   onSelect: (item: ActiveItem) => void;
   onNew: () => void;
@@ -391,7 +488,18 @@ function SessionRail({
             onClick={() => onSelect({ type: "dm", id: session.session_id })}
           />
         ))}
-        {channels.length > 0 && sessions.length > 0 ? <div className="rail-divider" /> : null}
+        {groups.length > 0 && sessions.length > 0 ? <div className="rail-divider" /> : null}
+        {groups.map((group) => (
+          <GroupRailItem
+            key={`gr-${group.group_id}`}
+            group={group}
+            active={active?.type === "group" && active.id === group.group_id}
+            onClick={() => onSelect({ type: "group", id: group.group_id })}
+          />
+        ))}
+        {channels.length > 0 && (sessions.length > 0 || groups.length > 0) ? (
+          <div className="rail-divider" />
+        ) : null}
         {channels.map((channel) => (
           <ChannelRailItem
             key={`ch-${channel.name}`}
@@ -452,28 +560,63 @@ function ChannelRailItem({
   );
 }
 
+function GroupRailItem({
+  group,
+  active,
+  onClick,
+}: {
+  group: GroupSnapshot;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const label = group.label ?? shorten(group.group_id, 6);
+  return (
+    <button
+      type="button"
+      className={`rail-item rail-group ${active ? "rail-item-active" : ""}`}
+      onClick={onClick}
+      title={`${label} · ${group.member_count} members`}
+      aria-label={`Open group ${label}`}
+    >
+      <IconUsers size={18} />
+      <span className="rail-channel-label">{label}</span>
+      <span className={`rail-dot rail-dot-${group.state}`} />
+    </button>
+  );
+}
+
 function NewSessionPanel(props: {
   displayName: string;
   staticPeer: string;
   listenPort: number;
   inviteUri: string;
   channelName: string;
+  groupLabel: string;
+  groupInvite: string;
   busy: boolean;
   createState: CreateState;
+  groupCreateState: GroupCreateState;
   error?: string;
   onDisplayName: (value: string) => void;
   onStaticPeer: (value: string) => void;
   onListenPort: (value: number) => void;
   onInviteUri: (value: string) => void;
   onChannelName: (value: string) => void;
+  onGroupLabel: (value: string) => void;
+  onGroupInvite: (value: string) => void;
   onCreate: () => void;
   onAccept: () => void;
   onJoinChannel: () => void;
+  onCreateGroup: () => void;
+  onJoinGroup: () => void;
   onCopyInvite: () => void;
+  onCopyGroupInvite: () => void;
 }) {
   const hasInvite = Boolean(props.createState.inviteUri);
+  const hasGroupInvite = Boolean(props.groupCreateState.inviteUri);
   const canAccept = props.inviteUri.trim().length > 0 && !props.busy;
   const canJoinChannel = props.channelName.trim().length > 0 && !props.busy;
+  const canJoinGroup = props.groupInvite.trim().length > 0 && !props.busy;
   return (
     <div className="new-session-pane">
       <header className="new-session-header">
@@ -583,6 +726,59 @@ function NewSessionPanel(props: {
             </button>
           </div>
         </section>
+
+        <section className="card" aria-label={groupText.createCardTitle}>
+          <h2>{groupText.createCardTitle}</h2>
+          <p className="card-hint">{groupText.createHint}</p>
+          <Field label={groupText.labelLabel} hint={groupText.labelHint}>
+            <input
+              aria-label="Group label"
+              placeholder={groupText.labelPlaceholder}
+              value={props.groupLabel}
+              onChange={(event) => props.onGroupLabel(event.target.value)}
+            />
+          </Field>
+          <div className="card-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={props.onCreateGroup}
+              disabled={props.busy}
+            >
+              {hasGroupInvite ? groupText.recreateButton : groupText.createButton}
+            </button>
+            {hasGroupInvite ? (
+              <button className="btn btn-ghost" type="button" onClick={props.onCopyGroupInvite}>
+                {props.groupCreateState.copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+                {props.groupCreateState.copied ? inviteText.copiedButton : inviteText.copyButton}
+              </button>
+            ) : null}
+          </div>
+          {hasGroupInvite ? (
+            <code className="invite-code">{props.groupCreateState.inviteUri}</code>
+          ) : null}
+        </section>
+
+        <section className="card" aria-label={groupText.joinCardTitle}>
+          <h2>{groupText.joinCardTitle}</h2>
+          <p className="card-hint">{groupText.joinHint}</p>
+          <textarea
+            aria-label="Group invite URI"
+            placeholder={groupText.joinPlaceholder}
+            value={props.groupInvite}
+            onChange={(event) => props.onGroupInvite(event.target.value)}
+          />
+          <div className="card-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={props.onJoinGroup}
+              disabled={!canJoinGroup}
+            >
+              {groupText.joinButton}
+            </button>
+          </div>
+        </section>
       </div>
 
       {props.error ? <div className="inline-error">{props.error}</div> : null}
@@ -687,6 +883,155 @@ function ActiveChannelChat(props: {
         onSend={props.onSend}
         disabled={props.busy}
       />
+    </>
+  );
+}
+
+function ActiveGroupChat(props: {
+  group: GroupSnapshot;
+  composer: string;
+  busy: boolean;
+  onComposer: (value: string) => void;
+  onSend: (event: FormEvent) => void;
+  onClose: () => void;
+}) {
+  const ready = props.group.state === READY_STATE;
+  const label = props.group.label ?? groupText.untitled;
+  const inviteUri = props.group.invite_uri;
+  return (
+    <>
+      <header className="chat-header">
+        <div className="group-icon">
+          <IconUsers size={18} />
+        </div>
+        <div className="chat-title-block">
+          <h1 id="chat-title">{label}</h1>
+          <p>
+            {props.group.is_admin ? `${groupText.adminBadge} · ` : ""}
+            {`${props.group.member_count} member${props.group.member_count === 1 ? "" : "s"} · MLS ${
+              props.group.state
+            }`}
+          </p>
+        </div>
+        {props.group.is_admin ? (
+          <span className="admin-pill" title={groupText.adminBadge}>
+            <IconCrown size={12} />
+            {groupText.adminBadge}
+          </span>
+        ) : null}
+        {inviteUri ? (
+          <button
+            className="btn btn-ghost btn-icon"
+            type="button"
+            onClick={() => void navigator.clipboard?.writeText?.(inviteUri)}
+            aria-label={groupText.copyInvite}
+            title={groupText.copyInvite}
+          >
+            <IconCopy size={14} />
+          </button>
+        ) : null}
+        <button
+          className="btn btn-ghost btn-icon"
+          type="button"
+          onClick={props.onClose}
+          aria-label={groupText.leaveLabel}
+          title={groupText.leaveLabel}
+        >
+          <IconLogout size={16} />
+        </button>
+      </header>
+
+      <GroupNotice />
+
+      <div className="chat-scroll scroll">
+        <GroupChatList messages={props.group.messages} />
+      </div>
+
+      <Composer
+        value={props.composer}
+        onChange={props.onComposer}
+        onSend={props.onSend}
+        disabled={!ready || props.busy}
+      />
+    </>
+  );
+}
+
+function GroupNotice() {
+  return (
+    <section className="crypto-banner crypto-banner-group" aria-label={groupText.noticeTitle}>
+      <div className="crypto-icon">
+        <IconLock size={18} />
+      </div>
+      <div>
+        <strong>{groupText.noticeTitle}</strong>
+        <p>{groupText.noticeBody}</p>
+      </div>
+    </section>
+  );
+}
+
+function GroupChatList({ messages }: { messages: readonly GroupMessage[] }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
+  }, [messages.length]);
+
+  if (messages.length === 0) {
+    return (
+      <div className="chat-empty">
+        <strong>{groupText.emptyTitle}</strong>
+        <p>{groupText.emptyBody}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="message-stack">
+      {messages.map((message, index) => (
+        <GroupMessageRow message={message} key={`${message.from_fingerprint}-${index}`} />
+      ))}
+      <div ref={anchorRef} aria-hidden="true" />
+    </div>
+  );
+}
+
+function GroupMessageRow({ message }: { message: GroupMessage }) {
+  return (
+    <article className="message-row">
+      <Avatar name={message.from_device} />
+      <div className="message-body">
+        <div className="message-meta">
+          <strong>{message.from_device}</strong>
+          <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
+          <code>MLS</code>
+        </div>
+        <p>{message.body}</p>
+        <div className="message-seal">
+          <IconLockOpen size={10} />
+          <span>OpenMLS · sealed</span>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function GroupDiagnostics({ group }: { group: GroupSnapshot }) {
+  return (
+    <>
+      <div className="diagnostic-group">
+        <div className="diagnostic-group-label">Group</div>
+        <Row k="Label" v={group.label ?? "—"} />
+        <Row k="Members" v={String(group.member_count)} />
+        <Row k="Role" v={group.is_admin ? "admin" : "member"} />
+        <Row k="MLS state" v={stateLabels[group.state] ?? group.state} />
+        <Row k="Group id" v={shorten(group.group_id, 12)} />
+        <Row k="Creator" v={shorten(group.creator_fingerprint, 8)} />
+        <Row k="Display" v={group.display_name} />
+        <Row k="Device" v={shorten(group.device_fingerprint, 10)} />
+      </div>
+      <MeshDiagnostics mesh={group.mesh} />
+      <EventLog events={group.events} />
     </>
   );
 }
