@@ -244,16 +244,31 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .admin-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   margin-left: auto;
-  padding: 3px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
-  background: var(--moss-glow);
-  color: var(--moss);
+  background: var(--moss);
+  color: var(--moss-ink);
   font-size: 10.5px;
-  font-weight: 700;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
+  box-shadow: 0 0 0 2px rgba(183,216,74,0.18);
+}
+
+.rail-admin-crown {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--moss);
+  color: var(--moss-ink);
+  box-shadow: 0 0 0 2.5px var(--bg-0);
 }
 
 .crypto-banner-group {

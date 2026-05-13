@@ -575,10 +575,15 @@ function GroupRailItem({
       type="button"
       className={`rail-item rail-group ${active ? "rail-item-active" : ""}`}
       onClick={onClick}
-      title={`${label} · ${group.member_count} members`}
+      title={`${label} · ${group.member_count} members${group.is_admin ? " · admin" : ""}`}
       aria-label={`Open group ${label}`}
     >
       <IconUsers size={18} />
+      {group.is_admin ? (
+        <span className="rail-admin-crown" title={groupText.adminBadge}>
+          <IconCrown size={11} />
+        </span>
+      ) : null}
       <span className="rail-channel-label">{label}</span>
       <span className={`rail-dot rail-dot-${group.state}`} />
     </button>
@@ -915,8 +920,8 @@ function ActiveGroupChat(props: {
         </div>
         {props.group.is_admin ? (
           <span className="admin-pill" title={groupText.adminBadge}>
-            <IconCrown size={12} />
-            {groupText.adminBadge}
+            <IconCrown size={14} />
+            <span>{groupText.adminBadge}</span>
           </span>
         ) : null}
         {inviteUri ? (
