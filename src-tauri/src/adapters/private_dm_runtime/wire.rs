@@ -3,8 +3,22 @@ use serde::{Deserialize, Serialize};
 use super::contracts::PrivateDmRuntimeError;
 use crate::adapters::moss_ffi::MossNode;
 
-pub const CONTROL_CHANNEL: &str = "mls-control";
-pub const DATA_CHANNEL: &str = "mls-data";
+pub const CONTROL_CHANNEL_PREFIX: &str = "mls-control/";
+pub const DATA_CHANNEL_PREFIX: &str = "mls-data/";
+
+pub fn control_channel(session_id: &str) -> String {
+    format!("{CONTROL_CHANNEL_PREFIX}{session_id}")
+}
+
+pub fn data_channel(session_id: &str) -> String {
+    format!("{DATA_CHANNEL_PREFIX}{session_id}")
+}
+
+pub fn channel_session_id(channel: &str) -> Option<&str> {
+    channel
+        .strip_prefix(CONTROL_CHANNEL_PREFIX)
+        .or_else(|| channel.strip_prefix(DATA_CHANNEL_PREFIX))
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]

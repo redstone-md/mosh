@@ -3,17 +3,19 @@ mod invite;
 mod mls_session;
 mod wire;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub use contracts::{
-    AcceptInviteRequest, ChatMessage, InviteCreated, MeshInfo, PrivateDmRuntimeError,
-    SendMessageResult, SessionSnapshot, SnapshotEvent, StartSessionRequest,
+    AcceptInviteRequest, ChatMessage, CloseSessionResult, InviteCreated, MeshInfo,
+    PrivateDmRuntimeError, SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent,
+    StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use mls_session::MlsSessionCrypto;
 use wire::{
-    decode, decode_json, encode, publish_json, ControlEnvelope, DataEnvelope, CONTROL_CHANNEL,
-    DATA_CHANNEL,
+    channel_session_id, control_channel, data_channel, decode, decode_json, encode, publish_json,
+    ControlEnvelope, DataEnvelope,
 };
 
 use crate::adapters::moss_ffi::{
@@ -23,7 +25,7 @@ use crate::adapters::moss_ffi::{
 
 pub struct PrivateDmRuntime {
     moss: Arc<MossFfiRuntime>,
-    session: Option<PrivateDmSession>,
+    sessions: HashMap<String, PrivateDmSession>,
 }
 
 struct PrivateDmSession {
@@ -31,6 +33,7 @@ struct PrivateDmSession {
     device_id: String,
     participant_id: String,
     session_id: String,
+    mesh_id: String,
     fingerprint: String,
     invite_uri: Option<String>,
     peer_joined: bool,
@@ -38,6 +41,8 @@ struct PrivateDmSession {
     crypto: MlsSessionCrypto,
     messages: Vec<ChatMessage>,
     seen_moss_messages: Vec<String>,
+    control_channel: String,
+    data_channel: String,
 }
 
 #[derive(Clone, Copy)]
@@ -54,7 +59,7 @@ impl PrivateDmRuntime {
     pub fn from_shared(moss: Arc<MossFfiRuntime>) -> Self {
         Self {
             moss,
-            session: None,
+            sessions: HashMap::new(),
         }
     }
 
@@ -72,23 +77,24 @@ impl PrivateDmRuntime {
         let node = start_node(
             &self.moss,
             &mesh_id,
+            &session_id,
             request.listen_port,
             request.static_peer,
         )?;
 
-        self.session = Some(PrivateDmSession {
-            role: SessionRole::Alice,
-            device_id: request.display_name,
+        let session = PrivateDmSession::new(
+            SessionRole::Alice,
+            request.display_name,
             participant_id,
-            session_id: session_id.clone(),
-            fingerprint: fingerprint.clone(),
-            invite_uri: Some(invite_uri.clone()),
-            peer_joined: false,
+            session_id.clone(),
+            mesh_id.clone(),
+            fingerprint.clone(),
+            Some(invite_uri.clone()),
             node,
             crypto,
-            messages: Vec::new(),
-            seen_moss_messages: Vec::new(),
-        });
+        );
+
+        self.sessions.insert(session_id.clone(), session);
 
         Ok(InviteCreated {
             invite_uri,
@@ -104,12 +110,16 @@ impl PrivateDmRuntime {
         request: AcceptInviteRequest,
     ) -> Result<SessionSnapshot, PrivateDmRuntimeError> {
         let invite = ParsedInvite::parse(&request.invite_uri)?;
+        if self.sessions.contains_key(&invite.session_id) {
+            return Err(PrivateDmRuntimeError::DuplicateSession(invite.session_id));
+        }
         let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
         let participant_id = crypto.random_token("participant")?;
         let key_package = crypto.key_package_bytes()?;
         let node = start_node(
             &self.moss,
             &invite.mesh_id,
+            &invite.session_id,
             request.listen_port,
             request.static_peer.or(invite.peer_address),
         )?;
@@ -120,33 +130,32 @@ impl PrivateDmRuntime {
             key_package_b64: encode(&key_package),
         };
 
-        publish_json(&node, CONTROL_CHANNEL, &envelope)?;
-        self.session = Some(PrivateDmSession {
-            role: SessionRole::Bob,
-            device_id: request.display_name,
+        publish_json(&node, &control_channel(&invite.session_id), &envelope)?;
+
+        let session = PrivateDmSession::new(
+            SessionRole::Bob,
+            request.display_name,
             participant_id,
-            session_id: invite.session_id,
-            fingerprint: invite.fingerprint,
-            invite_uri: Some(request.invite_uri),
-            peer_joined: false,
+            invite.session_id.clone(),
+            invite.mesh_id,
+            invite.fingerprint,
+            Some(request.invite_uri),
             node,
             crypto,
-            messages: Vec::new(),
-            seen_moss_messages: Vec::new(),
-        });
+        );
 
-        self.poll()
+        let session_id = session.session_id.clone();
+        self.sessions.insert(session_id.clone(), session);
+        self.poll_session(&session_id)
     }
 
     pub fn send_message(
         &mut self,
+        session_id: &str,
         body: String,
     ) -> Result<SendMessageResult, PrivateDmRuntimeError> {
-        self.poll()?;
-        let session = self
-            .session
-            .as_mut()
-            .ok_or(PrivateDmRuntimeError::MissingSession)?;
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
         let ciphertext = session.crypto.encrypt(body.as_bytes())?;
         let envelope = DataEnvelope {
             session_id: session.session_id.clone(),
@@ -155,34 +164,117 @@ impl PrivateDmRuntime {
             ciphertext_b64: encode(&ciphertext),
         };
 
-        publish_json(&session.node, DATA_CHANNEL, &envelope)?;
+        publish_json(&session.node, &session.data_channel, &envelope)?;
         session.messages.push(ChatMessage {
             from_device: session.device_id.clone(),
             body,
         });
 
         Ok(SendMessageResult {
+            session_id: session.session_id.clone(),
             state: session.state(),
             ciphertext_bytes: ciphertext.len(),
         })
     }
 
-    pub fn poll(&mut self) -> Result<SessionSnapshot, PrivateDmRuntimeError> {
-        let mut messages = drain_received_messages();
-        let session = self
-            .session
-            .as_mut()
-            .ok_or(PrivateDmRuntimeError::MissingSession)?;
-
-        for message in messages.drain(..) {
-            session.handle_moss_message(message)?;
-        }
-
+    pub fn poll_session(
+        &mut self,
+        session_id: &str,
+    ) -> Result<SessionSnapshot, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_ref(session_id)?;
         Ok(session.snapshot())
+    }
+
+    pub fn list_sessions(&mut self) -> Result<SessionListSnapshot, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let mut snapshots: Vec<SessionSnapshot> = self
+            .sessions
+            .values()
+            .map(PrivateDmSession::snapshot)
+            .collect();
+        snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        Ok(SessionListSnapshot { sessions: snapshots })
+    }
+
+    pub fn close_session(
+        &mut self,
+        session_id: &str,
+    ) -> Result<CloseSessionResult, PrivateDmRuntimeError> {
+        match self.sessions.remove(session_id) {
+            Some(_) => Ok(CloseSessionResult {
+                session_id: session_id.to_string(),
+                closed: true,
+            }),
+            None => Err(PrivateDmRuntimeError::MissingSession),
+        }
+    }
+
+    fn drain_inbound(&mut self) -> Result<(), PrivateDmRuntimeError> {
+        let inbound = drain_received_messages();
+        for message in inbound {
+            let session_id = match channel_session_id(&message.channel) {
+                Some(sid) => sid.to_string(),
+                None => continue,
+            };
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                session.handle_moss_message(message)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn session_mut(
+        &mut self,
+        session_id: &str,
+    ) -> Result<&mut PrivateDmSession, PrivateDmRuntimeError> {
+        self.sessions
+            .get_mut(session_id)
+            .ok_or(PrivateDmRuntimeError::MissingSession)
+    }
+
+    fn session_ref(
+        &self,
+        session_id: &str,
+    ) -> Result<&PrivateDmSession, PrivateDmRuntimeError> {
+        self.sessions
+            .get(session_id)
+            .ok_or(PrivateDmRuntimeError::MissingSession)
     }
 }
 
 impl PrivateDmSession {
+    fn new(
+        role: SessionRole,
+        device_id: String,
+        participant_id: String,
+        session_id: String,
+        mesh_id: String,
+        fingerprint: String,
+        invite_uri: Option<String>,
+        node: MossNode,
+        crypto: MlsSessionCrypto,
+    ) -> Self {
+        let control_channel = control_channel(&session_id);
+        let data_channel = data_channel(&session_id);
+        Self {
+            role,
+            device_id,
+            participant_id,
+            session_id,
+            mesh_id,
+            fingerprint,
+            invite_uri,
+            peer_joined: false,
+            node,
+            crypto,
+            messages: Vec::new(),
+            seen_moss_messages: Vec::new(),
+            control_channel,
+            data_channel,
+        }
+    }
+
     fn handle_moss_message(
         &mut self,
         message: MossReceivedMessage,
@@ -190,11 +282,12 @@ impl PrivateDmSession {
         if self.has_seen_message(&message) {
             return Ok(());
         }
-
-        match message.channel.as_str() {
-            CONTROL_CHANNEL => self.handle_control(message.payload),
-            DATA_CHANNEL => self.handle_data(message.payload),
-            _ => Ok(()),
+        if message.channel == self.control_channel {
+            self.handle_control(message.payload)
+        } else if message.channel == self.data_channel {
+            self.handle_data(message.payload)
+        } else {
+            Ok(())
         }
     }
 
@@ -233,7 +326,7 @@ impl PrivateDmSession {
                     ratchet_tree_b64: encode(&tree),
                 };
 
-                publish_json(&self.node, CONTROL_CHANNEL, &envelope)
+                publish_json(&self.node, &self.control_channel, &envelope)
             }
             ControlEnvelope::Welcome {
                 session_id,
@@ -286,7 +379,10 @@ impl PrivateDmSession {
 
     fn snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
+            session_id: self.session_id.clone(),
+            mesh_id: self.mesh_id.clone(),
             role: self.role.as_str().to_string(),
+            display_name: self.device_id.clone(),
             state: self.state(),
             invite_uri: self.invite_uri.clone(),
             fingerprint: self.fingerprint.clone(),
@@ -336,6 +432,7 @@ impl SessionRole {
 fn start_node(
     runtime: &Arc<MossFfiRuntime>,
     mesh_id: &str,
+    session_id: &str,
     listen_port: u16,
     static_peer: Option<String>,
 ) -> Result<MossNode, PrivateDmRuntimeError> {
@@ -356,9 +453,9 @@ fn start_node(
     clear_event_log();
     node.start()
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    node.subscribe(CONTROL_CHANNEL)
+    node.subscribe(&control_channel(session_id))
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    node.subscribe(DATA_CHANNEL)
+    node.subscribe(&data_channel(session_id))
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
 
     Ok(node)
@@ -385,26 +482,38 @@ mod tests {
 
         let mut bob = PrivateDmRuntime::from_shared(runtime);
         bob.accept_invite(AcceptInviteRequest {
-            invite_uri: invite.invite_uri,
+            invite_uri: invite.invite_uri.clone(),
             display_name: "Bob".to_string(),
             listen_port: 42131,
             static_peer: Some("127.0.0.1:42130".to_string()),
         })
         .expect("Bob should accept invite");
 
-        wait_until_ready(&mut alice, &mut bob);
+        wait_until_ready(&mut alice, &mut bob, &invite.session_id);
         alice
-            .send_message("hello bob".to_string())
+            .send_message(&invite.session_id, "hello bob".to_string())
             .expect("Alice should send");
 
-        let snapshot = wait_for_message(&mut bob, "hello bob");
+        let snapshot = wait_for_message(&mut bob, &invite.session_id, "hello bob");
         assert_eq!(snapshot.state, "ready");
     }
 
-    fn wait_until_ready(alice: &mut PrivateDmRuntime, bob: &mut PrivateDmRuntime) {
+    fn wait_until_ready(
+        alice: &mut PrivateDmRuntime,
+        bob: &mut PrivateDmRuntime,
+        session_id: &str,
+    ) {
         for _ in 0..80 {
-            let alice_ready = alice.poll().expect("Alice poll should pass").state == "ready";
-            let bob_ready = bob.poll().expect("Bob poll should pass").state == "ready";
+            let alice_ready = alice
+                .poll_session(session_id)
+                .expect("Alice poll should pass")
+                .state
+                == "ready";
+            let bob_ready = bob
+                .poll_session(session_id)
+                .expect("Bob poll should pass")
+                .state
+                == "ready";
             if alice_ready && bob_ready {
                 return;
             }
@@ -414,9 +523,13 @@ mod tests {
         panic!("sessions did not become ready");
     }
 
-    fn wait_for_message(runtime: &mut PrivateDmRuntime, body: &str) -> SessionSnapshot {
+    fn wait_for_message(
+        runtime: &mut PrivateDmRuntime,
+        session_id: &str,
+        body: &str,
+    ) -> SessionSnapshot {
         for _ in 0..30 {
-            let snapshot = runtime.poll().expect("poll should pass");
+            let snapshot = runtime.poll_session(session_id).expect("poll should pass");
             if snapshot.messages.iter().any(|message| message.body == body) {
                 return snapshot;
             }

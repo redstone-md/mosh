@@ -3,10 +3,13 @@ import {
   IconCheck,
   IconCopy,
   IconLock,
+  IconMessageCircle,
   IconPlugConnected,
+  IconPlus,
   IconRefresh,
   IconSend,
   IconShieldCheck,
+  IconX,
 } from "@tabler/icons-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -35,16 +38,10 @@ function defaultDisplayName(): string {
   return `mosh-${suffix}`;
 }
 
-interface RuntimeState {
-  readonly createdInvite?: string;
-  readonly listenAddress?: string;
-  readonly snapshot?: SessionSnapshot;
-  readonly error?: string;
-  readonly busy: boolean;
+interface CreateState {
+  readonly inviteUri?: string;
   readonly copied: boolean;
 }
-
-const INITIAL_RUNTIME: RuntimeState = { busy: false, copied: false };
 
 export function PrivateDmScreen({
   gateway = nativeMessagingGateway,
@@ -56,59 +53,14 @@ export function PrivateDmScreen({
   const [listenPort, setListenPort] = useState<number>(DEFAULT_LISTEN_PORT);
   const [inviteUri, setInviteUri] = useState("");
   const [composer, setComposer] = useState("");
-  const [fingerprintConfirmed, setFingerprintConfirmed] = useState(false);
-  const [sessionActive, setSessionActive] = useState(false);
-  const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME);
+  const [sessions, setSessions] = useState<readonly SessionSnapshot[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [confirmedFingerprints, setConfirmedFingerprints] = useState<Set<string>>(new Set());
+  const [createState, setCreateState] = useState<CreateState>({ copied: false });
+  const [error, setError] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
   const pollInFlight = useRef(false);
-
-  const run = async (action: () => Promise<Partial<RuntimeState>>) => {
-    setRuntime((state) => ({ ...state, busy: true, error: undefined }));
-    try {
-      const next = await action();
-      setRuntime((state) => ({ ...state, ...next, busy: false }));
-    } catch (error) {
-      setRuntime((state) => ({ ...state, busy: false, error: readableError(error) }));
-    }
-  };
-
-  const refreshSession = useCallback(
-    async (quiet = false) => {
-      if (pollInFlight.current) {
-        return;
-      }
-      pollInFlight.current = true;
-      if (!quiet) {
-        setRuntime((state) => ({ ...state, busy: true, error: undefined }));
-      }
-      try {
-        const snapshot = await gateway.pollPrivateSession();
-        setRuntime((state) => ({
-          ...state,
-          snapshot,
-          busy: quiet ? state.busy : false,
-          error: undefined,
-        }));
-      } catch (error) {
-        setRuntime((state) => ({
-          ...state,
-          busy: quiet ? state.busy : false,
-          error: readableError(error),
-        }));
-      } finally {
-        pollInFlight.current = false;
-      }
-    },
-    [gateway],
-  );
-
-  useEffect(() => {
-    if (!sessionActive) {
-      return;
-    }
-    void refreshSession(true);
-    const intervalId = window.setInterval(() => void refreshSession(true), AUTO_POLL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [refreshSession, sessionActive]);
 
   const sessionRequestBase = useMemo(
     () => ({
@@ -119,17 +71,67 @@ export function PrivateDmScreen({
     [displayName, listenPort, staticPeer],
   );
 
+  const refresh = useCallback(
+    async (quiet = false) => {
+      if (pollInFlight.current) {
+        return;
+      }
+      pollInFlight.current = true;
+      if (!quiet) {
+        setBusy(true);
+        setError(undefined);
+      }
+      try {
+        const list = await gateway.listPrivateSessions();
+        setSessions(list.sessions);
+        setActiveSessionId((current) => {
+          if (current && list.sessions.some((session) => session.session_id === current)) {
+            return current;
+          }
+          return list.sessions[0]?.session_id ?? null;
+        });
+        if (!quiet) {
+          setBusy(false);
+          setError(undefined);
+        }
+      } catch (err) {
+        if (!quiet) {
+          setBusy(false);
+        }
+        setError(readableError(err));
+      } finally {
+        pollInFlight.current = false;
+      }
+    },
+    [gateway],
+  );
+
+  useEffect(() => {
+    void refresh(true);
+    const intervalId = window.setInterval(() => void refresh(true), AUTO_POLL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [refresh]);
+
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await action();
+      setBusy(false);
+    } catch (err) {
+      setError(readableError(err));
+      setBusy(false);
+    }
+  };
+
   const createInvite = () =>
     run(async () => {
       const invite = await gateway.createPrivateInvite(sessionRequestBase);
       await copyText(invite.invite_uri);
-      setSessionActive(true);
-      setFingerprintConfirmed(false);
-      return {
-        createdInvite: invite.invite_uri,
-        listenAddress: invite.listen_address,
-        copied: true,
-      };
+      setCreateState({ inviteUri: invite.invite_uri, copied: true });
+      setActiveSessionId(invite.session_id);
+      setShowSetup(true);
+      await refresh(true);
     });
 
   const acceptInvite = () =>
@@ -138,39 +140,50 @@ export function PrivateDmScreen({
         ...sessionRequestBase,
         invite_uri: inviteUri.trim(),
       });
-      setSessionActive(true);
-      setFingerprintConfirmed(false);
-      return { snapshot };
+      setInviteUri("");
+      setActiveSessionId(snapshot.session_id);
+      setShowSetup(false);
+      await refresh(true);
     });
 
   const copyInvite = async () => {
-    const uri = runtime.createdInvite;
+    const uri = createState.inviteUri;
     if (!uri) {
       return;
     }
     await copyText(uri);
-    setRuntime((state) => ({ ...state, copied: true }));
+    setCreateState((state) => ({ ...state, copied: true }));
   };
 
-  const send = (event: FormEvent) => {
+  const sendMessage = (event: FormEvent) => {
     event.preventDefault();
     const body = composer.trim();
-    if (!body) {
+    if (!body || !activeSessionId) {
       return;
     }
     void run(async () => {
-      await gateway.sendPrivateMessage(body);
+      await gateway.sendPrivateMessage(activeSessionId, body);
       setComposer("");
-      return { snapshot: await gateway.pollPrivateSession() };
+      await refresh(true);
     });
   };
 
-  const snapshot = runtime.snapshot;
-  const state = snapshot?.state ?? (sessionActive ? "waiting" : "idle");
-  const stateLabel = stateLabels[state] ?? state;
-  const ready = state === READY_STATE;
-  const fingerprint = snapshot?.fingerprint ?? "";
-  const canConnect = inviteUri.trim().length > 0 && !runtime.busy;
+  const closeSession = (sessionId: string) =>
+    run(async () => {
+      await gateway.closePrivateSession(sessionId);
+      setConfirmedFingerprints((current) => {
+        const next = new Set(current);
+        next.delete(sessionId);
+        return next;
+      });
+      await refresh(true);
+    });
+
+  const confirmFingerprint = (sessionId: string) =>
+    setConfirmedFingerprints((current) => new Set(current).add(sessionId));
+
+  const activeSession = sessions.find((session) => session.session_id === activeSessionId) ?? null;
+  const showWelcome = sessions.length === 0 || showSetup;
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
@@ -180,72 +193,62 @@ export function PrivateDmScreen({
           <strong>{shellText.productName}</strong>
         </div>
         <span className="titlebar-subtitle">{shellText.windowSubtitle}</span>
-        <StatePill state={state} label={stateLabel} />
+        {activeSession ? (
+          <StatePill
+            state={activeSession.state}
+            label={stateLabels[activeSession.state] ?? activeSession.state}
+          />
+        ) : null}
       </header>
 
       <div className="desktop-body">
-        <aside className="side-panel" aria-label="Session setup">
-          <SetupCard
-            displayName={displayName}
-            staticPeer={staticPeer}
-            listenPort={listenPort}
-            sessionActive={sessionActive}
-            onDisplayName={setDisplayName}
-            onStaticPeer={setStaticPeer}
-            onListenPort={setListenPort}
-          />
-
-          <InviteCreateCard
-            invite={runtime.createdInvite}
-            copied={runtime.copied}
-            busy={runtime.busy}
-            onCreate={createInvite}
-            onCopy={copyInvite}
-          />
-
-          <InviteJoinCard
-            value={inviteUri}
-            onChange={setInviteUri}
-            onConnect={acceptInvite}
-            canConnect={canConnect}
-          />
-
-          <FingerprintCard
-            fingerprint={fingerprint}
-            confirmed={fingerprintConfirmed}
-            ready={ready}
-            onConfirm={() => setFingerprintConfirmed(true)}
-          />
-        </aside>
+        <SessionRail
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          onSelect={(id) => {
+            setActiveSessionId(id);
+            setShowSetup(false);
+          }}
+          onNew={() => {
+            setShowSetup(true);
+            setActiveSessionId(null);
+            setCreateState({ copied: false });
+          }}
+        />
 
         <section className="chat-pane" aria-labelledby="chat-title">
-          <header className="chat-header">
-            <div className="chat-title-block">
-              <h1 id="chat-title">Direct channel</h1>
-              <p>
-                {fingerprintConfirmed
-                  ? `MLS ${state} · fingerprint confirmed`
-                  : `MLS ${state} · fingerprint unverified`}
-              </p>
-            </div>
-            <div className="chat-state-line">
-              <IconLock size={12} />
-              <span>{chatText.cryptoFooter}</span>
-            </div>
-          </header>
-
-          <CryptoNotice />
-
-          <div className="chat-scroll scroll">
-            <ChatList messages={snapshot?.messages ?? []} />
-          </div>
-
-          <Composer
-            value={composer}
-            onChange={setComposer}
-            onSend={send}
-            disabled={!ready || runtime.busy}
-          />
+          {showWelcome ? (
+            <NewSessionPanel
+              displayName={displayName}
+              staticPeer={staticPeer}
+              listenPort={listenPort}
+              inviteUri={inviteUri}
+              busy={busy}
+              createState={createState}
+              error={error}
+              onDisplayName={setDisplayName}
+              onStaticPeer={setStaticPeer}
+              onListenPort={setListenPort}
+              onInviteUri={setInviteUri}
+              onCreate={createInvite}
+              onAccept={acceptInvite}
+              onCopyInvite={copyInvite}
+            />
+          ) : activeSession ? (
+            <ActiveChat
+              session={activeSession}
+              composer={composer}
+              confirmed={confirmedFingerprints.has(activeSession.session_id)}
+              busy={busy}
+              error={error}
+              onComposer={setComposer}
+              onSend={sendMessage}
+              onConfirm={() => confirmFingerprint(activeSession.session_id)}
+              onClose={() => closeSession(activeSession.session_id)}
+            />
+          ) : (
+            <EmptyState onNew={() => setShowSetup(true)} />
+          )}
         </section>
 
         <aside className="diagnostics-panel" aria-labelledby="diagnostics-title">
@@ -255,27 +258,29 @@ export function PrivateDmScreen({
             <button
               className="btn btn-ghost btn-icon"
               type="button"
-              onClick={() => void refreshSession(false)}
+              onClick={() => void refresh(false)}
               aria-label="Refresh status"
             >
               <IconRefresh size={14} />
             </button>
           </header>
 
-          <DiagnosticGroup label="Session">
-            <Row k="MLS state" v={stateLabel} />
-            <Row k="Role" v={snapshot?.role ?? "—"} />
-            <Row k="Channels" v={snapshot?.mesh?.channels?.join(", ") || "—"} />
-          </DiagnosticGroup>
+          {activeSession ? (
+            <SessionDiagnostics session={activeSession} />
+          ) : (
+            <div className="diagnostic-group">
+              <div className="diagnostic-group-label">Session</div>
+              <div className="diagnostic-row">
+                <span>State</span>
+                <strong>{shellText.noActive}</strong>
+              </div>
+            </div>
+          )}
 
-          <MeshDiagnostics mesh={snapshot?.mesh ?? null} listenAddress={runtime.listenAddress} />
-
-          <EventLog events={snapshot?.events ?? []} />
-
-          {runtime.error ? (
+          {error ? (
             <div className="diagnostic-row diagnostic-error">
               <span>Runtime error</span>
-              <strong>{runtime.error}</strong>
+              <strong>{error}</strong>
             </div>
           ) : null}
         </aside>
@@ -284,142 +289,261 @@ export function PrivateDmScreen({
   );
 }
 
-function SetupCard(props: {
+function SessionRail({
+  sessions,
+  activeSessionId,
+  onSelect,
+  onNew,
+}: {
+  sessions: readonly SessionSnapshot[];
+  activeSessionId: string | null;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
+  return (
+    <aside className="session-rail" aria-label="Active sessions">
+      <button className="rail-new" type="button" onClick={onNew} aria-label={shellText.newSession}>
+        <IconPlus size={18} />
+      </button>
+      <div className="rail-divider" />
+      <div className="rail-list">
+        {sessions.map((session) => (
+          <SessionRailItem
+            key={session.session_id}
+            session={session}
+            active={session.session_id === activeSessionId}
+            onClick={() => onSelect(session.session_id)}
+          />
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function SessionRailItem({
+  session,
+  active,
+  onClick,
+}: {
+  session: SessionSnapshot;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const label = peerLabel(session);
+  return (
+    <button
+      type="button"
+      className={`rail-item ${active ? "rail-item-active" : ""} rail-item-${session.state}`}
+      onClick={onClick}
+      title={`${label} · ${stateLabels[session.state] ?? session.state}`}
+      aria-label={`Open session with ${label}`}
+    >
+      <Avatar name={label} />
+      <span className={`rail-dot rail-dot-${session.state}`} />
+    </button>
+  );
+}
+
+function NewSessionPanel(props: {
   displayName: string;
   staticPeer: string;
   listenPort: number;
-  sessionActive: boolean;
+  inviteUri: string;
+  busy: boolean;
+  createState: CreateState;
+  error?: string;
   onDisplayName: (value: string) => void;
   onStaticPeer: (value: string) => void;
   onListenPort: (value: number) => void;
-}) {
-  return (
-    <section className="card" aria-label={setupText.sectionTitle}>
-      <div className="card-head">
-        <h2>{setupText.sectionTitle}</h2>
-        {props.sessionActive ? (
-          <span className="badge">applies on next session</span>
-        ) : null}
-      </div>
-      <Field label={setupText.displayNameLabel}>
-        <input
-          aria-label="Display name"
-          placeholder={setupText.displayNamePlaceholder}
-          value={props.displayName}
-          onChange={(event) => props.onDisplayName(event.target.value)}
-        />
-      </Field>
-      <Field label={setupText.staticPeerLabel} hint={setupText.staticPeerHint}>
-        <input
-          aria-label="Static peer"
-          placeholder={setupText.staticPeerPlaceholder}
-          value={props.staticPeer}
-          onChange={(event) => props.onStaticPeer(event.target.value)}
-        />
-      </Field>
-      <Field label={setupText.listenPortLabel} hint={setupText.listenPortHint}>
-        <input
-          type="number"
-          min={0}
-          max={65535}
-          aria-label="Listen port"
-          value={props.listenPort}
-          onChange={(event) => props.onListenPort(Number(event.target.value) || 0)}
-        />
-      </Field>
-    </section>
-  );
-}
-
-function InviteCreateCard(props: {
-  invite: string | undefined;
-  copied: boolean;
-  busy: boolean;
+  onInviteUri: (value: string) => void;
   onCreate: () => void;
-  onCopy: () => void;
+  onAccept: () => void;
+  onCopyInvite: () => void;
 }) {
-  const hasInvite = Boolean(props.invite);
+  const hasInvite = Boolean(props.createState.inviteUri);
+  const canAccept = props.inviteUri.trim().length > 0 && !props.busy;
   return (
-    <section className="card" aria-label={inviteText.createSectionTitle}>
-      <h2>{inviteText.createSectionTitle}</h2>
-      <p className="card-hint">{inviteText.createHint}</p>
-      <div className="card-actions">
-        <button
-          className="btn btn-primary"
-          type="button"
-          onClick={props.onCreate}
-          disabled={props.busy}
-        >
-          {hasInvite ? inviteText.recreateButton : inviteText.createButton}
-        </button>
-        {hasInvite ? (
-          <button className="btn btn-ghost" type="button" onClick={props.onCopy}>
-            {props.copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-            {props.copied ? inviteText.copiedButton : inviteText.copyButton}
-          </button>
-        ) : null}
+    <div className="new-session-pane">
+      <header className="new-session-header">
+        <h1>{inviteText.newSessionTitle}</h1>
+        <p>{cryptoNotice.body}</p>
+      </header>
+
+      <section className="card" aria-label={setupText.sectionTitle}>
+        <h2>{setupText.sectionTitle}</h2>
+        <Field label={setupText.displayNameLabel}>
+          <input
+            aria-label="Display name"
+            placeholder={setupText.displayNamePlaceholder}
+            value={props.displayName}
+            onChange={(event) => props.onDisplayName(event.target.value)}
+          />
+        </Field>
+        <Field label={setupText.staticPeerLabel} hint={setupText.staticPeerHint}>
+          <input
+            aria-label="Static peer"
+            placeholder={setupText.staticPeerPlaceholder}
+            value={props.staticPeer}
+            onChange={(event) => props.onStaticPeer(event.target.value)}
+          />
+        </Field>
+        <Field label={setupText.listenPortLabel} hint={setupText.listenPortHint}>
+          <input
+            type="number"
+            min={0}
+            max={65535}
+            aria-label="Listen port"
+            value={props.listenPort}
+            onChange={(event) => props.onListenPort(Number(event.target.value) || 0)}
+          />
+        </Field>
+      </section>
+
+      <div className="new-session-grid">
+        <section className="card" aria-label={inviteText.createSectionTitle}>
+          <h2>{inviteText.createSectionTitle}</h2>
+          <p className="card-hint">{inviteText.createHint}</p>
+          <div className="card-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={props.onCreate}
+              disabled={props.busy}
+            >
+              {hasInvite ? inviteText.recreateButton : inviteText.createButton}
+            </button>
+            {hasInvite ? (
+              <button className="btn btn-ghost" type="button" onClick={props.onCopyInvite}>
+                {props.createState.copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+                {props.createState.copied ? inviteText.copiedButton : inviteText.copyButton}
+              </button>
+            ) : null}
+          </div>
+          {hasInvite ? <code className="invite-code">{props.createState.inviteUri}</code> : null}
+        </section>
+
+        <section className="card" aria-label={inviteText.joinSectionTitle}>
+          <h2>{inviteText.joinSectionTitle}</h2>
+          <p className="card-hint">{inviteText.joinHint}</p>
+          <textarea
+            aria-label="Invite URI"
+            placeholder={inviteText.joinPlaceholder}
+            value={props.inviteUri}
+            onChange={(event) => props.onInviteUri(event.target.value)}
+          />
+          <div className="card-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={props.onAccept}
+              disabled={!canAccept}
+            >
+              {inviteText.joinButton}
+            </button>
+          </div>
+        </section>
       </div>
-      {hasInvite ? <code className="invite-code">{props.invite}</code> : null}
-    </section>
+
+      {props.error ? <div className="inline-error">{props.error}</div> : null}
+    </div>
   );
 }
 
-function InviteJoinCard(props: {
-  value: string;
-  canConnect: boolean;
-  onChange: (value: string) => void;
-  onConnect: () => void;
+function ActiveChat(props: {
+  session: SessionSnapshot;
+  composer: string;
+  confirmed: boolean;
+  busy: boolean;
+  error?: string;
+  onComposer: (value: string) => void;
+  onSend: (event: FormEvent) => void;
+  onConfirm: () => void;
+  onClose: () => void;
 }) {
+  const ready = props.session.state === READY_STATE;
+  const peerName = peerLabel(props.session);
   return (
-    <section className="card" aria-label={inviteText.joinSectionTitle}>
-      <h2>{inviteText.joinSectionTitle}</h2>
-      <p className="card-hint">{inviteText.joinHint}</p>
-      <textarea
-        aria-label="Invite URI"
-        placeholder={inviteText.joinPlaceholder}
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
+    <>
+      <header className="chat-header">
+        <Avatar name={peerName} />
+        <div className="chat-title-block">
+          <h1 id="chat-title">{peerName}</h1>
+          <p>
+            {props.confirmed
+              ? `MLS ${props.session.state} · fingerprint confirmed`
+              : `MLS ${props.session.state} · fingerprint unverified`}
+          </p>
+        </div>
+        <FingerprintBadge
+          fingerprint={props.session.fingerprint}
+          confirmed={props.confirmed}
+          onConfirm={props.onConfirm}
+        />
+        <button
+          className="btn btn-ghost btn-icon"
+          type="button"
+          onClick={props.onClose}
+          aria-label={shellText.closeSession}
+          title={shellText.closeSession}
+        >
+          <IconX size={16} />
+        </button>
+      </header>
+
+      <CryptoNotice />
+
+      <div className="chat-scroll scroll">
+        <ChatList messages={props.session.messages} />
+      </div>
+
+      <Composer
+        value={props.composer}
+        onChange={props.onComposer}
+        onSend={props.onSend}
+        disabled={!ready || props.busy}
       />
-      <div className="card-actions">
-        <button
-          className="btn btn-primary"
-          type="button"
-          onClick={props.onConnect}
-          disabled={!props.canConnect}
-        >
-          {inviteText.joinButton}
-        </button>
-      </div>
-    </section>
+    </>
   );
 }
 
-function FingerprintCard(props: {
+function EmptyState({ onNew }: { onNew: () => void }) {
+  return (
+    <div className="chat-empty welcome-empty">
+      <IconMessageCircle size={28} />
+      <strong>{chatText.noSessionTitle}</strong>
+      <p>{chatText.noSessionBody}</p>
+      <button className="btn btn-primary" type="button" onClick={onNew}>
+        <IconPlus size={14} />
+        {chatText.startCta}
+      </button>
+    </div>
+  );
+}
+
+function FingerprintBadge({
+  fingerprint,
+  confirmed,
+  onConfirm,
+}: {
   fingerprint: string;
   confirmed: boolean;
-  ready: boolean;
   onConfirm: () => void;
 }) {
-  const display = props.fingerprint
-    ? props.fingerprint.match(/.{1,4}/g)?.join(" ")
-    : "— waiting for peer —";
+  if (!fingerprint) {
+    return null;
+  }
+  const display = fingerprint.match(/.{1,4}/g)?.slice(0, 4).join(" ");
   return (
-    <section className="card" aria-label={inviteText.fingerprintLabel}>
-      <h2>{inviteText.fingerprintLabel}</h2>
-      <p className="card-hint">{inviteText.fingerprintHint}</p>
-      <code className="fingerprint-display">{display}</code>
-      <div className="card-actions">
-        <button
-          className="btn btn-primary btn-full"
-          type="button"
-          onClick={props.onConfirm}
-          disabled={!props.fingerprint || props.confirmed}
-        >
-          <IconCheck size={14} />
-          {props.confirmed ? inviteText.confirmedButton : inviteText.confirmButton}
-        </button>
-      </div>
-    </section>
+    <button
+      type="button"
+      className={`fingerprint-badge ${confirmed ? "fingerprint-badge-confirmed" : ""}`}
+      onClick={confirmed ? undefined : onConfirm}
+      title={confirmed ? inviteText.confirmedButton : inviteText.fingerprintHint}
+      aria-label={confirmed ? inviteText.confirmedButton : inviteText.confirmButton}
+    >
+      <IconShieldCheck size={12} />
+      <code>{display}</code>
+    </button>
   );
 }
 
@@ -515,33 +639,49 @@ function CryptoNotice() {
   );
 }
 
-function MeshDiagnostics({
-  mesh,
-  listenAddress,
-}: {
-  mesh: MeshInfo | null;
-  listenAddress: string | undefined;
-}) {
+function SessionDiagnostics({ session }: { session: SessionSnapshot }) {
+  return (
+    <>
+      <div className="diagnostic-group">
+        <div className="diagnostic-group-label">Session</div>
+        <Row k="MLS state" v={stateLabels[session.state] ?? session.state} />
+        <Row k="Role" v={session.role} />
+        <Row k="Display" v={session.display_name} />
+        <Row k="Session" v={shorten(session.session_id, 14)} />
+      </div>
+      <MeshDiagnostics mesh={session.mesh} />
+      <EventLog events={session.events} />
+    </>
+  );
+}
+
+function MeshDiagnostics({ mesh }: { mesh: MeshInfo | null }) {
   if (!mesh) {
     return (
-      <DiagnosticGroup label="Moss network">
-        <Row k="Discovery" v={listenAddress || "default public trackers"} />
-        <Row k="Peers" v="—" />
-      </DiagnosticGroup>
+      <div className="diagnostic-group">
+        <div className="diagnostic-group-label">Moss network</div>
+        <div className="diagnostic-row">
+          <span>Status</span>
+          <strong>booting…</strong>
+        </div>
+      </div>
     );
   }
   return (
-    <DiagnosticGroup label="Moss network">
+    <div className="diagnostic-group">
+      <div className="diagnostic-group-label">Moss network</div>
       <Row k="NAT type" v={mesh.nat_type || "unknown"} />
       <Row k="Advertised" v={mesh.advertised_addr || "—"} />
       <Row k="Listen port" v={String(mesh.listen_port)} />
-      <Row k="Peers" v={`${mesh.peer_count} (${mesh.direct_peer_count} direct / ${mesh.relayed_peer_count} relayed)`} />
+      <Row
+        k="Peers"
+        v={`${mesh.peer_count} (${mesh.direct_peer_count}d / ${mesh.relayed_peer_count}r)`}
+      />
       <Row k="Known" v={String(mesh.known_peer_count)} />
-      <Row k="Relay sessions" v={String(mesh.relay_session_count)} />
+      <Row k="Relay" v={String(mesh.relay_session_count)} />
       <Row k="Supernode" v={mesh.supernode_ready ? "ready" : "no"} />
-      <Row k="Mesh id" v={shorten(mesh.mesh_id, 16)} />
-      <Row k="Public key" v={shorten(mesh.public_key, 16)} />
-    </DiagnosticGroup>
+      <Row k="Mesh id" v={shorten(mesh.mesh_id, 14)} />
+    </div>
   );
 }
 
@@ -604,15 +744,6 @@ function formatTime(epoch: number): string {
 
 function pad(value: number): string {
   return value < 10 ? `0${value}` : String(value);
-}
-
-function DiagnosticGroup({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="diagnostic-group">
-      <div className="diagnostic-group-label">{label}</div>
-      {children}
-    </div>
-  );
 }
 
 function Row({ k, v }: { k: string; v: string }) {
@@ -678,4 +809,15 @@ function shorten(value: string, head: number): string {
     return value;
   }
   return `${value.slice(0, head)}…${value.slice(-4)}`;
+}
+
+function peerLabel(session: SessionSnapshot): string {
+  const peer = session.messages.find((message) => message.from_device !== session.display_name);
+  if (peer) {
+    return peer.from_device;
+  }
+  if (session.state === READY_STATE) {
+    return "peer";
+  }
+  return session.role === "alice" ? "invite sent" : "joining";
 }

@@ -1,22 +1,26 @@
 export const shellText = {
   productName: "MOSH",
   windowSubtitle: "Private DM · OpenMLS over Moss",
+  newSession: "New",
+  closeSession: "Close session",
+  noActive: "No active session",
 } as const;
 
 export const setupText = {
   sectionTitle: "Session setup",
   displayNameLabel: "Your display name",
-  displayNamePlaceholder: "e.g. Juno's laptop",
+  displayNamePlaceholder: "e.g. juno-laptop",
   staticPeerLabel: "Static peer (optional)",
   staticPeerPlaceholder: "host:port — bypass trackers, direct dial",
-  staticPeerHint: "Leave empty to use Moss public trackers + NAT punch.",
+  staticPeerHint: "Empty = Moss public trackers + NAT punch.",
   listenPortLabel: "Listen port",
   listenPortHint: "0 = OS picks",
 } as const;
 
 export const inviteText = {
+  newSessionTitle: "Start a private chat",
   createSectionTitle: "Invite a friend",
-  createHint: "Generates a one-time invite URI. Share it with your friend over any channel you trust. Moss handles peer discovery + NAT traversal.",
+  createHint: "Generates a one-time invite URI. Share it any channel you trust.",
   createButton: "Create invite",
   recreateButton: "Replace invite",
   copyButton: "Copy",
@@ -26,22 +30,25 @@ export const inviteText = {
   joinPlaceholder: "mosh://invite?mesh=...&session=...#fp=...",
   joinButton: "Connect",
   fingerprintLabel: "Peer fingerprint",
-  fingerprintHint: "Verify out-of-band (voice call / in person). If it matches your friend's, click confirm.",
+  fingerprintHint: "Verify out-of-band (voice / in person). Then click confirm.",
   confirmButton: "Confirm fingerprint",
   confirmedButton: "Fingerprint confirmed",
 } as const;
 
 export const chatText = {
   emptyTitle: "No messages yet.",
-  emptyBody: "Once your peer joins and MLS handshake finishes, plaintext stays only on your devices.",
+  emptyBody: "Once the peer joins and MLS handshake finishes, plaintext stays only on your devices.",
   composerPlaceholder: "Write a message…",
   sendLabel: "Send",
   cryptoFooter: "OpenMLS sealed · ciphertext over Moss gossip",
+  noSessionTitle: "Welcome to Mosh.",
+  noSessionBody: "Create an invite or paste one to start your first encrypted conversation.",
+  startCta: "New private chat",
 } as const;
 
 export const stateLabels: Record<string, string> = {
-  idle: "No session",
-  waiting: "Waiting for peer",
+  idle: "Idle",
+  waiting: "Waiting",
   ready: "Connected",
 };
 

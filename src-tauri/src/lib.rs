@@ -9,8 +9,8 @@ use adapters::openmls_crypto::{
     OpenMlsSmokeStatus,
 };
 use adapters::private_dm_runtime::{
-    AcceptInviteRequest, InviteCreated, PrivateDmRuntime, SendMessageResult, SessionSnapshot,
-    StartSessionRequest,
+    AcceptInviteRequest, CloseSessionResult, InviteCreated, PrivateDmRuntime, SendMessageResult,
+    SessionListSnapshot, SessionSnapshot, StartSessionRequest,
 };
 use adapters::secure_storage::{OsSecureSecretStore, SecureStorageStatus};
 use tauri::Manager;
@@ -130,18 +130,45 @@ fn private_dm_accept_invite(
 #[tauri::command]
 fn private_dm_send_message(
     state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
     body: String,
 ) -> Result<SendMessageResult, String> {
     state.with_runtime(|runtime| {
         runtime
-            .send_message(body)
+            .send_message(&session_id, body)
             .map_err(|error| error.to_string())
     })
 }
 
 #[tauri::command]
-fn private_dm_poll(state: tauri::State<'_, PrivateDmState>) -> Result<SessionSnapshot, String> {
-    state.with_runtime(|runtime| runtime.poll().map_err(|error| error.to_string()))
+fn private_dm_poll_session(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+) -> Result<SessionSnapshot, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .poll_session(&session_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_list_sessions(
+    state: tauri::State<'_, PrivateDmState>,
+) -> Result<SessionListSnapshot, String> {
+    state.with_runtime(|runtime| runtime.list_sessions().map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn private_dm_close_session(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+) -> Result<CloseSessionResult, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .close_session(&session_id)
+            .map_err(|error| error.to_string())
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -162,7 +189,9 @@ pub fn run() {
             private_dm_create_invite,
             private_dm_accept_invite,
             private_dm_send_message,
-            private_dm_poll
+            private_dm_poll_session,
+            private_dm_list_sessions,
+            private_dm_close_session
         ])
         .run(tauri::generate_context!())
         .expect(RUN_ERROR);

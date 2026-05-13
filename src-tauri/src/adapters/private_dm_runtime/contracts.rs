@@ -26,13 +26,27 @@ pub struct AcceptInviteRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionSnapshot {
+    pub session_id: String,
+    pub mesh_id: String,
     pub role: String,
+    pub display_name: String,
     pub state: String,
     pub invite_uri: Option<String>,
     pub fingerprint: String,
     pub messages: Vec<ChatMessage>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionListSnapshot {
+    pub sessions: Vec<SessionSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CloseSessionResult {
+    pub session_id: String,
+    pub closed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +112,7 @@ pub struct ChatMessage {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SendMessageResult {
+    pub session_id: String,
     pub state: String,
     pub ciphertext_bytes: usize,
 }
@@ -110,6 +125,7 @@ pub enum PrivateDmRuntimeError {
     InvalidInvite(String),
     NotReady,
     MissingSession,
+    DuplicateSession(String),
 }
 
 impl std::fmt::Display for PrivateDmRuntimeError {
@@ -121,6 +137,9 @@ impl std::fmt::Display for PrivateDmRuntimeError {
             Self::InvalidInvite(error) => write!(formatter, "invalid invite: {error}"),
             Self::NotReady => write!(formatter, "private DM session is not ready"),
             Self::MissingSession => write!(formatter, "private DM session is missing"),
+            Self::DuplicateSession(id) => {
+                write!(formatter, "private DM session already exists: {id}")
+            }
         }
     }
 }

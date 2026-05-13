@@ -5,7 +5,9 @@ const NATIVE_RUNTIME_STATUS_COMMAND = "native_runtime_status";
 const PRIVATE_DM_CREATE_INVITE_COMMAND = "private_dm_create_invite";
 const PRIVATE_DM_ACCEPT_INVITE_COMMAND = "private_dm_accept_invite";
 const PRIVATE_DM_SEND_MESSAGE_COMMAND = "private_dm_send_message";
-const PRIVATE_DM_POLL_COMMAND = "private_dm_poll";
+const PRIVATE_DM_POLL_SESSION_COMMAND = "private_dm_poll_session";
+const PRIVATE_DM_LIST_SESSIONS_COMMAND = "private_dm_list_sessions";
+const PRIVATE_DM_CLOSE_SESSION_COMMAND = "private_dm_close_session";
 
 export interface DiagnosticsSnapshot {
   readonly app_name: string;
@@ -96,7 +98,10 @@ export interface MeshInfo {
 }
 
 export interface SessionSnapshot {
+  readonly session_id: string;
+  readonly mesh_id: string;
   readonly role: string;
+  readonly display_name: string;
   readonly state: string;
   readonly invite_uri: string | null;
   readonly fingerprint: string;
@@ -112,9 +117,19 @@ export interface SnapshotEvent {
   readonly epoch_millis: number;
 }
 
+export interface SessionListSnapshot {
+  readonly sessions: readonly SessionSnapshot[];
+}
+
 export interface SendMessageResult {
+  readonly session_id: string;
   readonly state: string;
   readonly ciphertext_bytes: number;
+}
+
+export interface CloseSessionResult {
+  readonly session_id: string;
+  readonly closed: boolean;
 }
 
 export interface NativeMessagingGateway {
@@ -122,8 +137,10 @@ export interface NativeMessagingGateway {
   getNativeRuntimeStatus(): Promise<NativeRuntimeStatus>;
   createPrivateInvite(request: StartSessionRequest): Promise<InviteCreated>;
   acceptPrivateInvite(request: AcceptInviteRequest): Promise<SessionSnapshot>;
-  sendPrivateMessage(body: string): Promise<SendMessageResult>;
-  pollPrivateSession(): Promise<SessionSnapshot>;
+  sendPrivateMessage(sessionId: string, body: string): Promise<SendMessageResult>;
+  pollPrivateSession(sessionId: string): Promise<SessionSnapshot>;
+  listPrivateSessions(): Promise<SessionListSnapshot>;
+  closePrivateSession(sessionId: string): Promise<CloseSessionResult>;
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {
@@ -143,12 +160,23 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     return invoke<SessionSnapshot>(PRIVATE_DM_ACCEPT_INVITE_COMMAND, { request });
   }
 
-  async sendPrivateMessage(body: string): Promise<SendMessageResult> {
-    return invoke<SendMessageResult>(PRIVATE_DM_SEND_MESSAGE_COMMAND, { body });
+  async sendPrivateMessage(sessionId: string, body: string): Promise<SendMessageResult> {
+    return invoke<SendMessageResult>(PRIVATE_DM_SEND_MESSAGE_COMMAND, {
+      sessionId,
+      body,
+    });
   }
 
-  async pollPrivateSession(): Promise<SessionSnapshot> {
-    return invoke<SessionSnapshot>(PRIVATE_DM_POLL_COMMAND);
+  async pollPrivateSession(sessionId: string): Promise<SessionSnapshot> {
+    return invoke<SessionSnapshot>(PRIVATE_DM_POLL_SESSION_COMMAND, { sessionId });
+  }
+
+  async listPrivateSessions(): Promise<SessionListSnapshot> {
+    return invoke<SessionListSnapshot>(PRIVATE_DM_LIST_SESSIONS_COMMAND);
+  }
+
+  async closePrivateSession(sessionId: string): Promise<CloseSessionResult> {
+    return invoke<CloseSessionResult>(PRIVATE_DM_CLOSE_SESSION_COMMAND, { sessionId });
   }
 }
 

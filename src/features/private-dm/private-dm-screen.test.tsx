@@ -4,13 +4,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MeshInfo,
   NativeMessagingGateway,
+  SessionListSnapshot,
   SessionSnapshot,
   SnapshotEvent,
 } from "./native/native-messaging-gateway";
 import { PrivateDmScreen } from "./private-dm-screen";
 
 const FINGERPRINT = "AABBCCDDEEFF0011";
-const INVITE = `mosh://invite?mesh=mesh-one&session=session-one#fp=${FINGERPRINT}`;
+const SESSION_ID = "session-one";
+const INVITE = `mosh://invite?mesh=mesh-one&session=${SESSION_ID}#fp=${FINGERPRINT}`;
 
 const MESH_READY: MeshInfo = {
   mesh_id: "mesh-one",
@@ -23,19 +25,13 @@ const MESH_READY: MeshInfo = {
   relay_session_count: 0,
   relay_route_count: 0,
   known_peer_count: 1,
-  channels: ["mosh.private.control.v1", "mosh.private.data.v1"],
+  channels: ["mls-control/session-one", "mls-data/session-one"],
   nat_type: "endpoint-independent",
   supernode_ready: false,
   public_key: "abcdef0123456789",
 };
 
 const EVENTS: SnapshotEvent[] = [
-  {
-    event_type: 5,
-    event_name: "tracker_announce",
-    detail_json: '{"candidate_peers":2,"connected_peers":1}',
-    epoch_millis: Date.now() - 4000,
-  },
   {
     event_type: 1,
     event_name: "peer_joined",
@@ -46,7 +42,10 @@ const EVENTS: SnapshotEvent[] = [
 
 function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
+    session_id: SESSION_ID,
+    mesh_id: "mesh-one",
     role: "bob",
+    display_name: "mosh-bob",
     state: "ready",
     invite_uri: INVITE,
     fingerprint: FINGERPRINT,
@@ -57,36 +56,59 @@ function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   };
 }
 
-function createGateway(): NativeMessagingGateway {
+function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway {
+  let sessions: SessionSnapshot[] = initial;
   return {
     getDiagnostics: vi.fn(),
     getNativeRuntimeStatus: vi.fn(),
-    createPrivateInvite: vi.fn(async () => ({
-      invite_uri: INVITE,
-      session_id: "session-one",
-      mesh_id: "mesh-one",
-      fingerprint: FINGERPRINT,
-      listen_address: "default-public-trackers",
+    createPrivateInvite: vi.fn(async (_request) => {
+      const created = snapshot({ role: "alice", state: "waiting", messages: [] });
+      sessions = [...sessions, created];
+      return {
+        invite_uri: INVITE,
+        session_id: created.session_id,
+        mesh_id: created.mesh_id,
+        fingerprint: created.fingerprint,
+        listen_address: "default-public-trackers",
+      };
+    }),
+    acceptPrivateInvite: vi.fn(async () => {
+      const joined = snapshot();
+      sessions = [...sessions, joined];
+      return joined;
+    }),
+    sendPrivateMessage: vi.fn(async () => ({
+      session_id: SESSION_ID,
+      state: "ready",
+      ciphertext_bytes: 128,
     })),
-    acceptPrivateInvite: vi.fn(async () => snapshot({ role: "bob" })),
-    sendPrivateMessage: vi.fn(async () => ({ state: "ready", ciphertext_bytes: 128 })),
-    pollPrivateSession: vi.fn(async () => snapshot()),
+    pollPrivateSession: vi.fn(async (sessionId: string) => {
+      const found = sessions.find((session) => session.session_id === sessionId);
+      if (!found) {
+        throw new Error("missing");
+      }
+      return found;
+    }),
+    listPrivateSessions: vi.fn(async (): Promise<SessionListSnapshot> => ({ sessions })),
+    closePrivateSession: vi.fn(async (sessionId: string) => {
+      sessions = sessions.filter((session) => session.session_id !== sessionId);
+      return { session_id: sessionId, closed: true };
+    }),
   };
 }
 
 describe("PrivateDmScreen", () => {
-  it("renders the redesigned Mosh DM shell without mocked contacts", () => {
+  it("renders welcome state when there are no sessions", async () => {
     render(<PrivateDmScreen gateway={createGateway()} />);
 
     expect(screen.getByRole("main", { name: "MOSH" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Session setup" })).toBeInTheDocument();
+    expect(await screen.findByRole("complementary", { name: "Active sessions" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Peer status" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Static peer" })).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Listen port" })).toBeInTheDocument();
-    expect(screen.queryByText("Alice Park")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create invite" })).toBeInTheDocument();
   });
 
-  it("creates and copies an invite", async () => {
+  it("creates and copies an invite, then surfaces the active session", async () => {
     const user = userEvent.setup();
     const gateway = createGateway();
     render(<PrivateDmScreen gateway={gateway} />);
@@ -104,24 +126,7 @@ describe("PrivateDmScreen", () => {
     expect(screen.getByText(INVITE)).toBeInTheDocument();
   });
 
-  it("passes static_peer override to create + accept", async () => {
-    const user = userEvent.setup();
-    const gateway = createGateway();
-    render(<PrivateDmScreen gateway={gateway} />);
-
-    await user.clear(screen.getByRole("textbox", { name: "Display name" }));
-    await user.type(screen.getByRole("textbox", { name: "Display name" }), "Juno");
-    await user.type(screen.getByRole("textbox", { name: "Static peer" }), "10.0.0.5:42130");
-    await user.click(screen.getByRole("button", { name: "Create invite" }));
-
-    expect(gateway.createPrivateInvite).toHaveBeenCalledWith({
-      display_name: "Juno",
-      listen_port: 0,
-      static_peer: "10.0.0.5:42130",
-    });
-  });
-
-  it("accepts an invite via the join card", async () => {
+  it("accepts an invite + opens chat for the new session", async () => {
     const user = userEvent.setup();
     const gateway = createGateway();
     render(<PrivateDmScreen gateway={gateway} />);
@@ -131,63 +136,64 @@ describe("PrivateDmScreen", () => {
 
     expect(gateway.acceptPrivateInvite).toHaveBeenCalledWith(
       expect.objectContaining({
+        invite_uri: INVITE,
         display_name: expect.stringMatching(/^mosh-[a-z0-9]+$/),
         listen_port: 0,
         static_peer: null,
-        invite_uri: INVITE,
       }),
     );
-  });
-
-  it("confirms fingerprint only after the snapshot supplies one", async () => {
-    const user = userEvent.setup();
-    const gateway = createGateway();
-    render(<PrivateDmScreen gateway={gateway} />);
-
-    expect(screen.getByRole("button", { name: "Confirm fingerprint" })).toBeDisabled();
-
-    await user.type(screen.getByRole("textbox", { name: "Invite URI" }), INVITE);
-    await user.click(screen.getByRole("button", { name: "Connect" }));
-
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Confirm fingerprint" })).toBeEnabled(),
+      expect(screen.getByText("hello from moss")).toBeInTheDocument(),
     );
-    await user.click(screen.getByRole("button", { name: "Confirm fingerprint" }));
-    expect(screen.getByRole("button", { name: "Fingerprint confirmed" })).toBeInTheDocument();
   });
 
-  it("auto-polls and renders runtime plaintext", async () => {
-    const user = userEvent.setup();
-    const gateway = createGateway();
+  it("lists active sessions in the rail and switches between them", async () => {
+    const second = snapshot({
+      session_id: "session-two",
+      messages: [{ from_device: "Charlie", body: "yo from charlie" }],
+    });
+    const gateway = createGateway([snapshot(), second]);
     render(<PrivateDmScreen gateway={gateway} />);
 
-    await user.click(screen.getByRole("button", { name: "Create invite" }));
-    await waitFor(() => expect(gateway.pollPrivateSession).toHaveBeenCalled());
-    expect(await screen.findByText("hello from moss")).toBeInTheDocument();
+    await waitFor(() => expect(gateway.listPrivateSessions).toHaveBeenCalled());
+    const railButtons = await screen.findAllByRole("button", { name: /Open session with/ });
+    expect(railButtons).toHaveLength(2);
+
+    const user = userEvent.setup();
+    await user.click(railButtons[1]);
+    expect(await screen.findByText("yo from charlie")).toBeInTheDocument();
   });
 
-  it("sends through the gateway and surfaces mesh diagnostics", async () => {
-    const user = userEvent.setup();
-    const gateway = createGateway();
+  it("closes the active session and returns to the empty state", async () => {
+    const gateway = createGateway([snapshot()]);
     render(<PrivateDmScreen gateway={gateway} />);
 
-    await user.click(screen.getByRole("button", { name: "Create invite" }));
-    await waitFor(() => expect(gateway.pollPrivateSession).toHaveBeenCalled());
+    await screen.findByText("hello from moss");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Close session" }));
 
+    expect(gateway.closePrivateSession).toHaveBeenCalledWith(SESSION_ID);
+    await waitFor(() =>
+      expect(screen.queryByText("hello from moss")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("sends through the gateway for the active session", async () => {
+    const gateway = createGateway([snapshot()]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await screen.findByText("hello from moss");
+    const user = userEvent.setup();
     await user.type(screen.getByRole("textbox", { name: "Message" }), "hello");
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(gateway.sendPrivateMessage).toHaveBeenCalledWith("hello");
-    expect(screen.getByText("endpoint-independent")).toBeInTheDocument();
-    expect(screen.getByText("203.0.113.7:42130")).toBeInTheDocument();
+    expect(gateway.sendPrivateMessage).toHaveBeenCalledWith(SESSION_ID, "hello");
   });
 
-  it("does not overclaim tracker privacy", () => {
+  it("does not overclaim tracker privacy", async () => {
     render(<PrivateDmScreen gateway={createGateway()} />);
-
     expect(
-      screen.getByText(/peer discovery metadata is NOT hidden/i),
+      await screen.findByText(/peer discovery metadata is NOT hidden/i),
     ).toBeInTheDocument();
-    expect(screen.getByText("End-to-end encrypted")).toBeInTheDocument();
   });
 });
