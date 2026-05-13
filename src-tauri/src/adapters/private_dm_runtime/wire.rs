@@ -11,11 +11,13 @@ pub const DATA_CHANNEL: &str = "mls-data";
 pub enum ControlEnvelope {
     KeyPackage {
         session_id: String,
+        participant_id: String,
         from_device: String,
         key_package_b64: String,
     },
     Welcome {
         session_id: String,
+        participant_id: String,
         from_device: String,
         welcome_b64: String,
         ratchet_tree_b64: String,
@@ -25,6 +27,7 @@ pub enum ControlEnvelope {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DataEnvelope {
     pub session_id: String,
+    pub participant_id: String,
     pub from_device: String,
     pub ciphertext_b64: String,
 }

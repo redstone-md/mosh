@@ -1,5 +1,5 @@
 use std::{
-    ffi::CString,
+    ffi::{c_void, CStr, CString},
     mem::ManuallyDrop,
     os::raw::c_char,
     sync::{Arc, Mutex},
@@ -17,6 +17,7 @@ const POLL_MS: u64 = 50;
 
 pub type MossHandle = i64;
 type MessageCallback = unsafe extern "C" fn(*const c_char, *const u8, *const u8, u32);
+type EventCallback = unsafe extern "C" fn(i32, *const c_char);
 type MossInit = unsafe extern "C" fn(*const c_char, *const u8, *const c_char) -> MossHandle;
 type MossStart = unsafe extern "C" fn(MossHandle) -> i32;
 type MossStop = unsafe extern "C" fn(MossHandle) -> i32;
@@ -24,8 +25,25 @@ type MossSubscribe = unsafe extern "C" fn(MossHandle, *const c_char) -> i32;
 type MossConnect = unsafe extern "C" fn(MossHandle, *const c_char) -> i32;
 type MossPublish = unsafe extern "C" fn(MossHandle, *const c_char, *const u8, u32) -> i32;
 type MossSetCallback = unsafe extern "C" fn(MossHandle, Option<MessageCallback>) -> i32;
+type MossSetEventCallback = unsafe extern "C" fn(MossHandle, Option<EventCallback>) -> i32;
+type MossGetMeshInfo = unsafe extern "C" fn(MossHandle) -> *mut c_char;
+type MossGetNatType = unsafe extern "C" fn(MossHandle) -> *mut c_char;
+type MossFree = unsafe extern "C" fn(*mut c_void);
+
+const EVENT_RING_CAPACITY: usize = 64;
 
 static RECEIVED_MESSAGES: Mutex<Vec<MossReceivedMessage>> = Mutex::new(Vec::new());
+static EVENT_LOG: Mutex<Vec<MossEvent>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub static MOSS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, Debug)]
+pub struct MossEvent {
+    pub event_type: i32,
+    pub detail_json: String,
+    pub epoch_millis: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MossReceivedMessage {
@@ -71,6 +89,10 @@ pub struct MossFfiRuntime {
     connect: MossConnect,
     publish: MossPublish,
     set_callback: MossSetCallback,
+    set_event_callback: MossSetEventCallback,
+    get_mesh_info: MossGetMeshInfo,
+    get_nat_type: MossGetNatType,
+    free: MossFree,
 }
 
 pub struct MossNode {
@@ -117,6 +139,10 @@ impl MossFfiRuntime {
             connect: load_symbol(&library, b"Moss_Connect\0")?,
             publish: load_symbol(&library, b"Moss_Publish\0")?,
             set_callback: load_symbol(&library, b"Moss_SetCallback\0")?,
+            set_event_callback: load_symbol(&library, b"Moss_SetEventCallback\0")?,
+            get_mesh_info: load_symbol(&library, b"Moss_GetMeshInfo\0")?,
+            get_nat_type: load_symbol(&library, b"Moss_GetNATType\0")?,
+            free: load_symbol(&library, b"Moss_Free\0")?,
             _library: ManuallyDrop::new(library),
         })
     }
@@ -192,6 +218,36 @@ impl MossNode {
             (self.runtime.set_callback)(self.handle, Some(on_moss_message))
         })
     }
+
+    pub fn set_event_callback(&self) -> Result<(), MossFfiError> {
+        check_code("set_event_callback", unsafe {
+            (self.runtime.set_event_callback)(self.handle, Some(on_moss_event))
+        })
+    }
+
+    pub fn mesh_info_json(&self) -> Option<String> {
+        let ptr = unsafe { (self.runtime.get_mesh_info)(self.handle) };
+        if ptr.is_null() {
+            return None;
+        }
+        let value = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { (self.runtime.free)(ptr as *mut c_void) };
+        Some(value)
+    }
+
+    pub fn nat_type(&self) -> Option<String> {
+        let ptr = unsafe { (self.runtime.get_nat_type)(self.handle) };
+        if ptr.is_null() {
+            return None;
+        }
+        let value = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { (self.runtime.free)(ptr as *mut c_void) };
+        Some(value)
+    }
 }
 
 impl Drop for MossNode {
@@ -207,6 +263,20 @@ pub fn drain_received_messages() -> Vec<MossReceivedMessage> {
         .lock()
         .expect("Moss message lock poisoned");
     std::mem::take(&mut *messages)
+}
+
+pub fn snapshot_event_log() -> Vec<MossEvent> {
+    EVENT_LOG
+        .lock()
+        .expect("Moss event lock poisoned")
+        .clone()
+}
+
+pub fn clear_event_log() {
+    EVENT_LOG
+        .lock()
+        .expect("Moss event lock poisoned")
+        .clear();
 }
 
 pub fn wait_for_payload(payload: &[u8]) -> Result<MossReceivedMessage, MossFfiError> {
@@ -233,7 +303,7 @@ pub fn node_config_json(config: &MossNodeConfig) -> String {
     };
 
     format!(
-        r#"{{"listen_port":{},"static_peers":{},"bootstrap_timeout_sec":8,"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":true,"natpmp_enabled":true,"pcp_enabled":true,"hole_punch_attempts":5,"port_prediction_enabled":true}}}}"#,
+        r#"{{"listen_port":{},"static_peers":{},"announce_interval_sec":15,"bootstrap_timeout_sec":12,"lan_discovery_enabled":true,"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":true,"natpmp_enabled":true,"pcp_enabled":true,"hole_punch_attempts":8,"port_prediction_enabled":true}}}}"#,
         config.listen_port, peers
     )
 }
@@ -295,6 +365,31 @@ unsafe extern "C" fn on_moss_message(
         .push(MossReceivedMessage { channel, payload });
 }
 
+unsafe extern "C" fn on_moss_event(event_type: i32, detail_json: *const c_char) {
+    let detail = if detail_json.is_null() {
+        String::new()
+    } else {
+        unsafe { CStr::from_ptr(detail_json) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let epoch_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+
+    let mut log = EVENT_LOG.lock().expect("Moss event lock poisoned");
+    log.push(MossEvent {
+        event_type,
+        detail_json: detail,
+        epoch_millis,
+    });
+    if log.len() > EVENT_RING_CAPACITY {
+        let drop = log.len() - EVENT_RING_CAPACITY;
+        log.drain(0..drop);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +407,7 @@ mod tests {
 
     #[test]
     fn two_local_moss_peers_exchange_payload() {
+        let _guard = MOSS_TEST_LOCK.lock().expect("moss test lock");
         let library_path = build_test_moss_library();
         let runtime = Arc::new(
             MossFfiRuntime::load_from_path(&library_path).expect("Moss library should load"),

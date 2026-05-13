@@ -1,51 +1,67 @@
 import {
-  IconAt,
+  IconActivity,
   IconCheck,
-  IconClock,
-  IconCompass,
   IconCopy,
-  IconDots,
   IconLock,
-  IconMessageCircle,
-  IconMicrophone,
-  IconPaperclip,
-  IconPhone,
-  IconPlus,
+  IconPlugConnected,
   IconRefresh,
   IconSend,
-  IconSettings,
   IconShieldCheck,
-  IconVideo,
 } from "@tabler/icons-react";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { contacts, diagnostics, dmText, inviteText, messages, shellText, trustSteps } from "./private-dm.content";
-import { ChatMessage, NativeMessagingGateway, SessionSnapshot, nativeMessagingGateway } from "./native/native-messaging-gateway";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  chatText,
+  cryptoNotice,
+  inviteText,
+  setupText,
+  shellText,
+  stateLabels,
+} from "./private-dm.content";
+import {
+  ChatMessage,
+  MeshInfo,
+  NativeMessagingGateway,
+  SessionSnapshot,
+  SnapshotEvent,
+  nativeMessagingGateway,
+} from "./native/native-messaging-gateway";
 
-const ICON_SIZE = 16;
-const RAIL_ICON_SIZE = 20;
-const DEFAULT_LISTEN_PORT = 0;
-const DEFAULT_DISPLAY_NAME = "Mosh Device";
-const READY_STATE = "ready";
 const AUTO_POLL_MS = 1000;
+const READY_STATE = "ready";
+const DEFAULT_LISTEN_PORT = 0;
 
-interface RuntimeUiState {
+function defaultDisplayName(): string {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `mosh-${suffix}`;
+}
+
+interface RuntimeState {
   readonly createdInvite?: string;
   readonly listenAddress?: string;
   readonly snapshot?: SessionSnapshot;
   readonly error?: string;
   readonly busy: boolean;
+  readonly copied: boolean;
 }
 
-export function PrivateDmScreen({ gateway = nativeMessagingGateway }: { gateway?: NativeMessagingGateway }) {
-  const [fingerprintConfirmed, setFingerprintConfirmed] = useState(false);
-  const [displayName, setDisplayName] = useState(DEFAULT_DISPLAY_NAME);
+const INITIAL_RUNTIME: RuntimeState = { busy: false, copied: false };
+
+export function PrivateDmScreen({
+  gateway = nativeMessagingGateway,
+}: {
+  gateway?: NativeMessagingGateway;
+}) {
+  const [displayName, setDisplayName] = useState(defaultDisplayName);
+  const [staticPeer, setStaticPeer] = useState("");
+  const [listenPort, setListenPort] = useState<number>(DEFAULT_LISTEN_PORT);
   const [inviteUri, setInviteUri] = useState("");
   const [composer, setComposer] = useState("");
+  const [fingerprintConfirmed, setFingerprintConfirmed] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
-  const [runtime, setRuntime] = useState<RuntimeUiState>({ busy: false });
+  const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME);
   const pollInFlight = useRef(false);
 
-  const run = async (action: () => Promise<Partial<RuntimeUiState>>) => {
+  const run = async (action: () => Promise<Partial<RuntimeState>>) => {
     setRuntime((state) => ({ ...state, busy: true, error: undefined }));
     try {
       const next = await action();
@@ -60,17 +76,24 @@ export function PrivateDmScreen({ gateway = nativeMessagingGateway }: { gateway?
       if (pollInFlight.current) {
         return;
       }
-
       pollInFlight.current = true;
       if (!quiet) {
         setRuntime((state) => ({ ...state, busy: true, error: undefined }));
       }
-
       try {
         const snapshot = await gateway.pollPrivateSession();
-        setRuntime((state) => ({ ...state, snapshot, busy: quiet ? state.busy : false, error: undefined }));
+        setRuntime((state) => ({
+          ...state,
+          snapshot,
+          busy: quiet ? state.busy : false,
+          error: undefined,
+        }));
       } catch (error) {
-        setRuntime((state) => ({ ...state, busy: quiet ? state.busy : false, error: readableError(error) }));
+        setRuntime((state) => ({
+          ...state,
+          busy: quiet ? state.busy : false,
+          error: readableError(error),
+        }));
       } finally {
         pollInFlight.current = false;
       }
@@ -82,38 +105,52 @@ export function PrivateDmScreen({ gateway = nativeMessagingGateway }: { gateway?
     if (!sessionActive) {
       return;
     }
-
     void refreshSession(true);
     const intervalId = window.setInterval(() => void refreshSession(true), AUTO_POLL_MS);
-
     return () => window.clearInterval(intervalId);
   }, [refreshSession, sessionActive]);
 
+  const sessionRequestBase = useMemo(
+    () => ({
+      display_name: displayName.trim() || defaultDisplayName(),
+      listen_port: Number.isFinite(listenPort) ? listenPort : DEFAULT_LISTEN_PORT,
+      static_peer: staticPeer.trim() ? staticPeer.trim() : null,
+    }),
+    [displayName, listenPort, staticPeer],
+  );
+
   const createInvite = () =>
     run(async () => {
-      const invite = await gateway.createPrivateInvite({
-        display_name: displayName,
-        listen_port: DEFAULT_LISTEN_PORT,
-        static_peer: null,
-      });
+      const invite = await gateway.createPrivateInvite(sessionRequestBase);
       await copyText(invite.invite_uri);
       setSessionActive(true);
-      return { createdInvite: invite.invite_uri, listenAddress: invite.listen_address };
+      setFingerprintConfirmed(false);
+      return {
+        createdInvite: invite.invite_uri,
+        listenAddress: invite.listen_address,
+        copied: true,
+      };
     });
 
   const acceptInvite = () =>
     run(async () => {
       const snapshot = await gateway.acceptPrivateInvite({
-        invite_uri: inviteUri,
-        display_name: displayName,
-        listen_port: DEFAULT_LISTEN_PORT,
-        static_peer: null,
+        ...sessionRequestBase,
+        invite_uri: inviteUri.trim(),
       });
       setSessionActive(true);
+      setFingerprintConfirmed(false);
       return { snapshot };
     });
 
-  const poll = () => void refreshSession(false);
+  const copyInvite = async () => {
+    const uri = runtime.createdInvite;
+    if (!uri) {
+      return;
+    }
+    await copyText(uri);
+    setRuntime((state) => ({ ...state, copied: true }));
+  };
 
   const send = (event: FormEvent) => {
     event.preventDefault();
@@ -128,162 +165,517 @@ export function PrivateDmScreen({ gateway = nativeMessagingGateway }: { gateway?
     });
   };
 
+  const snapshot = runtime.snapshot;
+  const state = snapshot?.state ?? (sessionActive ? "waiting" : "idle");
+  const stateLabel = stateLabels[state] ?? state;
+  const ready = state === READY_STATE;
+  const fingerprint = snapshot?.fingerprint ?? "";
+  const canConnect = inviteUri.trim().length > 0 && !runtime.busy;
+
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
-      <TitleBar />
+      <header className="titlebar">
+        <div className="brand">
+          <IconShieldCheck size={18} />
+          <strong>{shellText.productName}</strong>
+        </div>
+        <span className="titlebar-subtitle">{shellText.windowSubtitle}</span>
+        <StatePill state={state} label={stateLabel} />
+      </header>
+
       <div className="desktop-body">
-        <SpacesRail />
-        <DirectColumn
-          confirmed={fingerprintConfirmed}
-          displayName={displayName}
-          inviteUri={inviteUri}
-          runtime={runtime}
-          onAccept={acceptInvite}
-          onConfirm={() => setFingerprintConfirmed(true)}
-          onCreate={createInvite}
-          onDisplayName={setDisplayName}
-          onInviteUri={setInviteUri}
-        />
-        <ChatPane
-          composer={composer}
-          confirmed={fingerprintConfirmed}
-          runtimeMessages={runtime.snapshot?.messages ?? []}
-          state={runtime.snapshot?.state ?? "waiting"}
-          onComposer={setComposer}
-          onSend={send}
-        />
-        <DiagnosticsPanel runtime={runtime} onPoll={poll} />
+        <aside className="side-panel" aria-label="Session setup">
+          <SetupCard
+            displayName={displayName}
+            staticPeer={staticPeer}
+            listenPort={listenPort}
+            sessionActive={sessionActive}
+            onDisplayName={setDisplayName}
+            onStaticPeer={setStaticPeer}
+            onListenPort={setListenPort}
+          />
+
+          <InviteCreateCard
+            invite={runtime.createdInvite}
+            copied={runtime.copied}
+            busy={runtime.busy}
+            onCreate={createInvite}
+            onCopy={copyInvite}
+          />
+
+          <InviteJoinCard
+            value={inviteUri}
+            onChange={setInviteUri}
+            onConnect={acceptInvite}
+            canConnect={canConnect}
+          />
+
+          <FingerprintCard
+            fingerprint={fingerprint}
+            confirmed={fingerprintConfirmed}
+            ready={ready}
+            onConfirm={() => setFingerprintConfirmed(true)}
+          />
+        </aside>
+
+        <section className="chat-pane" aria-labelledby="chat-title">
+          <header className="chat-header">
+            <div className="chat-title-block">
+              <h1 id="chat-title">Direct channel</h1>
+              <p>
+                {fingerprintConfirmed
+                  ? `MLS ${state} · fingerprint confirmed`
+                  : `MLS ${state} · fingerprint unverified`}
+              </p>
+            </div>
+            <div className="chat-state-line">
+              <IconLock size={12} />
+              <span>{chatText.cryptoFooter}</span>
+            </div>
+          </header>
+
+          <CryptoNotice />
+
+          <div className="chat-scroll scroll">
+            <ChatList messages={snapshot?.messages ?? []} />
+          </div>
+
+          <Composer
+            value={composer}
+            onChange={setComposer}
+            onSend={send}
+            disabled={!ready || runtime.busy}
+          />
+        </section>
+
+        <aside className="diagnostics-panel" aria-labelledby="diagnostics-title">
+          <header>
+            <IconPlugConnected size={16} />
+            <h2 id="diagnostics-title">Peer status</h2>
+            <button
+              className="btn btn-ghost btn-icon"
+              type="button"
+              onClick={() => void refreshSession(false)}
+              aria-label="Refresh status"
+            >
+              <IconRefresh size={14} />
+            </button>
+          </header>
+
+          <DiagnosticGroup label="Session">
+            <Row k="MLS state" v={stateLabel} />
+            <Row k="Role" v={snapshot?.role ?? "—"} />
+            <Row k="Channels" v={snapshot?.mesh?.channels?.join(", ") || "—"} />
+          </DiagnosticGroup>
+
+          <MeshDiagnostics mesh={snapshot?.mesh ?? null} listenAddress={runtime.listenAddress} />
+
+          <EventLog events={snapshot?.events ?? []} />
+
+          {runtime.error ? (
+            <div className="diagnostic-row diagnostic-error">
+              <span>Runtime error</span>
+              <strong>{runtime.error}</strong>
+            </div>
+          ) : null}
+        </aside>
       </div>
     </main>
   );
 }
 
-function TitleBar() {
-  return (
-    <header className="titlebar">
-      <div className="traffic-dots" aria-hidden="true"><span className="dot-danger" /><span className="dot-warn" /><span className="dot-moss" /></div>
-      <div className="titlebar-copy"><span>{shellText.productName}</span><span>{shellText.windowSubtitle}</span></div>
-      <div className="titlebar-spacer" />
-    </header>
-  );
-}
-
-function SpacesRail() {
-  return (
-    <aside className="spaces-rail" aria-label={shellText.productName}>
-      <RailButton active label={shellText.directTooltip}><IconAt size={RAIL_ICON_SIZE} /></RailButton>
-      <div className="rail-divider" />
-      <RailSpace label="Moss Core" short="MC" active />
-      <RailSpace label="Signal Hut" short="SH" unread="2" />
-      <RailSpace label="North Field" short="NF" />
-      <button className="rail-add" type="button" aria-label="Add space"><IconPlus size={18} /></button>
-      <div className="rail-fill" />
-      <RailButton label={shellText.exploreTooltip}><IconCompass size={RAIL_ICON_SIZE} /></RailButton>
-      <RailButton label={shellText.settingsTooltip}><IconSettings size={RAIL_ICON_SIZE} /></RailButton>
-    </aside>
-  );
-}
-
-function DirectColumn(props: {
-  confirmed: boolean;
+function SetupCard(props: {
   displayName: string;
-  inviteUri: string;
-  runtime: RuntimeUiState;
-  onAccept: () => void;
-  onConfirm: () => void;
-  onCreate: () => void;
+  staticPeer: string;
+  listenPort: number;
+  sessionActive: boolean;
   onDisplayName: (value: string) => void;
-  onInviteUri: (value: string) => void;
+  onStaticPeer: (value: string) => void;
+  onListenPort: (value: number) => void;
 }) {
   return (
-    <aside className="middle-column" aria-label={inviteText.header}>
-      <header className="middle-header"><strong>{inviteText.header}</strong><button className="btn btn-ghost btn-icon" type="button" onClick={props.onCreate} aria-label={inviteText.createLabel}><IconPlus size={ICON_SIZE} /></button></header>
-      <div className="middle-scroll scroll">
-        <RuntimeFields {...props} />
-        <SectionLabel>{inviteText.pinnedLabel}</SectionLabel>
-        {contacts.map((contact) => <ContactRow contact={contact} key={contact.id} />)}
-        <InviteCard {...props} />
-        <TrustRail />
+    <section className="card" aria-label={setupText.sectionTitle}>
+      <div className="card-head">
+        <h2>{setupText.sectionTitle}</h2>
+        {props.sessionActive ? (
+          <span className="badge">applies on next session</span>
+        ) : null}
       </div>
-      <UserCard />
-    </aside>
-  );
-}
-
-function RuntimeFields(props: Parameters<typeof DirectColumn>[0]) {
-  return (
-    <section className="runtime-fields" aria-label="Mosh device setup">
-      <input aria-label="Display name" value={props.displayName} onChange={(event) => props.onDisplayName(event.target.value)} />
-      <textarea aria-label="Invite URI" placeholder="mosh://invite?..." value={props.inviteUri} onChange={(event) => props.onInviteUri(event.target.value)} />
+      <Field label={setupText.displayNameLabel}>
+        <input
+          aria-label="Display name"
+          placeholder={setupText.displayNamePlaceholder}
+          value={props.displayName}
+          onChange={(event) => props.onDisplayName(event.target.value)}
+        />
+      </Field>
+      <Field label={setupText.staticPeerLabel} hint={setupText.staticPeerHint}>
+        <input
+          aria-label="Static peer"
+          placeholder={setupText.staticPeerPlaceholder}
+          value={props.staticPeer}
+          onChange={(event) => props.onStaticPeer(event.target.value)}
+        />
+      </Field>
+      <Field label={setupText.listenPortLabel} hint={setupText.listenPortHint}>
+        <input
+          type="number"
+          min={0}
+          max={65535}
+          aria-label="Listen port"
+          value={props.listenPort}
+          onChange={(event) => props.onListenPort(Number(event.target.value) || 0)}
+        />
+      </Field>
     </section>
   );
 }
 
-function InviteCard(props: Parameters<typeof DirectColumn>[0]) {
-  const shownInvite = props.runtime.createdInvite || props.inviteUri || inviteText.inviteValue;
-  const shownFingerprint = props.runtime.snapshot?.fingerprint || inviteText.fingerprintValue;
+function InviteCreateCard(props: {
+  invite: string | undefined;
+  copied: boolean;
+  busy: boolean;
+  onCreate: () => void;
+  onCopy: () => void;
+}) {
+  const hasInvite = Boolean(props.invite);
   return (
-    <section className="invite-card" aria-label={inviteText.createLabel}>
-      <div className="invite-actions">
-        <button className="btn btn-primary" type="button" onClick={props.onCreate} disabled={props.runtime.busy}><IconCopy size={14} />{inviteText.createLabel}</button>
-        <button className="btn btn-ghost" type="button" onClick={props.onAccept} disabled={!props.confirmed || props.runtime.busy}>{inviteText.pasteLabel}</button>
+    <section className="card" aria-label={inviteText.createSectionTitle}>
+      <h2>{inviteText.createSectionTitle}</h2>
+      <p className="card-hint">{inviteText.createHint}</p>
+      <div className="card-actions">
+        <button
+          className="btn btn-primary"
+          type="button"
+          onClick={props.onCreate}
+          disabled={props.busy}
+        >
+          {hasInvite ? inviteText.recreateButton : inviteText.createButton}
+        </button>
+        {hasInvite ? (
+          <button className="btn btn-ghost" type="button" onClick={props.onCopy}>
+            {props.copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+            {props.copied ? inviteText.copiedButton : inviteText.copyButton}
+          </button>
+        ) : null}
       </div>
-      <code>{shownInvite}</code>
-      <div className="fingerprint-line"><span>{inviteText.fingerprintLabel}</span><strong>{shownFingerprint}</strong></div>
-      <button className="btn btn-primary btn-full" type="button" onClick={props.onConfirm}><IconCheck size={14} />{props.confirmed ? inviteText.confirmedLabel : inviteText.confirmLabel}</button>
+      {hasInvite ? <code className="invite-code">{props.invite}</code> : null}
     </section>
   );
 }
 
-function ChatPane(props: { composer: string; confirmed: boolean; runtimeMessages: readonly ChatMessage[]; state: string; onComposer: (value: string) => void; onSend: (event: FormEvent) => void }) {
-  const ready = props.state === READY_STATE;
+function InviteJoinCard(props: {
+  value: string;
+  canConnect: boolean;
+  onChange: (value: string) => void;
+  onConnect: () => void;
+}) {
   return (
-    <section className="chat-pane" aria-labelledby="dm-title">
-      <header className="chat-header"><Avatar name={dmText.contactName} presence={ready ? "online" : "pending"} size="small" /><div className="chat-title"><h1 id="dm-title">{dmText.contactName}</h1><p>{props.confirmed ? `Direct · fingerprint confirmed · MLS ${props.state}` : dmText.contactSubtitle}</p></div><div className="chat-actions"><IconButton label="Call"><IconPhone size={ICON_SIZE} /></IconButton><IconButton label="Video"><IconVideo size={ICON_SIZE} /></IconButton><IconButton label="More"><IconDots size={ICON_SIZE} /></IconButton></div></header>
-      <div className="chat-scroll scroll"><CryptoBanner /><DayDivider />{messages.map((message) => <MessageRow message={message} key={message.id} />)}{props.runtimeMessages.map((message, index) => <RuntimeMessageRow message={message} key={`${message.from_device}-${index}`} />)}</div>
-      <Composer value={props.composer} onChange={props.onComposer} onSend={props.onSend} />
+    <section className="card" aria-label={inviteText.joinSectionTitle}>
+      <h2>{inviteText.joinSectionTitle}</h2>
+      <p className="card-hint">{inviteText.joinHint}</p>
+      <textarea
+        aria-label="Invite URI"
+        placeholder={inviteText.joinPlaceholder}
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+      <div className="card-actions">
+        <button
+          className="btn btn-primary"
+          type="button"
+          onClick={props.onConnect}
+          disabled={!props.canConnect}
+        >
+          {inviteText.joinButton}
+        </button>
+      </div>
     </section>
   );
 }
 
-function DiagnosticsPanel({ runtime, onPoll }: { runtime: RuntimeUiState; onPoll: () => void }) {
+function FingerprintCard(props: {
+  fingerprint: string;
+  confirmed: boolean;
+  ready: boolean;
+  onConfirm: () => void;
+}) {
+  const display = props.fingerprint
+    ? props.fingerprint.match(/.{1,4}/g)?.join(" ")
+    : "— waiting for peer —";
   return (
-    <aside className="diagnostics-panel" aria-labelledby="diagnostics-title">
-      <header><IconMessageCircle size={18} /><h2 id="diagnostics-title">Peer status</h2><button className="btn btn-ghost btn-icon" type="button" onClick={onPoll} aria-label="Refresh status"><IconRefresh size={14} /></button></header>
-      {diagnostics.map(([label, value]) => <div className="diagnostic-row" key={label}><span>{label}</span><strong>{value}</strong></div>)}
-      <div className="diagnostic-row"><span>MLS state</span><strong>{runtime.snapshot?.state ?? "waiting"}</strong></div>
-      <div className="diagnostic-row"><span>Discovery</span><strong>{runtime.listenAddress ?? "default public trackers"}</strong></div>
-      {runtime.error ? <div className="diagnostic-row diagnostic-error"><span>Runtime error</span><strong>{runtime.error}</strong></div> : null}
-    </aside>
+    <section className="card" aria-label={inviteText.fingerprintLabel}>
+      <h2>{inviteText.fingerprintLabel}</h2>
+      <p className="card-hint">{inviteText.fingerprintHint}</p>
+      <code className="fingerprint-display">{display}</code>
+      <div className="card-actions">
+        <button
+          className="btn btn-primary btn-full"
+          type="button"
+          onClick={props.onConfirm}
+          disabled={!props.fingerprint || props.confirmed}
+        >
+          <IconCheck size={14} />
+          {props.confirmed ? inviteText.confirmedButton : inviteText.confirmButton}
+        </button>
+      </div>
+    </section>
   );
 }
 
-function Composer({ value, onChange, onSend }: { value: string; onChange: (value: string) => void; onSend: (event: FormEvent) => void }) {
-  return <form className="composer" onSubmit={onSend}><div className="composer-box"><IconButton label="Add"><IconPlus size={ICON_SIZE} /></IconButton><input aria-label={dmText.composerPlaceholder} placeholder={dmText.composerPlaceholder} value={value} onChange={(event) => onChange(event.target.value)} /><IconButton label="Attach"><IconPaperclip size={ICON_SIZE} /></IconButton><button className="send-button" type="submit" aria-label="Send message"><IconSend size={14} /></button></div><div className="composer-footnote"><IconLock size={10} /><span>{dmText.footerCrypto}</span></div></form>;
+function ChatList({ messages }: { messages: readonly ChatMessage[] }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
+  }, [messages.length]);
+
+  if (messages.length === 0) {
+    return (
+      <div className="chat-empty">
+        <strong>{chatText.emptyTitle}</strong>
+        <p>{chatText.emptyBody}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="message-stack">
+      {messages.map((message, index) => (
+        <MessageRow message={message} key={`${message.from_device}-${index}`} />
+      ))}
+      <div ref={anchorRef} aria-hidden="true" />
+    </div>
+  );
 }
 
-function ContactRow({ contact }: { contact: (typeof contacts)[number] }) {
-  return <article className={contact.active ? "dm-row dm-row-active" : "dm-row"}><Avatar name={contact.name} presence={contact.presence} /><div className="dm-row-copy"><div className="dm-row-title"><strong>{contact.name}</strong><span>{contact.time}</span></div><div className="dm-row-preview">{contact.presence === "pending" ? <IconClock size={11} /> : null}<span>{contact.preview}</span>{contact.unread ? <b>{contact.unread}</b> : null}</div></div></article>;
+function MessageRow({ message }: { message: ChatMessage }) {
+  return (
+    <article className="message-row">
+      <Avatar name={message.from_device} />
+      <div className="message-body">
+        <div className="message-meta">
+          <strong>{message.from_device}</strong>
+          <code>MLS</code>
+        </div>
+        <p>{message.body}</p>
+        <div className="message-seal">
+          <IconLock size={10} />
+          <span>OpenMLS · sealed</span>
+        </div>
+      </div>
+    </article>
+  );
 }
 
-function RuntimeMessageRow({ message }: { message: ChatMessage }) {
-  return <article className="message-row"><Avatar name={message.from_device} /><div className="message-body"><div className="message-meta"><strong>{message.from_device}</strong><code>MLS</code><span>now</span></div><p>{message.body}</p><div className="message-seal"><IconLock size={10} /><span>OpenMLS · sealed</span></div></div></article>;
+function Composer({
+  value,
+  onChange,
+  onSend,
+  disabled,
+}: {
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onSend: (event: FormEvent) => void;
+}) {
+  return (
+    <form className="composer" onSubmit={onSend}>
+      <div className="composer-box">
+        <input
+          aria-label="Message"
+          placeholder={chatText.composerPlaceholder}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={disabled}
+        />
+        <button
+          className="send-button"
+          type="submit"
+          aria-label={chatText.sendLabel}
+          disabled={disabled || !value.trim()}
+        >
+          <IconSend size={14} />
+        </button>
+      </div>
+    </form>
+  );
 }
 
-function MessageRow({ message }: { message: (typeof messages)[number] }) {
-  const isMe = message.from === "me";
-  return <article className="message-row"><Avatar name={message.name} /><div className="message-body"><div className="message-meta"><strong className={isMe ? "message-author-self" : undefined}>{message.name}</strong><code>{message.key}</code><span>{message.time}</span></div><p>{message.body}</p><div className="message-seal"><IconLock size={10} /><span>OpenMLS · sealed</span></div></div></article>;
+function CryptoNotice() {
+  return (
+    <section className="crypto-banner" aria-label={cryptoNotice.title}>
+      <div className="crypto-icon">
+        <IconShieldCheck size={18} />
+      </div>
+      <div>
+        <strong>{cryptoNotice.title}</strong>
+        <p>{cryptoNotice.body}</p>
+      </div>
+    </section>
+  );
 }
 
-function TrustRail() { return <ol className="trust-list" aria-label="Private trust setup">{trustSteps.map(([label, state]) => <li key={label}><span>{label}</span><strong>{state}</strong></li>)}</ol>; }
-function CryptoBanner() { return <section className="crypto-banner"><div className="crypto-icon"><IconShieldCheck size={18} /></div><div><strong>{dmText.bannerTitle}</strong><p>{dmText.bannerBody}</p></div></section>; }
-function DayDivider() { return <div className="day-divider"><span>{dmText.dayLabel}</span></div>; }
-function SectionLabel({ children }: { children: React.ReactNode }) { return <div className="section-label">{children}</div>; }
-function UserCard() { return <footer className="user-card"><Avatar name={shellText.userName} presence="online" size="small" /><div><strong>{shellText.userName}</strong><code>{shellText.userKey}</code></div><IconButton label="Copy key"><IconCopy size={14} /></IconButton><IconButton label="Mute"><IconMicrophone size={14} /></IconButton></footer>; }
-function RailButton({ active, label, children }: { active?: boolean; label: string; children: React.ReactNode }) { return <div className="rail-slot"><span className={active ? "rail-pill rail-pill-active" : "rail-pill"} /><button className={active ? "rail-button rail-button-active" : "rail-button"} type="button" aria-label={label}>{children}</button></div>; }
-function RailSpace({ active, label, short, unread }: { active?: boolean; label: string; short: string; unread?: string }) { return <div className="rail-slot"><span className={active ? "rail-pill rail-pill-active" : "rail-pill"} /><button className={active ? "space-button space-button-active" : "space-button"} type="button" title={label}>{short}{unread ? <span className="space-unread">{unread}</span> : null}</button></div>; }
-function Avatar({ name, presence, size }: { name: string; presence?: string; size?: "small" }) { const initials = name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase(); return <span className={size === "small" ? "avatar avatar-small" : "avatar"}>{initials}{presence ? <span className={`avatar-presence presence-${presence}`} /> : null}</span>; }
-function IconButton({ children, label, onClick }: { children: React.ReactNode; label: string; onClick?: () => void }) { return <button className="btn btn-ghost btn-icon" type="button" aria-label={label} onClick={onClick}>{children}</button>; }
-function readableError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-async function copyText(value: string): Promise<void> { await navigator.clipboard?.writeText?.(value); }
+function MeshDiagnostics({
+  mesh,
+  listenAddress,
+}: {
+  mesh: MeshInfo | null;
+  listenAddress: string | undefined;
+}) {
+  if (!mesh) {
+    return (
+      <DiagnosticGroup label="Moss network">
+        <Row k="Discovery" v={listenAddress || "default public trackers"} />
+        <Row k="Peers" v="—" />
+      </DiagnosticGroup>
+    );
+  }
+  return (
+    <DiagnosticGroup label="Moss network">
+      <Row k="NAT type" v={mesh.nat_type || "unknown"} />
+      <Row k="Advertised" v={mesh.advertised_addr || "—"} />
+      <Row k="Listen port" v={String(mesh.listen_port)} />
+      <Row k="Peers" v={`${mesh.peer_count} (${mesh.direct_peer_count} direct / ${mesh.relayed_peer_count} relayed)`} />
+      <Row k="Known" v={String(mesh.known_peer_count)} />
+      <Row k="Relay sessions" v={String(mesh.relay_session_count)} />
+      <Row k="Supernode" v={mesh.supernode_ready ? "ready" : "no"} />
+      <Row k="Mesh id" v={shorten(mesh.mesh_id, 16)} />
+      <Row k="Public key" v={shorten(mesh.public_key, 16)} />
+    </DiagnosticGroup>
+  );
+}
 
+function EventLog({ events }: { events: readonly SnapshotEvent[] }) {
+  const slice = events.slice(-12).reverse();
+  return (
+    <div className="diagnostic-group">
+      <div className="diagnostic-group-label">
+        <IconActivity size={11} style={{ marginRight: 6, verticalAlign: "-1px" }} />
+        Moss events
+      </div>
+      {slice.length === 0 ? (
+        <div className="diagnostic-row event-empty">
+          <span>—</span>
+          <strong>no events yet</strong>
+        </div>
+      ) : (
+        slice.map((event, index) => {
+          const detail = compactDetail(event.detail_json);
+          const time = formatTime(event.epoch_millis);
+          return (
+            <div className={`diagnostic-row event-row event-${event.event_name}`} key={index}>
+              <span>{time}</span>
+              <strong>
+                <span className="event-name">{event.event_name}</span>
+                {detail ? <span className="event-detail">{detail}</span> : null}
+              </strong>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function compactDetail(raw: string): string {
+  if (!raw) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(" ");
+    }
+    return String(parsed);
+  } catch {
+    return raw;
+  }
+}
+
+function formatTime(epoch: number): string {
+  if (!epoch) {
+    return "—";
+  }
+  const date = new Date(epoch);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function pad(value: number): string {
+  return value < 10 ? `0${value}` : String(value);
+}
+
+function DiagnosticGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="diagnostic-group">
+      <div className="diagnostic-group-label">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="diagnostic-row">
+      <span>{k}</span>
+      <strong>{v}</strong>
+    </div>
+  );
+}
+
+function StatePill({ state, label }: { state: string; label: string }) {
+  return (
+    <span className={`state-pill state-pill-${state}`}>
+      <span className="state-dot" />
+      {label}
+    </span>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="field">
+      <span className="field-label">{label}</span>
+      {children}
+      {hint ? <span className="field-hint">{hint}</span> : null}
+    </label>
+  );
+}
+
+function Avatar({ name }: { name: string }) {
+  const initials = name
+    .split(/[\s_-]+/)
+    .map((part) => part[0])
+    .filter(Boolean)
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+  return <span className="avatar">{initials || "?"}</span>;
+}
+
+function readableError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function copyText(value: string): Promise<void> {
+  await navigator.clipboard?.writeText?.(value);
+}
+
+function shorten(value: string, head: number): string {
+  if (!value) {
+    return "—";
+  }
+  if (value.length <= head * 2 + 1) {
+    return value;
+  }
+  return `${value.slice(0, head)}…${value.slice(-4)}`;
+}

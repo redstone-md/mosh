@@ -78,12 +78,38 @@ export interface ChatMessage {
   readonly body: string;
 }
 
+export interface MeshInfo {
+  readonly mesh_id: string;
+  readonly listen_port: number;
+  readonly advertised_addr: string;
+  readonly peer_count: number;
+  readonly direct_peer_count: number;
+  readonly relayed_peer_count: number;
+  readonly relay_capable_peer_count: number;
+  readonly relay_session_count: number;
+  readonly relay_route_count: number;
+  readonly known_peer_count: number;
+  readonly channels: readonly string[];
+  readonly nat_type: string;
+  readonly supernode_ready: boolean;
+  readonly public_key: string;
+}
+
 export interface SessionSnapshot {
   readonly role: string;
   readonly state: string;
   readonly invite_uri: string | null;
   readonly fingerprint: string;
   readonly messages: readonly ChatMessage[];
+  readonly mesh: MeshInfo | null;
+  readonly events: readonly SnapshotEvent[];
+}
+
+export interface SnapshotEvent {
+  readonly event_type: number;
+  readonly event_name: string;
+  readonly detail_json: string;
+  readonly epoch_millis: number;
 }
 
 export interface SendMessageResult {

@@ -31,6 +31,63 @@ pub struct SessionSnapshot {
     pub invite_uri: Option<String>,
     pub fingerprint: String,
     pub messages: Vec<ChatMessage>,
+    pub mesh: Option<MeshInfo>,
+    pub events: Vec<SnapshotEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SnapshotEvent {
+    pub event_type: i32,
+    pub event_name: String,
+    pub detail_json: String,
+    pub epoch_millis: u64,
+}
+
+impl SnapshotEvent {
+    pub fn name_for(event_type: i32) -> &'static str {
+        match event_type {
+            1 => "peer_joined",
+            2 => "peer_left",
+            3 => "supernode_promoted",
+            4 => "supernode_revoked",
+            5 => "tracker_announce",
+            6 => "tracker_failure",
+            7 => "relay_migrated",
+            _ => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MeshInfo {
+    #[serde(default)]
+    pub mesh_id: String,
+    #[serde(default)]
+    pub listen_port: i32,
+    #[serde(default)]
+    pub advertised_addr: String,
+    #[serde(default)]
+    pub peer_count: i32,
+    #[serde(default)]
+    pub direct_peer_count: i32,
+    #[serde(default)]
+    pub relayed_peer_count: i32,
+    #[serde(default)]
+    pub relay_capable_peer_count: i32,
+    #[serde(default)]
+    pub relay_session_count: i32,
+    #[serde(default)]
+    pub relay_route_count: i32,
+    #[serde(default)]
+    pub known_peer_count: i32,
+    #[serde(default)]
+    pub channels: Vec<String>,
+    #[serde(default)]
+    pub nat_type: String,
+    #[serde(default)]
+    pub supernode_ready: bool,
+    #[serde(default)]
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

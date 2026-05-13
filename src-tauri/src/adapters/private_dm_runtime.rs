@@ -6,8 +6,8 @@ mod wire;
 use std::sync::Arc;
 
 pub use contracts::{
-    AcceptInviteRequest, ChatMessage, InviteCreated, PrivateDmRuntimeError, SendMessageResult,
-    SessionSnapshot, StartSessionRequest,
+    AcceptInviteRequest, ChatMessage, InviteCreated, MeshInfo, PrivateDmRuntimeError,
+    SendMessageResult, SessionSnapshot, SnapshotEvent, StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use mls_session::MlsSessionCrypto;
@@ -17,7 +17,8 @@ use wire::{
 };
 
 use crate::adapters::moss_ffi::{
-    drain_received_messages, MossFfiRuntime, MossNode, MossNodeConfig, MossReceivedMessage,
+    clear_event_log, drain_received_messages, snapshot_event_log, MossFfiRuntime, MossNode,
+    MossNodeConfig, MossReceivedMessage,
 };
 
 pub struct PrivateDmRuntime {
@@ -28,6 +29,7 @@ pub struct PrivateDmRuntime {
 struct PrivateDmSession {
     role: SessionRole,
     device_id: String,
+    participant_id: String,
     session_id: String,
     fingerprint: String,
     invite_uri: Option<String>,
@@ -64,6 +66,7 @@ impl PrivateDmRuntime {
         crypto.create_group()?;
         let session_id = crypto.random_token("session")?;
         let mesh_id = crypto.random_token("mesh")?;
+        let participant_id = crypto.random_token("participant")?;
         let fingerprint = crypto.fingerprint();
         let invite_uri = build_invite_uri(&mesh_id, &session_id, &fingerprint);
         let node = start_node(
@@ -76,6 +79,7 @@ impl PrivateDmRuntime {
         self.session = Some(PrivateDmSession {
             role: SessionRole::Alice,
             device_id: request.display_name,
+            participant_id,
             session_id: session_id.clone(),
             fingerprint: fingerprint.clone(),
             invite_uri: Some(invite_uri.clone()),
@@ -101,6 +105,7 @@ impl PrivateDmRuntime {
     ) -> Result<SessionSnapshot, PrivateDmRuntimeError> {
         let invite = ParsedInvite::parse(&request.invite_uri)?;
         let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
+        let participant_id = crypto.random_token("participant")?;
         let key_package = crypto.key_package_bytes()?;
         let node = start_node(
             &self.moss,
@@ -110,6 +115,7 @@ impl PrivateDmRuntime {
         )?;
         let envelope = ControlEnvelope::KeyPackage {
             session_id: invite.session_id.clone(),
+            participant_id: participant_id.clone(),
             from_device: request.display_name.clone(),
             key_package_b64: encode(&key_package),
         };
@@ -118,6 +124,7 @@ impl PrivateDmRuntime {
         self.session = Some(PrivateDmSession {
             role: SessionRole::Bob,
             device_id: request.display_name,
+            participant_id,
             session_id: invite.session_id,
             fingerprint: invite.fingerprint,
             invite_uri: Some(request.invite_uri),
@@ -143,6 +150,7 @@ impl PrivateDmRuntime {
         let ciphertext = session.crypto.encrypt(body.as_bytes())?;
         let envelope = DataEnvelope {
             session_id: session.session_id.clone(),
+            participant_id: session.participant_id.clone(),
             from_device: session.device_id.clone(),
             ciphertext_b64: encode(&ciphertext),
         };
@@ -207,9 +215,10 @@ impl PrivateDmSession {
         match envelope {
             ControlEnvelope::KeyPackage {
                 session_id,
-                from_device,
+                participant_id,
                 key_package_b64,
-            } if self.is_alice_session(&session_id, &from_device) => {
+                ..
+            } if self.is_alice_session(&session_id, &participant_id) => {
                 if self.peer_joined {
                     return Ok(());
                 }
@@ -218,6 +227,7 @@ impl PrivateDmSession {
                 self.peer_joined = true;
                 let envelope = ControlEnvelope::Welcome {
                     session_id: self.session_id.clone(),
+                    participant_id: self.participant_id.clone(),
                     from_device: self.device_id.clone(),
                     welcome_b64: encode(&welcome),
                     ratchet_tree_b64: encode(&tree),
@@ -227,10 +237,11 @@ impl PrivateDmSession {
             }
             ControlEnvelope::Welcome {
                 session_id,
-                from_device,
+                participant_id,
                 welcome_b64,
                 ratchet_tree_b64,
-            } if self.is_bob_session(&session_id, &from_device) => {
+                ..
+            } if self.is_bob_session(&session_id, &participant_id) => {
                 if self.peer_joined {
                     return Ok(());
                 }
@@ -246,7 +257,9 @@ impl PrivateDmSession {
     fn handle_data(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
         let envelope: DataEnvelope = decode_json(&payload)?;
 
-        if envelope.session_id != self.session_id || envelope.from_device == self.device_id {
+        if envelope.session_id != self.session_id
+            || envelope.participant_id == self.participant_id
+        {
             return Ok(());
         }
 
@@ -259,16 +272,16 @@ impl PrivateDmSession {
         Ok(())
     }
 
-    fn is_alice_session(&self, session_id: &str, from_device: &str) -> bool {
+    fn is_alice_session(&self, session_id: &str, participant_id: &str) -> bool {
         matches!(self.role, SessionRole::Alice)
             && self.session_id == session_id
-            && self.device_id != from_device
+            && self.participant_id != participant_id
     }
 
-    fn is_bob_session(&self, session_id: &str, from_device: &str) -> bool {
+    fn is_bob_session(&self, session_id: &str, participant_id: &str) -> bool {
         matches!(self.role, SessionRole::Bob)
             && self.session_id == session_id
-            && self.device_id != from_device
+            && self.participant_id != participant_id
     }
 
     fn snapshot(&self) -> SessionSnapshot {
@@ -278,11 +291,32 @@ impl PrivateDmSession {
             invite_uri: self.invite_uri.clone(),
             fingerprint: self.fingerprint.clone(),
             messages: self.messages.clone(),
+            mesh: self.mesh_info(),
+            events: snapshot_event_log()
+                .into_iter()
+                .map(|event| SnapshotEvent {
+                    event_type: event.event_type,
+                    event_name: SnapshotEvent::name_for(event.event_type).to_string(),
+                    detail_json: event.detail_json,
+                    epoch_millis: event.epoch_millis,
+                })
+                .collect(),
         }
     }
 
+    fn mesh_info(&self) -> Option<MeshInfo> {
+        let raw = self.node.mesh_info_json()?;
+        let mut info: MeshInfo = serde_json::from_str(&raw).ok()?;
+        if info.nat_type.is_empty() {
+            if let Some(nat) = self.node.nat_type() {
+                info.nat_type = nat;
+            }
+        }
+        Some(info)
+    }
+
     fn state(&self) -> String {
-        if self.crypto.is_ready() {
+        if self.peer_joined && self.crypto.is_ready() {
             "ready".to_string()
         } else {
             "waiting".to_string()
@@ -317,6 +351,9 @@ fn start_node(
 
     node.set_message_callback()
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+    node.set_event_callback()
+        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+    clear_event_log();
     node.start()
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
     node.subscribe(CONTROL_CHANNEL)
@@ -330,10 +367,12 @@ fn start_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::moss_ffi::MossFfiRuntime;
+    use crate::adapters::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
 
     #[test]
     fn private_dm_runtime_exchanges_e2ee_message_over_moss() {
+        let _guard = MOSS_TEST_LOCK.lock().expect("moss test lock");
+        drain_received_messages();
         let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
         let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime));
         let invite = alice
@@ -363,7 +402,7 @@ mod tests {
     }
 
     fn wait_until_ready(alice: &mut PrivateDmRuntime, bob: &mut PrivateDmRuntime) {
-        for _ in 0..30 {
+        for _ in 0..80 {
             let alice_ready = alice.poll().expect("Alice poll should pass").state == "ready";
             let bob_ready = bob.poll().expect("Bob poll should pass").state == "ready";
             if alice_ready && bob_ready {
