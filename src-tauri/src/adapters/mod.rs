@@ -1,3 +1,4 @@
+pub mod channel_runtime;
 pub mod ciphertext_store;
 pub mod moss_ffi;
 pub mod moss_runtime;

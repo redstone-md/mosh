@@ -19,7 +19,7 @@ use wire::{
 };
 
 use crate::adapters::moss_ffi::{
-    clear_event_log, drain_received_messages, snapshot_event_log, MossFfiRuntime, MossNode,
+    clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
 
@@ -211,7 +211,8 @@ impl PrivateDmRuntime {
     }
 
     fn drain_inbound(&mut self) -> Result<(), PrivateDmRuntimeError> {
-        let inbound = drain_received_messages();
+        let inbound =
+            drain_messages_where(|message| channel_session_id(&message.channel).is_some());
         for message in inbound {
             let session_id = match channel_session_id(&message.channel) {
                 Some(sid) => sid.to_string(),

@@ -58,6 +58,16 @@ function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
 
 function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway {
   let sessions: SessionSnapshot[] = initial;
+  let channels: Array<{
+    name: string;
+    topic: string;
+    mesh_id: string;
+    display_name: string;
+    device_fingerprint: string;
+    messages: Array<{ from_device: string; from_fingerprint: string; body: string }>;
+    mesh: typeof MESH_READY | null;
+    events: SnapshotEvent[];
+  }> = [];
   return {
     getDiagnostics: vi.fn(),
     getNativeRuntimeStatus: vi.fn(),
@@ -94,6 +104,33 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
       sessions = sessions.filter((session) => session.session_id !== sessionId);
       return { session_id: sessionId, closed: true };
     }),
+    joinChannel: vi.fn(async (request) => {
+      const channel = {
+        name: request.name.toLowerCase().replace(/^[@#]/, ""),
+        topic: `public-channel/${request.name.toLowerCase().replace(/^[@#]/, "")}`,
+        mesh_id: `channel/${request.name.toLowerCase().replace(/^[@#]/, "")}`,
+        display_name: request.display_name,
+        device_fingerprint: "abcdef0123456789",
+        messages: [],
+        mesh: MESH_READY,
+        events: [],
+      };
+      channels = [...channels, channel];
+      return channel;
+    }),
+    leaveChannel: vi.fn(async (name) => {
+      channels = channels.filter((channel) => channel.name !== name);
+      return { name, closed: true };
+    }),
+    sendChannelMessage: vi.fn(async (name, _body) => ({ name, bytes: 32 })),
+    pollChannel: vi.fn(async (name) => {
+      const found = channels.find((channel) => channel.name === name);
+      if (!found) {
+        throw new Error("missing");
+      }
+      return found;
+    }),
+    listChannels: vi.fn(async () => ({ channels })),
   };
 }
 
@@ -195,5 +232,19 @@ describe("PrivateDmScreen", () => {
     expect(
       await screen.findByText(/peer discovery metadata is NOT hidden/i),
     ).toBeInTheDocument();
+  });
+
+  it("joins a public channel and surfaces it in the rail", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway();
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await user.type(screen.getByRole("textbox", { name: "Channel name" }), "@mosh-dev");
+    await user.click(screen.getByRole("button", { name: "Join channel" }));
+
+    expect(gateway.joinChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "@mosh-dev" }),
+    );
+    expect(await screen.findByRole("button", { name: /Open channel mosh-dev/ })).toBeInTheDocument();
   });
 });

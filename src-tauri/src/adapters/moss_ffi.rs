@@ -28,6 +28,7 @@ type MossSetCallback = unsafe extern "C" fn(MossHandle, Option<MessageCallback>)
 type MossSetEventCallback = unsafe extern "C" fn(MossHandle, Option<EventCallback>) -> i32;
 type MossGetMeshInfo = unsafe extern "C" fn(MossHandle) -> *mut c_char;
 type MossGetNatType = unsafe extern "C" fn(MossHandle) -> *mut c_char;
+type MossGetPublicKey = unsafe extern "C" fn(MossHandle) -> *mut u8;
 type MossFree = unsafe extern "C" fn(*mut c_void);
 
 const EVENT_RING_CAPACITY: usize = 64;
@@ -92,6 +93,7 @@ pub struct MossFfiRuntime {
     set_event_callback: MossSetEventCallback,
     get_mesh_info: MossGetMeshInfo,
     get_nat_type: MossGetNatType,
+    get_public_key: MossGetPublicKey,
     free: MossFree,
 }
 
@@ -142,6 +144,7 @@ impl MossFfiRuntime {
             set_event_callback: load_symbol(&library, b"Moss_SetEventCallback\0")?,
             get_mesh_info: load_symbol(&library, b"Moss_GetMeshInfo\0")?,
             get_nat_type: load_symbol(&library, b"Moss_GetNATType\0")?,
+            get_public_key: load_symbol(&library, b"Moss_GetPublicKey\0")?,
             free: load_symbol(&library, b"Moss_Free\0")?,
             _library: ManuallyDrop::new(library),
         })
@@ -248,6 +251,16 @@ impl MossNode {
         unsafe { (self.runtime.free)(ptr as *mut c_void) };
         Some(value)
     }
+
+    pub fn public_key_hex(&self) -> Option<String> {
+        let ptr = unsafe { (self.runtime.get_public_key)(self.handle) };
+        if ptr.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, 32) }.to_vec();
+        unsafe { (self.runtime.free)(ptr as *mut c_void) };
+        Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    }
 }
 
 impl Drop for MossNode {
@@ -263,6 +276,26 @@ pub fn drain_received_messages() -> Vec<MossReceivedMessage> {
         .lock()
         .expect("Moss message lock poisoned");
     std::mem::take(&mut *messages)
+}
+
+pub fn drain_messages_where<F>(predicate: F) -> Vec<MossReceivedMessage>
+where
+    F: Fn(&MossReceivedMessage) -> bool,
+{
+    let mut log = RECEIVED_MESSAGES
+        .lock()
+        .expect("Moss message lock poisoned");
+    let mut taken = Vec::new();
+    let mut kept = Vec::with_capacity(log.len());
+    for message in log.drain(..) {
+        if predicate(&message) {
+            taken.push(message);
+        } else {
+            kept.push(message);
+        }
+    }
+    *log = kept;
+    taken
 }
 
 pub fn snapshot_event_log() -> Vec<MossEvent> {

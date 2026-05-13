@@ -2,7 +2,9 @@ import {
   IconActivity,
   IconCheck,
   IconCopy,
+  IconHash,
   IconLock,
+  IconLogout,
   IconMessageCircle,
   IconPlugConnected,
   IconPlus,
@@ -19,8 +21,11 @@ import {
   setupText,
   shellText,
   stateLabels,
+  channelText,
 } from "./private-dm.content";
 import {
+  ChannelMessage,
+  ChannelSnapshot,
   ChatMessage,
   MeshInfo,
   NativeMessagingGateway,
@@ -32,6 +37,10 @@ import {
 const AUTO_POLL_MS = 1000;
 const READY_STATE = "ready";
 const DEFAULT_LISTEN_PORT = 0;
+
+type ActiveItem =
+  | { readonly type: "dm"; readonly id: string }
+  | { readonly type: "channel"; readonly name: string };
 
 function defaultDisplayName(): string {
   const suffix = Math.random().toString(36).slice(2, 8);
@@ -52,9 +61,11 @@ export function PrivateDmScreen({
   const [staticPeer, setStaticPeer] = useState("");
   const [listenPort, setListenPort] = useState<number>(DEFAULT_LISTEN_PORT);
   const [inviteUri, setInviteUri] = useState("");
+  const [channelName, setChannelName] = useState("");
   const [composer, setComposer] = useState("");
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [channels, setChannels] = useState<readonly ChannelSnapshot[]>([]);
+  const [active, setActive] = useState<ActiveItem | null>(null);
   const [confirmedFingerprints, setConfirmedFingerprints] = useState<Set<string>>(new Set());
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
   const [error, setError] = useState<string | undefined>(undefined);
@@ -62,7 +73,7 @@ export function PrivateDmScreen({
   const [showSetup, setShowSetup] = useState(false);
   const pollInFlight = useRef(false);
 
-  const sessionRequestBase = useMemo(
+  const requestBase = useMemo(
     () => ({
       display_name: displayName.trim() || defaultDisplayName(),
       listen_port: Number.isFinite(listenPort) ? listenPort : DEFAULT_LISTEN_PORT,
@@ -82,17 +93,29 @@ export function PrivateDmScreen({
         setError(undefined);
       }
       try {
-        const list = await gateway.listPrivateSessions();
-        setSessions(list.sessions);
-        setActiveSessionId((current) => {
-          if (current && list.sessions.some((session) => session.session_id === current)) {
+        const [sessionList, channelList] = await Promise.all([
+          gateway.listPrivateSessions(),
+          gateway.listChannels(),
+        ]);
+        setSessions(sessionList.sessions);
+        setChannels(channelList.channels);
+        setActive((current) => {
+          if (current?.type === "dm" && sessionList.sessions.some((s) => s.session_id === current.id)) {
             return current;
           }
-          return list.sessions[0]?.session_id ?? null;
+          if (current?.type === "channel" && channelList.channels.some((c) => c.name === current.name)) {
+            return current;
+          }
+          if (sessionList.sessions.length > 0) {
+            return { type: "dm", id: sessionList.sessions[0].session_id };
+          }
+          if (channelList.channels.length > 0) {
+            return { type: "channel", name: channelList.channels[0].name };
+          }
+          return null;
         });
         if (!quiet) {
           setBusy(false);
-          setError(undefined);
         }
       } catch (err) {
         if (!quiet) {
@@ -126,10 +149,10 @@ export function PrivateDmScreen({
 
   const createInvite = () =>
     run(async () => {
-      const invite = await gateway.createPrivateInvite(sessionRequestBase);
+      const invite = await gateway.createPrivateInvite(requestBase);
       await copyText(invite.invite_uri);
       setCreateState({ inviteUri: invite.invite_uri, copied: true });
-      setActiveSessionId(invite.session_id);
+      setActive({ type: "dm", id: invite.session_id });
       setShowSetup(true);
       await refresh(true);
     });
@@ -137,11 +160,27 @@ export function PrivateDmScreen({
   const acceptInvite = () =>
     run(async () => {
       const snapshot = await gateway.acceptPrivateInvite({
-        ...sessionRequestBase,
+        ...requestBase,
         invite_uri: inviteUri.trim(),
       });
       setInviteUri("");
-      setActiveSessionId(snapshot.session_id);
+      setActive({ type: "dm", id: snapshot.session_id });
+      setShowSetup(false);
+      await refresh(true);
+    });
+
+  const joinChannel = () =>
+    run(async () => {
+      const name = channelName.trim();
+      if (!name) {
+        return;
+      }
+      const snapshot = await gateway.joinChannel({
+        ...requestBase,
+        name,
+      });
+      setChannelName("");
+      setActive({ type: "channel", name: snapshot.name });
       setShowSetup(false);
       await refresh(true);
     });
@@ -158,32 +197,48 @@ export function PrivateDmScreen({
   const sendMessage = (event: FormEvent) => {
     event.preventDefault();
     const body = composer.trim();
-    if (!body || !activeSessionId) {
+    if (!body || !active) {
       return;
     }
     void run(async () => {
-      await gateway.sendPrivateMessage(activeSessionId, body);
+      if (active.type === "dm") {
+        await gateway.sendPrivateMessage(active.id, body);
+      } else {
+        await gateway.sendChannelMessage(active.name, body);
+      }
       setComposer("");
       await refresh(true);
     });
   };
 
-  const closeSession = (sessionId: string) =>
-    run(async () => {
-      await gateway.closePrivateSession(sessionId);
-      setConfirmedFingerprints((current) => {
-        const next = new Set(current);
-        next.delete(sessionId);
-        return next;
-      });
+  const closeActive = () => {
+    if (!active) {
+      return;
+    }
+    void run(async () => {
+      if (active.type === "dm") {
+        await gateway.closePrivateSession(active.id);
+        setConfirmedFingerprints((current) => {
+          const next = new Set(current);
+          next.delete(active.id);
+          return next;
+        });
+      } else {
+        await gateway.leaveChannel(active.name);
+      }
+      setActive(null);
       await refresh(true);
     });
+  };
 
   const confirmFingerprint = (sessionId: string) =>
     setConfirmedFingerprints((current) => new Set(current).add(sessionId));
 
-  const activeSession = sessions.find((session) => session.session_id === activeSessionId) ?? null;
-  const showWelcome = sessions.length === 0 || showSetup;
+  const activeSession =
+    active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
+  const activeChannel =
+    active?.type === "channel" ? channels.find((c) => c.name === active.name) ?? null : null;
+  const showWelcome = (!activeSession && !activeChannel) || showSetup;
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
@@ -198,20 +253,26 @@ export function PrivateDmScreen({
             state={activeSession.state}
             label={stateLabels[activeSession.state] ?? activeSession.state}
           />
+        ) : activeChannel ? (
+          <span className="state-pill state-pill-ready">
+            <span className="state-dot" />
+            {channelText.broadcastBadge}
+          </span>
         ) : null}
       </header>
 
       <div className="desktop-body">
         <SessionRail
           sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSelect={(id) => {
-            setActiveSessionId(id);
+          channels={channels}
+          active={active}
+          onSelect={(item) => {
+            setActive(item);
             setShowSetup(false);
           }}
           onNew={() => {
             setShowSetup(true);
-            setActiveSessionId(null);
+            setActive(null);
             setCreateState({ copied: false });
           }}
         />
@@ -223,6 +284,7 @@ export function PrivateDmScreen({
               staticPeer={staticPeer}
               listenPort={listenPort}
               inviteUri={inviteUri}
+              channelName={channelName}
               busy={busy}
               createState={createState}
               error={error}
@@ -230,21 +292,31 @@ export function PrivateDmScreen({
               onStaticPeer={setStaticPeer}
               onListenPort={setListenPort}
               onInviteUri={setInviteUri}
+              onChannelName={setChannelName}
               onCreate={createInvite}
               onAccept={acceptInvite}
+              onJoinChannel={joinChannel}
               onCopyInvite={copyInvite}
             />
           ) : activeSession ? (
-            <ActiveChat
+            <ActiveDmChat
               session={activeSession}
               composer={composer}
               confirmed={confirmedFingerprints.has(activeSession.session_id)}
               busy={busy}
-              error={error}
               onComposer={setComposer}
               onSend={sendMessage}
               onConfirm={() => confirmFingerprint(activeSession.session_id)}
-              onClose={() => closeSession(activeSession.session_id)}
+              onClose={closeActive}
+            />
+          ) : activeChannel ? (
+            <ActiveChannelChat
+              channel={activeChannel}
+              composer={composer}
+              busy={busy}
+              onComposer={setComposer}
+              onSend={sendMessage}
+              onClose={closeActive}
             />
           ) : (
             <EmptyState onNew={() => setShowSetup(true)} />
@@ -267,6 +339,8 @@ export function PrivateDmScreen({
 
           {activeSession ? (
             <SessionDiagnostics session={activeSession} />
+          ) : activeChannel ? (
+            <ChannelDiagnostics channel={activeChannel} />
           ) : (
             <div className="diagnostic-group">
               <div className="diagnostic-group-label">Session</div>
@@ -291,13 +365,15 @@ export function PrivateDmScreen({
 
 function SessionRail({
   sessions,
-  activeSessionId,
+  channels,
+  active,
   onSelect,
   onNew,
 }: {
   sessions: readonly SessionSnapshot[];
-  activeSessionId: string | null;
-  onSelect: (id: string) => void;
+  channels: readonly ChannelSnapshot[];
+  active: ActiveItem | null;
+  onSelect: (item: ActiveItem) => void;
   onNew: () => void;
 }) {
   return (
@@ -309,10 +385,19 @@ function SessionRail({
       <div className="rail-list">
         {sessions.map((session) => (
           <SessionRailItem
-            key={session.session_id}
+            key={`dm-${session.session_id}`}
             session={session}
-            active={session.session_id === activeSessionId}
-            onClick={() => onSelect(session.session_id)}
+            active={active?.type === "dm" && active.id === session.session_id}
+            onClick={() => onSelect({ type: "dm", id: session.session_id })}
+          />
+        ))}
+        {channels.length > 0 && sessions.length > 0 ? <div className="rail-divider" /> : null}
+        {channels.map((channel) => (
+          <ChannelRailItem
+            key={`ch-${channel.name}`}
+            channel={channel}
+            active={active?.type === "channel" && active.name === channel.name}
+            onClick={() => onSelect({ type: "channel", name: channel.name })}
           />
         ))}
       </div>
@@ -333,7 +418,7 @@ function SessionRailItem({
   return (
     <button
       type="button"
-      className={`rail-item ${active ? "rail-item-active" : ""} rail-item-${session.state}`}
+      className={`rail-item ${active ? "rail-item-active" : ""}`}
       onClick={onClick}
       title={`${label} · ${stateLabels[session.state] ?? session.state}`}
       aria-label={`Open session with ${label}`}
@@ -344,11 +429,35 @@ function SessionRailItem({
   );
 }
 
+function ChannelRailItem({
+  channel,
+  active,
+  onClick,
+}: {
+  channel: ChannelSnapshot;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`rail-item rail-channel ${active ? "rail-item-active" : ""}`}
+      onClick={onClick}
+      title={`#${channel.name}`}
+      aria-label={`Open channel ${channel.name}`}
+    >
+      <IconHash size={18} />
+      <span className="rail-channel-label">{channel.name}</span>
+    </button>
+  );
+}
+
 function NewSessionPanel(props: {
   displayName: string;
   staticPeer: string;
   listenPort: number;
   inviteUri: string;
+  channelName: string;
   busy: boolean;
   createState: CreateState;
   error?: string;
@@ -356,12 +465,15 @@ function NewSessionPanel(props: {
   onStaticPeer: (value: string) => void;
   onListenPort: (value: number) => void;
   onInviteUri: (value: string) => void;
+  onChannelName: (value: string) => void;
   onCreate: () => void;
   onAccept: () => void;
+  onJoinChannel: () => void;
   onCopyInvite: () => void;
 }) {
   const hasInvite = Boolean(props.createState.inviteUri);
   const canAccept = props.inviteUri.trim().length > 0 && !props.busy;
+  const canJoinChannel = props.channelName.trim().length > 0 && !props.busy;
   return (
     <div className="new-session-pane">
       <header className="new-session-header">
@@ -442,6 +554,35 @@ function NewSessionPanel(props: {
             </button>
           </div>
         </section>
+
+        <section className="card" aria-label={channelText.cardTitle}>
+          <h2>{channelText.cardTitle}</h2>
+          <p className="card-hint">{channelText.cardHint}</p>
+          <Field label={channelText.nameLabel}>
+            <input
+              aria-label="Channel name"
+              placeholder={channelText.namePlaceholder}
+              value={props.channelName}
+              onChange={(event) => props.onChannelName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && canJoinChannel) {
+                  event.preventDefault();
+                  props.onJoinChannel();
+                }
+              }}
+            />
+          </Field>
+          <div className="card-actions">
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={props.onJoinChannel}
+              disabled={!canJoinChannel}
+            >
+              {channelText.joinButton}
+            </button>
+          </div>
+        </section>
       </div>
 
       {props.error ? <div className="inline-error">{props.error}</div> : null}
@@ -449,12 +590,11 @@ function NewSessionPanel(props: {
   );
 }
 
-function ActiveChat(props: {
+function ActiveDmChat(props: {
   session: SessionSnapshot;
   composer: string;
   confirmed: boolean;
   busy: boolean;
-  error?: string;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onConfirm: () => void;
@@ -493,7 +633,7 @@ function ActiveChat(props: {
       <CryptoNotice />
 
       <div className="chat-scroll scroll">
-        <ChatList messages={props.session.messages} />
+        <DmChatList messages={props.session.messages} />
       </div>
 
       <Composer
@@ -501,6 +641,51 @@ function ActiveChat(props: {
         onChange={props.onComposer}
         onSend={props.onSend}
         disabled={!ready || props.busy}
+      />
+    </>
+  );
+}
+
+function ActiveChannelChat(props: {
+  channel: ChannelSnapshot;
+  composer: string;
+  busy: boolean;
+  onComposer: (value: string) => void;
+  onSend: (event: FormEvent) => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <header className="chat-header">
+        <div className="channel-icon">
+          <IconHash size={18} />
+        </div>
+        <div className="chat-title-block">
+          <h1 id="chat-title">{props.channel.name}</h1>
+          <p>{channelText.subtitle}</p>
+        </div>
+        <button
+          className="btn btn-ghost btn-icon"
+          type="button"
+          onClick={props.onClose}
+          aria-label={channelText.leaveLabel}
+          title={channelText.leaveLabel}
+        >
+          <IconLogout size={16} />
+        </button>
+      </header>
+
+      <PublicNotice />
+
+      <div className="chat-scroll scroll">
+        <ChannelChatList messages={props.channel.messages} />
+      </div>
+
+      <Composer
+        value={props.composer}
+        onChange={props.onComposer}
+        onSend={props.onSend}
+        disabled={props.busy}
       />
     </>
   );
@@ -547,7 +732,7 @@ function FingerprintBadge({
   );
 }
 
-function ChatList({ messages }: { messages: readonly ChatMessage[] }) {
+function DmChatList({ messages }: { messages: readonly ChatMessage[] }) {
   const anchorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -565,14 +750,14 @@ function ChatList({ messages }: { messages: readonly ChatMessage[] }) {
   return (
     <div className="message-stack">
       {messages.map((message, index) => (
-        <MessageRow message={message} key={`${message.from_device}-${index}`} />
+        <DmMessageRow message={message} key={`${message.from_device}-${index}`} />
       ))}
       <div ref={anchorRef} aria-hidden="true" />
     </div>
   );
 }
 
-function MessageRow({ message }: { message: ChatMessage }) {
+function DmMessageRow({ message }: { message: ChatMessage }) {
   return (
     <article className="message-row">
       <Avatar name={message.from_device} />
@@ -586,6 +771,46 @@ function MessageRow({ message }: { message: ChatMessage }) {
           <IconLock size={10} />
           <span>OpenMLS · sealed</span>
         </div>
+      </div>
+    </article>
+  );
+}
+
+function ChannelChatList({ messages }: { messages: readonly ChannelMessage[] }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
+  }, [messages.length]);
+
+  if (messages.length === 0) {
+    return (
+      <div className="chat-empty">
+        <strong>{channelText.emptyTitle}</strong>
+        <p>{channelText.emptyBody}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="message-stack">
+      {messages.map((message, index) => (
+        <ChannelMessageRow message={message} key={`${message.from_fingerprint}-${index}`} />
+      ))}
+      <div ref={anchorRef} aria-hidden="true" />
+    </div>
+  );
+}
+
+function ChannelMessageRow({ message }: { message: ChannelMessage }) {
+  return (
+    <article className="message-row">
+      <Avatar name={message.from_device} />
+      <div className="message-body">
+        <div className="message-meta">
+          <strong>{message.from_device}</strong>
+          <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
+        </div>
+        <p>{message.body}</p>
       </div>
     </article>
   );
@@ -639,6 +864,20 @@ function CryptoNotice() {
   );
 }
 
+function PublicNotice() {
+  return (
+    <section className="crypto-banner crypto-banner-public" aria-label={channelText.noticeTitle}>
+      <div className="crypto-icon">
+        <IconHash size={18} />
+      </div>
+      <div>
+        <strong>{channelText.noticeTitle}</strong>
+        <p>{channelText.noticeBody}</p>
+      </div>
+    </section>
+  );
+}
+
 function SessionDiagnostics({ session }: { session: SessionSnapshot }) {
   return (
     <>
@@ -651,6 +890,22 @@ function SessionDiagnostics({ session }: { session: SessionSnapshot }) {
       </div>
       <MeshDiagnostics mesh={session.mesh} />
       <EventLog events={session.events} />
+    </>
+  );
+}
+
+function ChannelDiagnostics({ channel }: { channel: ChannelSnapshot }) {
+  return (
+    <>
+      <div className="diagnostic-group">
+        <div className="diagnostic-group-label">Channel</div>
+        <Row k="Name" v={`#${channel.name}`} />
+        <Row k="Display" v={channel.display_name} />
+        <Row k="Device" v={shorten(channel.device_fingerprint, 10)} />
+        <Row k="Topic" v={channel.topic} />
+      </div>
+      <MeshDiagnostics mesh={channel.mesh} />
+      <EventLog events={channel.events} />
     </>
   );
 }

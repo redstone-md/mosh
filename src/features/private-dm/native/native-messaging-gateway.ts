@@ -8,6 +8,11 @@ const PRIVATE_DM_SEND_MESSAGE_COMMAND = "private_dm_send_message";
 const PRIVATE_DM_POLL_SESSION_COMMAND = "private_dm_poll_session";
 const PRIVATE_DM_LIST_SESSIONS_COMMAND = "private_dm_list_sessions";
 const PRIVATE_DM_CLOSE_SESSION_COMMAND = "private_dm_close_session";
+const CHANNEL_JOIN_COMMAND = "channel_join";
+const CHANNEL_LEAVE_COMMAND = "channel_leave";
+const CHANNEL_SEND_COMMAND = "channel_send";
+const CHANNEL_POLL_COMMAND = "channel_poll";
+const CHANNEL_LIST_COMMAND = "channel_list";
 
 export interface DiagnosticsSnapshot {
   readonly app_name: string;
@@ -132,6 +137,44 @@ export interface CloseSessionResult {
   readonly closed: boolean;
 }
 
+export interface JoinChannelRequest {
+  readonly name: string;
+  readonly display_name: string;
+  readonly listen_port: number;
+  readonly static_peer?: string | null;
+}
+
+export interface ChannelMessage {
+  readonly from_device: string;
+  readonly from_fingerprint: string;
+  readonly body: string;
+}
+
+export interface ChannelSnapshot {
+  readonly name: string;
+  readonly topic: string;
+  readonly mesh_id: string;
+  readonly display_name: string;
+  readonly device_fingerprint: string;
+  readonly messages: readonly ChannelMessage[];
+  readonly mesh: MeshInfo | null;
+  readonly events: readonly SnapshotEvent[];
+}
+
+export interface ChannelListSnapshot {
+  readonly channels: readonly ChannelSnapshot[];
+}
+
+export interface ChannelSendResult {
+  readonly name: string;
+  readonly bytes: number;
+}
+
+export interface ChannelLeaveResult {
+  readonly name: string;
+  readonly closed: boolean;
+}
+
 export interface NativeMessagingGateway {
   getDiagnostics(): Promise<DiagnosticsSnapshot>;
   getNativeRuntimeStatus(): Promise<NativeRuntimeStatus>;
@@ -141,6 +184,11 @@ export interface NativeMessagingGateway {
   pollPrivateSession(sessionId: string): Promise<SessionSnapshot>;
   listPrivateSessions(): Promise<SessionListSnapshot>;
   closePrivateSession(sessionId: string): Promise<CloseSessionResult>;
+  joinChannel(request: JoinChannelRequest): Promise<ChannelSnapshot>;
+  leaveChannel(name: string): Promise<ChannelLeaveResult>;
+  sendChannelMessage(name: string, body: string): Promise<ChannelSendResult>;
+  pollChannel(name: string): Promise<ChannelSnapshot>;
+  listChannels(): Promise<ChannelListSnapshot>;
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {
@@ -177,6 +225,26 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
 
   async closePrivateSession(sessionId: string): Promise<CloseSessionResult> {
     return invoke<CloseSessionResult>(PRIVATE_DM_CLOSE_SESSION_COMMAND, { sessionId });
+  }
+
+  async joinChannel(request: JoinChannelRequest): Promise<ChannelSnapshot> {
+    return invoke<ChannelSnapshot>(CHANNEL_JOIN_COMMAND, { request });
+  }
+
+  async leaveChannel(name: string): Promise<ChannelLeaveResult> {
+    return invoke<ChannelLeaveResult>(CHANNEL_LEAVE_COMMAND, { name });
+  }
+
+  async sendChannelMessage(name: string, body: string): Promise<ChannelSendResult> {
+    return invoke<ChannelSendResult>(CHANNEL_SEND_COMMAND, { name, body });
+  }
+
+  async pollChannel(name: string): Promise<ChannelSnapshot> {
+    return invoke<ChannelSnapshot>(CHANNEL_POLL_COMMAND, { name });
+  }
+
+  async listChannels(): Promise<ChannelListSnapshot> {
+    return invoke<ChannelListSnapshot>(CHANNEL_LIST_COMMAND);
   }
 }
 

@@ -56,3 +56,18 @@ export const cryptoNotice = {
   title: "End-to-end encrypted",
   body: "OpenMLS protects message content. Moss carries ciphertext via public trackers + supernodes for NAT punching — peer discovery metadata is NOT hidden.",
 } as const;
+
+export const channelText = {
+  cardTitle: "Join a public channel",
+  cardHint: "Type a channel name to subscribe. Anyone who knows the name can join. Messages are NOT end-to-end encrypted — only Moss transport (Noise) protects in-flight bytes.",
+  nameLabel: "Channel name",
+  namePlaceholder: "@mosh-dev",
+  joinButton: "Join channel",
+  subtitle: "Public channel · plaintext over Moss",
+  leaveLabel: "Leave channel",
+  broadcastBadge: "Broadcast",
+  noticeTitle: "Public channel",
+  noticeBody: "Not end-to-end encrypted. Anyone who joins this channel can read messages. Your device fingerprint is shown next to each message you publish.",
+  emptyTitle: "No messages in this channel yet.",
+  emptyBody: "Say hi. Anyone subscribed to this channel will see your message.",
+} as const;

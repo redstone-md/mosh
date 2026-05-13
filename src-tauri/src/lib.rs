@@ -1,7 +1,11 @@
 pub mod adapters;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use adapters::channel_runtime::{
+    ChannelLeaveResult, ChannelListSnapshot, ChannelRuntime, ChannelSendResult, ChannelSnapshot,
+    JoinChannelRequest,
+};
 use adapters::moss_ffi::MossFfiRuntime;
 use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
 use adapters::openmls_crypto::{
@@ -44,9 +48,9 @@ struct PrivateDmState {
 }
 
 impl PrivateDmState {
-    fn ready(moss: MossFfiRuntime) -> Self {
+    fn ready(moss: Arc<MossFfiRuntime>) -> Self {
         Self {
-            runtime: Mutex::new(Some(PrivateDmRuntime::new(moss))),
+            runtime: Mutex::new(Some(PrivateDmRuntime::from_shared(moss))),
             load_error: None,
         }
     }
@@ -75,6 +79,46 @@ impl PrivateDmState {
         match &self.load_error {
             Some(error) => format!("{PRIVATE_DM_UNAVAILABLE}: {error}"),
             None => PRIVATE_DM_UNAVAILABLE.to_string(),
+        }
+    }
+}
+
+struct ChannelState {
+    runtime: Mutex<Option<ChannelRuntime>>,
+    load_error: Option<String>,
+}
+
+impl ChannelState {
+    fn ready(moss: Arc<MossFfiRuntime>) -> Self {
+        Self {
+            runtime: Mutex::new(Some(ChannelRuntime::from_shared(moss))),
+            load_error: None,
+        }
+    }
+
+    fn missing(error: String) -> Self {
+        Self {
+            runtime: Mutex::new(None),
+            load_error: Some(error),
+        }
+    }
+
+    fn with_runtime<T>(
+        &self,
+        action: impl FnOnce(&mut ChannelRuntime) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut guard = self
+            .runtime
+            .lock()
+            .map_err(|_| "channel runtime lock poisoned".to_string())?;
+        let runtime = guard.as_mut().ok_or_else(|| self.unavailable_message())?;
+        action(runtime)
+    }
+
+    fn unavailable_message(&self) -> String {
+        match &self.load_error {
+            Some(error) => format!("channel runtime unavailable: {error}"),
+            None => "channel runtime unavailable".to_string(),
         }
     }
 }
@@ -171,16 +215,67 @@ fn private_dm_close_session(
     })
 }
 
+#[tauri::command]
+fn channel_join(
+    state: tauri::State<'_, ChannelState>,
+    request: JoinChannelRequest,
+) -> Result<ChannelSnapshot, String> {
+    state.with_runtime(|runtime| runtime.join(request).map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn channel_leave(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+) -> Result<ChannelLeaveResult, String> {
+    state.with_runtime(|runtime| runtime.leave(&name).map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn channel_send(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+    body: String,
+) -> Result<ChannelSendResult, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .send(&name, body)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn channel_poll(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+) -> Result<ChannelSnapshot, String> {
+    state.with_runtime(|runtime| runtime.poll(&name).map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn channel_list(
+    state: tauri::State<'_, ChannelState>,
+) -> Result<ChannelListSnapshot, String> {
+    state.with_runtime(|runtime| runtime.list().map_err(|error| error.to_string()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let state = match MossFfiRuntime::load_from_app_handle(app.handle()) {
-                Ok(moss) => PrivateDmState::ready(moss),
-                Err(error) => PrivateDmState::missing(error.to_string()),
-            };
-            app.manage(state);
+            match MossFfiRuntime::load_from_app_handle(app.handle()) {
+                Ok(moss) => {
+                    let moss = Arc::new(moss);
+                    app.manage(PrivateDmState::ready(Arc::clone(&moss)));
+                    app.manage(ChannelState::ready(moss));
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    app.manage(PrivateDmState::missing(message.clone()));
+                    app.manage(ChannelState::missing(message));
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -191,7 +286,12 @@ pub fn run() {
             private_dm_send_message,
             private_dm_poll_session,
             private_dm_list_sessions,
-            private_dm_close_session
+            private_dm_close_session,
+            channel_join,
+            channel_leave,
+            channel_send,
+            channel_poll,
+            channel_list
         ])
         .run(tauri::generate_context!())
         .expect(RUN_ERROR);
