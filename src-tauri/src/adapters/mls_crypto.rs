@@ -150,6 +150,80 @@ impl MlsSessionCrypto {
         }
     }
 
+    pub fn leave_proposal_bytes(&mut self) -> Result<Vec<u8>, MlsCryptoError> {
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        let proposal = group
+            .leave_group(&self.provider, &self.signer)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        proposal
+            .to_bytes()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))
+    }
+
+    pub fn remove_self_commit(&mut self) -> Result<Vec<u8>, MlsCryptoError> {
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        let own = group.own_leaf_index();
+        let (commit, _welcome, _info) = group
+            .remove_members(&self.provider, &self.signer, &[own])
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        commit
+            .to_bytes()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))
+    }
+
+    pub fn queue_remote_proposal(&mut self, proposal_bytes: &[u8]) -> Result<(), MlsCryptoError> {
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        let message = MlsMessageIn::tls_deserialize(&mut &proposal_bytes[..])
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+        let protocol_message = message
+            .try_into_protocol_message()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+        let processed = group
+            .process_message(&self.provider, protocol_message)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        match processed.into_content() {
+            ProcessedMessageContent::ProposalMessage(proposal) => {
+                group
+                    .store_pending_proposal(self.provider.storage(), *proposal)
+                    .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+                Ok(())
+            }
+            _ => Err(MlsCryptoError::OpenMls(
+                "expected proposal message".to_string(),
+            )),
+        }
+    }
+
+    pub fn commit_pending(&mut self) -> Result<Vec<u8>, MlsCryptoError> {
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        let (commit, _welcome, _info) = group
+            .commit_to_pending_proposals(&self.provider, &self.signer)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        commit
+            .to_bytes()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))
+    }
+
+    pub fn key_package_signer_is_member(
+        &self,
+        key_package_bytes: &[u8],
+    ) -> Result<bool, MlsCryptoError> {
+        let key_package = decode_key_package_impl(&self.provider, key_package_bytes)?;
+        let candidate = key_package.leaf_node().signature_key().as_slice();
+        let Some(group) = self.group.as_ref() else {
+            return Ok(false);
+        };
+        Ok(group
+            .members()
+            .any(|member| member.signature_key.as_slice() == candidate))
+    }
+
     pub fn join_welcome(
         &mut self,
         welcome_bytes: &[u8],
@@ -203,13 +277,7 @@ impl MlsSessionCrypto {
     }
 
     pub fn fingerprint(&self) -> String {
-        self.signer
-            .to_public_vec()
-            .into_iter()
-            .take(FINGERPRINT_LEN)
-            .map(|byte| format!("{byte:02X}"))
-            .collect::<Vec<_>>()
-            .join("")
+        fingerprint_from_signature_key(&self.signer.to_public_vec())
     }
 
     pub fn random_token(&self, prefix: &str) -> Result<String, MlsCryptoError> {
@@ -236,15 +304,40 @@ impl MlsSessionCrypto {
         }
     }
 
-    fn decode_key_package(&self, bytes: &[u8]) -> Result<KeyPackage, MlsCryptoError> {
-        let message = MlsMessageIn::tls_deserialize(&mut &bytes[..])
-            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
-        let key_package = match message.extract() {
-            MlsMessageBodyIn::KeyPackage(key_package) => key_package,
-            _ => return Err(MlsCryptoError::Codec("expected KeyPackage".to_string())),
+    pub fn member_fingerprints(&self) -> Vec<String> {
+        let Some(group) = self.group.as_ref() else {
+            return Vec::new();
         };
-        key_package
-            .validate(self.provider.crypto(), ProtocolVersion::default())
-            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))
+        group
+            .members()
+            .map(|member| fingerprint_from_signature_key(&member.signature_key))
+            .collect()
     }
+
+    fn decode_key_package(&self, bytes: &[u8]) -> Result<KeyPackage, MlsCryptoError> {
+        decode_key_package_impl(&self.provider, bytes)
+    }
+}
+
+fn fingerprint_from_signature_key(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .take(FINGERPRINT_LEN)
+        .map(|byte| format!("{byte:02X}"))
+        .collect()
+}
+
+fn decode_key_package_impl(
+    provider: &OpenMlsRustCrypto,
+    bytes: &[u8],
+) -> Result<KeyPackage, MlsCryptoError> {
+    let message = MlsMessageIn::tls_deserialize(&mut &bytes[..])
+        .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+    let key_package = match message.extract() {
+        MlsMessageBodyIn::KeyPackage(key_package) => key_package,
+        _ => return Err(MlsCryptoError::Codec("expected KeyPackage".to_string())),
+    };
+    key_package
+        .validate(provider.crypto(), ProtocolVersion::default())
+        .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))
 }

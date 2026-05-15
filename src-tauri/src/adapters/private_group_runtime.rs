@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ const DATA_CHANNEL_PREFIX: &str = "group-data/";
 const INVITE_PREFIX: &str = "mosh://group";
 const MAX_LABEL_LEN: usize = 64;
 const MAX_BODY_LEN: usize = 4096;
+const DEDUP_BUFFER_CAP: usize = 256;
+const INVITE_FINGERPRINT_LEN: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateGroupRequest {
@@ -134,13 +136,25 @@ enum ControlEnvelope {
     Welcome {
         group_id: String,
         for_participant_id: String,
+        from_fingerprint: String,
         welcome_b64: String,
         commit_b64: String,
         tree_b64: String,
     },
     Commit {
         group_id: String,
+        from_fingerprint: String,
         commit_b64: String,
+    },
+    AdminHandoff {
+        group_id: String,
+        from_fingerprint: String,
+        next_admin_fingerprint: String,
+    },
+    SelfRemove {
+        group_id: String,
+        from_fingerprint: String,
+        proposal_b64: String,
     },
 }
 
@@ -166,13 +180,15 @@ struct GroupSession {
     participant_id: String,
     device_fingerprint: String,
     creator_fingerprint: String,
+    current_admin_fingerprint: String,
     is_admin: bool,
     invite_uri: Option<String>,
     joined: bool,
     node: MossNode,
     crypto: MlsSessionCrypto,
     messages: Vec<GroupMessage>,
-    seen: Vec<String>,
+    seen_set: HashSet<String>,
+    seen_order: VecDeque<String>,
     control_channel: String,
     data_channel: String,
 }
@@ -220,13 +236,15 @@ impl PrivateGroupRuntime {
             participant_id,
             device_fingerprint,
             creator_fingerprint: creator_fingerprint.clone(),
+            current_admin_fingerprint: creator_fingerprint.clone(),
             is_admin: true,
             invite_uri: Some(invite_uri.clone()),
             joined: true,
             node,
             crypto,
             messages: Vec::new(),
-            seen: Vec::new(),
+            seen_set: HashSet::new(),
+            seen_order: VecDeque::new(),
             control_channel: format!("{CONTROL_CHANNEL_PREFIX}{group_id}"),
             data_channel: format!("{DATA_CHANNEL_PREFIX}{group_id}"),
         };
@@ -278,14 +296,16 @@ impl PrivateGroupRuntime {
             display_name: request.display_name,
             participant_id,
             device_fingerprint,
-            creator_fingerprint: invite.creator_fingerprint,
+            creator_fingerprint: invite.creator_fingerprint.clone(),
+            current_admin_fingerprint: invite.creator_fingerprint,
             is_admin: false,
             invite_uri: Some(request.invite_uri),
             joined: false,
             node,
             crypto,
             messages: Vec::new(),
-            seen: Vec::new(),
+            seen_set: HashSet::new(),
+            seen_order: VecDeque::new(),
             control_channel,
             data_channel: format!("{DATA_CHANNEL_PREFIX}{}", invite.group_id),
         };
@@ -350,13 +370,55 @@ impl PrivateGroupRuntime {
     }
 
     pub fn close(&mut self, group_id: &str) -> Result<GroupLeaveResult, PrivateGroupError> {
-        match self.groups.remove(group_id) {
-            Some(_) => Ok(GroupLeaveResult {
-                group_id: group_id.to_string(),
-                closed: true,
-            }),
-            None => Err(PrivateGroupError::MissingGroup(group_id.to_string())),
+        let session = self
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+
+        if session.joined {
+            let own_fp = session.crypto.fingerprint();
+            if session.is_admin {
+                // Drop the admin's own MLS leaf first so the remaining members
+                // do not carry a ghost entry after the handoff.
+                let successor = session
+                    .crypto
+                    .member_fingerprints()
+                    .into_iter()
+                    .filter(|fp| fp != &own_fp)
+                    .min();
+                if let Some(next_admin) = successor {
+                    let commit_bytes = session.crypto.remove_self_commit()?;
+                    let commit_envelope = ControlEnvelope::Commit {
+                        group_id: session.group_id.clone(),
+                        from_fingerprint: own_fp.clone(),
+                        commit_b64: encode(&commit_bytes),
+                    };
+                    publish_json(&session.node, &session.control_channel, &commit_envelope)?;
+                    let handoff = ControlEnvelope::AdminHandoff {
+                        group_id: session.group_id.clone(),
+                        from_fingerprint: own_fp,
+                        next_admin_fingerprint: next_admin,
+                    };
+                    publish_json(&session.node, &session.control_channel, &handoff)?;
+                }
+            } else {
+                // Non-admin emits a self-Remove proposal so the current admin
+                // can commit it and the roster stays in sync.
+                let proposal_bytes = session.crypto.leave_proposal_bytes()?;
+                let envelope = ControlEnvelope::SelfRemove {
+                    group_id: session.group_id.clone(),
+                    from_fingerprint: own_fp,
+                    proposal_b64: encode(&proposal_bytes),
+                };
+                publish_json(&session.node, &session.control_channel, &envelope)?;
+            }
         }
+
+        self.groups.remove(group_id);
+        Ok(GroupLeaveResult {
+            group_id: group_id.to_string(),
+            closed: true,
+        })
     }
 
     fn drain_inbound(&mut self) -> Result<(), PrivateGroupError> {
@@ -396,15 +458,21 @@ impl GroupSession {
 
     fn has_seen(&mut self, message: &MossReceivedMessage) -> bool {
         let key = format!("{}:{}", message.channel, encode(&message.payload));
-        if self.seen.contains(&key) {
+        if !self.seen_set.insert(key.clone()) {
             return true;
         }
-        self.seen.push(key);
+        self.seen_order.push_back(key);
+        if self.seen_order.len() > DEDUP_BUFFER_CAP {
+            if let Some(evicted) = self.seen_order.pop_front() {
+                self.seen_set.remove(&evicted);
+            }
+        }
         false
     }
 
     fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateGroupError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
+        let own_fp = self.crypto.fingerprint();
         match envelope {
             ControlEnvelope::KeyPackage {
                 group_id,
@@ -416,28 +484,44 @@ impl GroupSession {
                 && self.participant_id != participant_id =>
             {
                 let key_package = decode(&key_package_b64)?;
-                let outcome = self
-                    .crypto
-                    .add_members(&[key_package.as_slice()])?;
+                // Drop replays / rogue duplicate admit attempts whose MLS
+                // signer is already covered by the roster.
+                if self.crypto.key_package_signer_is_member(&key_package)? {
+                    return Ok(());
+                }
+                let outcome = self.crypto.add_members(&[key_package.as_slice()])?;
+                let commit_b64 = encode(&outcome.commit_bytes);
                 let welcome_envelope = ControlEnvelope::Welcome {
                     group_id: self.group_id.clone(),
                     for_participant_id: participant_id.clone(),
+                    from_fingerprint: own_fp.clone(),
                     welcome_b64: encode(&outcome.welcome_bytes),
-                    commit_b64: encode(&outcome.commit_bytes),
+                    commit_b64: commit_b64.clone(),
                     tree_b64: encode(&outcome.tree_bytes),
                 };
-                publish_json(&self.node, &self.control_channel, &welcome_envelope)
+                publish_json(&self.node, &self.control_channel, &welcome_envelope)?;
+                // Existing members need the Commit on the control channel so
+                // their MLS tree advances; the Welcome above is consumed only
+                // by the new joiner.
+                let commit_envelope = ControlEnvelope::Commit {
+                    group_id: self.group_id.clone(),
+                    from_fingerprint: own_fp,
+                    commit_b64,
+                };
+                publish_json(&self.node, &self.control_channel, &commit_envelope)
             }
             ControlEnvelope::Welcome {
                 group_id,
                 for_participant_id,
+                from_fingerprint,
                 welcome_b64,
                 tree_b64,
                 ..
             } if !self.joined
                 && !self.is_admin
                 && self.group_id == group_id
-                && self.participant_id == for_participant_id =>
+                && self.participant_id == for_participant_id
+                && from_fingerprint == self.current_admin_fingerprint =>
             {
                 self.crypto
                     .join_welcome(&decode(&welcome_b64)?, &decode(&tree_b64)?)?;
@@ -446,20 +530,62 @@ impl GroupSession {
             }
             ControlEnvelope::Welcome {
                 group_id,
+                from_fingerprint,
                 commit_b64,
                 ..
-            } if self.joined && !self.is_admin && self.group_id == group_id => {
+            } if self.joined
+                && !self.is_admin
+                && self.group_id == group_id
+                && from_fingerprint == self.current_admin_fingerprint =>
+            {
                 let commit = decode(&commit_b64)?;
                 self.crypto.process_commit(&commit)?;
                 Ok(())
             }
             ControlEnvelope::Commit {
                 group_id,
+                from_fingerprint,
                 commit_b64,
-            } if self.joined && !self.is_admin && self.group_id == group_id => {
+            } if self.joined
+                && !self.is_admin
+                && self.group_id == group_id
+                && from_fingerprint == self.current_admin_fingerprint =>
+            {
                 let commit = decode(&commit_b64)?;
                 self.crypto.process_commit(&commit)?;
                 Ok(())
+            }
+            ControlEnvelope::AdminHandoff {
+                group_id,
+                from_fingerprint,
+                next_admin_fingerprint,
+            } if self.group_id == group_id
+                && from_fingerprint == self.current_admin_fingerprint
+                && from_fingerprint != next_admin_fingerprint =>
+            {
+                self.current_admin_fingerprint = next_admin_fingerprint.clone();
+                if next_admin_fingerprint == own_fp {
+                    self.is_admin = true;
+                }
+                Ok(())
+            }
+            ControlEnvelope::SelfRemove {
+                group_id,
+                from_fingerprint,
+                proposal_b64,
+            } if self.is_admin
+                && self.group_id == group_id
+                && from_fingerprint != own_fp =>
+            {
+                let proposal = decode(&proposal_b64)?;
+                self.crypto.queue_remote_proposal(&proposal)?;
+                let commit_bytes = self.crypto.commit_pending()?;
+                let commit_envelope = ControlEnvelope::Commit {
+                    group_id: self.group_id.clone(),
+                    from_fingerprint: own_fp,
+                    commit_b64: encode(&commit_bytes),
+                };
+                publish_json(&self.node, &self.control_channel, &commit_envelope)
             }
             _ => Ok(()),
         }
@@ -549,6 +675,14 @@ impl ParsedGroupInvite {
                 "missing creator fingerprint".to_string(),
             ));
         }
+        if fingerprint.len() != INVITE_FINGERPRINT_LEN
+            || !fingerprint.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err(PrivateGroupError::InvalidInvite(
+                "fingerprint must be 32 hex chars".to_string(),
+            ));
+        }
+        let fingerprint = fingerprint.to_ascii_uppercase();
         let label = optional_query(&url, "name");
         Ok(Self {
             mesh_id: mesh,
@@ -674,21 +808,40 @@ mod tests {
         let uri = build_invite_uri(
             "groupmesh-aaa",
             "group-bbb",
-            "AABBCCDDEEFF0011",
+            "AABBCCDDEEFF00112233445566778899",
             &Some("Friends".to_string()),
         );
         let parsed = ParsedGroupInvite::parse(&uri).unwrap();
         assert_eq!(parsed.mesh_id, "groupmesh-aaa");
         assert_eq!(parsed.group_id, "group-bbb");
-        assert_eq!(parsed.creator_fingerprint, "AABBCCDDEEFF0011");
+        assert_eq!(
+            parsed.creator_fingerprint,
+            "AABBCCDDEEFF00112233445566778899"
+        );
         assert_eq!(parsed.label.as_deref(), Some("Friends"));
     }
 
     #[test]
     fn invite_uri_without_label() {
-        let uri = build_invite_uri("m", "g", "FFEE", &None);
+        let uri = build_invite_uri("m", "g", "00112233445566778899AABBCCDDEEFF", &None);
         let parsed = ParsedGroupInvite::parse(&uri).unwrap();
         assert!(parsed.label.is_none());
+    }
+
+    #[test]
+    fn invite_uri_rejects_malformed_fingerprint() {
+        let short = format!("{INVITE_PREFIX}?mesh=m&group=g#fp=ABCD");
+        assert!(matches!(
+            ParsedGroupInvite::parse(&short),
+            Err(PrivateGroupError::InvalidInvite(_))
+        ));
+        let non_hex = format!(
+            "{INVITE_PREFIX}?mesh=m&group=g#fp=ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+        );
+        assert!(matches!(
+            ParsedGroupInvite::parse(&non_hex),
+            Err(PrivateGroupError::InvalidInvite(_))
+        ));
     }
 
     #[test]
