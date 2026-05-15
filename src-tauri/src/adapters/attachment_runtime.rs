@@ -131,6 +131,8 @@ struct IncomingTransfer {
     nonce_prefix: [u8; ATTACHMENT_NONCE_PREFIX_LEN],
     chunks: BTreeMap<u64, Vec<u8>>,
     state: TransferState,
+    download_started: bool,
+    request_cursor: u64,
 }
 
 pub struct AttachmentRuntime {
@@ -269,9 +271,57 @@ impl AttachmentRuntime {
                 nonce_prefix,
                 chunks: BTreeMap::new(),
                 state: TransferState::Active,
+                download_started: false,
+                request_cursor: 0,
             },
         );
         Ok(())
+    }
+
+    /// Marks an incoming transfer as actively downloading. Until this is
+    /// called the receiver only holds the manifest (manual-download model).
+    pub fn start_download(&mut self, attachment_id: &str) -> Result<(), AttachmentRuntimeError> {
+        let transfer = self
+            .incoming
+            .get_mut(attachment_id)
+            .ok_or_else(|| AttachmentRuntimeError::UnknownTransfer(attachment_id.to_string()))?;
+        transfer.download_started = true;
+        Ok(())
+    }
+
+    /// Returns the next chunk request the receiver should publish, or None
+    /// when the transfer is idle, finished, or fully in flight. Gaps below
+    /// the sliding cursor are re-requested first so a dropped connection
+    /// resumes; otherwise the cursor advances by one window.
+    pub fn next_chunk_request(&mut self, attachment_id: &str) -> Option<ChunkRequest> {
+        let transfer = self.incoming.get_mut(attachment_id)?;
+        if !transfer.download_started || transfer.state != TransferState::Active {
+            return None;
+        }
+        let mut indices = Vec::new();
+        for index in 0..transfer.request_cursor {
+            if !transfer.chunks.contains_key(&index) {
+                indices.push(index);
+                if indices.len() >= MAX_REQUEST_BATCH {
+                    break;
+                }
+            }
+        }
+        if indices.is_empty() {
+            while transfer.request_cursor < transfer.manifest.chunk_count
+                && indices.len() < MAX_REQUEST_BATCH
+            {
+                indices.push(transfer.request_cursor);
+                transfer.request_cursor += 1;
+            }
+        }
+        if indices.is_empty() {
+            return None;
+        }
+        Some(ChunkRequest {
+            attachment_id: attachment_id.to_string(),
+            chunk_indices: indices,
+        })
     }
 
     /// Returns the next batch of chunk indices the receiver still needs.
@@ -465,15 +515,11 @@ mod tests {
             )
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
+        receiver.start_download("att-1").unwrap();
 
-        loop {
-            let pending = receiver.pending_chunk_indices("att-1").unwrap();
-            if pending.is_empty() {
+        for _ in 0..10_000 {
+            let Some(request) = receiver.next_chunk_request("att-1") else {
                 break;
-            }
-            let request = ChunkRequest {
-                attachment_id: "att-1".to_string(),
-                chunk_indices: pending,
             };
             let frames = sender.serve_chunks(&request).unwrap();
             assert!(!frames.is_empty());
@@ -606,6 +652,57 @@ mod tests {
             })
             .unwrap();
         assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn next_chunk_request_is_idle_until_download_starts() {
+        let mut sender = AttachmentRuntime::new();
+        let mut receiver = AttachmentRuntime::new();
+        let manifest = sender
+            .prepare_outgoing(
+                "a".to_string(),
+                "f".to_string(),
+                "m".to_string(),
+                "fp".to_string(),
+                payload(4096),
+                None,
+            )
+            .unwrap();
+        receiver.register_incoming(manifest).unwrap();
+        assert!(receiver.next_chunk_request("a").is_none());
+        receiver.start_download("a").unwrap();
+        assert!(receiver.next_chunk_request("a").is_some());
+    }
+
+    #[test]
+    fn next_chunk_request_resumes_gaps_before_advancing() {
+        let mut sender = AttachmentRuntime::new();
+        let mut receiver = AttachmentRuntime::new();
+        let manifest = sender
+            .prepare_outgoing(
+                "a".to_string(),
+                "f".to_string(),
+                "m".to_string(),
+                "fp".to_string(),
+                payload((CHUNK_SIZE as usize) * 3),
+                None,
+            )
+            .unwrap();
+        receiver.register_incoming(manifest).unwrap();
+        receiver.start_download("a").unwrap();
+
+        let first = receiver.next_chunk_request("a").unwrap();
+        assert_eq!(first.chunk_indices, vec![0, 1, 2]);
+        // Deliver only chunk 1, leaving 0 and 2 as gaps.
+        let frames = sender
+            .serve_chunks(&ChunkRequest {
+                attachment_id: "a".to_string(),
+                chunk_indices: vec![1],
+            })
+            .unwrap();
+        receiver.ingest_chunk(&frames[0]).unwrap();
+        let resume = receiver.next_chunk_request("a").unwrap();
+        assert_eq!(resume.chunk_indices, vec![0, 2]);
     }
 
     #[test]
