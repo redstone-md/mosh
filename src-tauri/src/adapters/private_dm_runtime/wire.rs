@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use super::contracts::PrivateDmRuntimeError;
+use crate::adapters::attachment_runtime::{ChunkFrame, ChunkRequest};
 use crate::adapters::moss_ffi::MossNode;
 
 pub const CONTROL_CHANNEL_PREFIX: &str = "mls-control/";
 pub const DATA_CHANNEL_PREFIX: &str = "mls-data/";
+pub const BLOB_CHANNEL_PREFIX: &str = "mls-blob/";
 
 pub fn control_channel(session_id: &str) -> String {
     format!("{CONTROL_CHANNEL_PREFIX}{session_id}")
@@ -14,10 +16,15 @@ pub fn data_channel(session_id: &str) -> String {
     format!("{DATA_CHANNEL_PREFIX}{session_id}")
 }
 
+pub fn blob_channel(session_id: &str) -> String {
+    format!("{BLOB_CHANNEL_PREFIX}{session_id}")
+}
+
 pub fn channel_session_id(channel: &str) -> Option<&str> {
     channel
         .strip_prefix(CONTROL_CHANNEL_PREFIX)
         .or_else(|| channel.strip_prefix(DATA_CHANNEL_PREFIX))
+        .or_else(|| channel.strip_prefix(BLOB_CHANNEL_PREFIX))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,6 +43,14 @@ pub enum ControlEnvelope {
         welcome_b64: String,
         ratchet_tree_b64: String,
     },
+    /// Carries an AttachmentManifest encrypted as an MLS application message,
+    /// so the per-attachment AES key never crosses the wire in the clear.
+    AttachmentManifest {
+        session_id: String,
+        participant_id: String,
+        from_device: String,
+        manifest_ciphertext_b64: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,6 +59,22 @@ pub struct DataEnvelope {
     pub participant_id: String,
     pub from_device: String,
     pub ciphertext_b64: String,
+}
+
+/// Traffic on the dedicated blob channel. Chunk payloads are already
+/// AES-GCM encrypted by the attachment runtime, so this envelope stays
+/// plaintext and only routes requests and ciphertext chunks.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum BlobEnvelope {
+    Request {
+        participant_id: String,
+        request: ChunkRequest,
+    },
+    Chunk {
+        participant_id: String,
+        frame: ChunkFrame,
+    },
 }
 
 pub fn publish_json<T: Serialize>(

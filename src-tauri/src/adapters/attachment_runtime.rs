@@ -7,7 +7,10 @@ use crate::adapters::attachment_crypto::{
     AttachmentCryptoError, ATTACHMENT_KEY_LEN, ATTACHMENT_NONCE_PREFIX_LEN,
 };
 
-pub const CHUNK_SIZE: u32 = 64 * 1024;
+// Moss caps a gossipsub payload at 64KB. A plaintext chunk grows by the
+// 16-byte GCM tag, then ~33% for base64, then the JSON envelope, so the
+// plaintext chunk must stay well under the cap to survive the round trip.
+pub const CHUNK_SIZE: u32 = 32 * 1024;
 pub const MAX_ATTACHMENT_SIZE: u64 = 50 * 1024 * 1024;
 const MAX_REQUEST_BATCH: usize = 64;
 

@@ -36,6 +36,7 @@ pub struct SessionSnapshot {
     pub invite_uri: Option<String>,
     pub fingerprint: String,
     pub messages: Vec<ChatMessage>,
+    pub attachments: Vec<AttachmentView>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
 }
@@ -110,6 +111,55 @@ pub struct MeshInfo {
 pub struct ChatMessage {
     pub from_device: String,
     pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<AttachmentDescriptor>,
+}
+
+/// Immutable attachment metadata stamped onto the message log. Mutable
+/// transfer state is reported separately through AttachmentView.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentDescriptor {
+    pub attachment_id: String,
+    pub content_hash: String,
+    pub file_name: String,
+    pub mime: String,
+    pub total_size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail_b64: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentState {
+    /// Bytes are on disk locally (sender's own file, or a finished download).
+    Available,
+    /// Manifest known, download not started yet.
+    Offered,
+    /// Chunks are in flight.
+    Downloading,
+    /// Transfer or verification failed; a retry is possible.
+    Failed,
+    /// Either side cancelled the transfer.
+    Cancelled,
+}
+
+/// Live transfer state for one attachment, recomputed on every snapshot.
+#[derive(Debug, Clone, Serialize)]
+pub struct AttachmentView {
+    pub attachment_id: String,
+    pub direction: String,
+    pub state: AttachmentState,
+    pub completed_chunks: u64,
+    pub chunk_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AttachmentSendResult {
+    pub session_id: String,
+    pub attachment_id: String,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -128,6 +178,8 @@ pub enum PrivateDmRuntimeError {
     NotReady,
     MissingSession,
     DuplicateSession(String),
+    Attachment(String),
+    MissingAttachment(String),
 }
 
 impl std::fmt::Display for PrivateDmRuntimeError {
@@ -142,6 +194,10 @@ impl std::fmt::Display for PrivateDmRuntimeError {
             Self::DuplicateSession(id) => {
                 write!(formatter, "private DM session already exists: {id}")
             }
+            Self::Attachment(error) => write!(formatter, "attachment error: {error}"),
+            Self::MissingAttachment(id) => {
+                write!(formatter, "attachment not found: {id}")
+            }
         }
     }
 }
@@ -155,5 +211,19 @@ impl From<MlsCryptoError> for PrivateDmRuntimeError {
             MlsCryptoError::Codec(message) => Self::Codec(message),
             MlsCryptoError::NotReady => Self::NotReady,
         }
+    }
+}
+
+impl From<crate::adapters::attachment_runtime::AttachmentRuntimeError>
+    for PrivateDmRuntimeError
+{
+    fn from(error: crate::adapters::attachment_runtime::AttachmentRuntimeError) -> Self {
+        Self::Attachment(error.to_string())
+    }
+}
+
+impl From<crate::adapters::attachment_store::AttachmentStoreError> for PrivateDmRuntimeError {
+    fn from(error: crate::adapters::attachment_store::AttachmentStoreError) -> Self {
+        Self::Attachment(error.to_string())
     }
 }

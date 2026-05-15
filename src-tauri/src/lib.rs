@@ -7,6 +7,7 @@ use adapters::channel_runtime::{
     ChannelLeaveResult, ChannelListSnapshot, ChannelRuntime, ChannelSendResult, ChannelSnapshot,
     JoinChannelRequest,
 };
+use adapters::attachment_store::AttachmentStore;
 use adapters::moss_ffi::MossFfiRuntime;
 use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
 use adapters::openmls_crypto::{
@@ -14,8 +15,9 @@ use adapters::openmls_crypto::{
     OpenMlsSmokeStatus,
 };
 use adapters::private_dm_runtime::{
-    AcceptInviteRequest, CloseSessionResult, InviteCreated, PrivateDmRuntime, SendMessageResult,
-    SessionListSnapshot, SessionSnapshot, StartSessionRequest,
+    AcceptInviteRequest, AttachmentSendResult, CloseSessionResult, InviteCreated,
+    PrivateDmRuntime, SendMessageResult, SessionListSnapshot, SessionSnapshot,
+    StartSessionRequest,
 };
 use adapters::private_group_runtime::{
     CreateGroupRequest, GroupCreated, GroupLeaveResult, GroupListSnapshot, GroupSendResult,
@@ -53,9 +55,9 @@ struct PrivateDmState {
 }
 
 impl PrivateDmState {
-    fn ready(moss: Arc<MossFfiRuntime>) -> Self {
+    fn ready(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
         Self {
-            runtime: Mutex::new(Some(PrivateDmRuntime::from_shared(moss))),
+            runtime: Mutex::new(Some(PrivateDmRuntime::from_shared(moss, attachment_store))),
             load_error: None,
         }
     }
@@ -283,6 +285,76 @@ fn private_dm_close_session(
 }
 
 #[tauri::command]
+fn private_dm_send_attachment(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    file_name: String,
+    mime: String,
+    data_base64: String,
+) -> Result<AttachmentSendResult, String> {
+    let bytes = decode_base64(&data_base64)?;
+    let mime = resolve_mime(mime, &file_name);
+    state.with_runtime(|runtime| {
+        runtime
+            .send_attachment(&session_id, file_name, mime, bytes)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_download_attachment(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .download_attachment(&session_id, &attachment_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_cancel_attachment(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .cancel_attachment(&session_id, &attachment_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)
+        .map_err(|error| format!("invalid attachment payload: {error}"))
+}
+
+fn resolve_mime(mime: String, file_name: &str) -> String {
+    let trimmed = mime.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    mime_guess::from_path(file_name)
+        .first_raw()
+        .unwrap_or("application/octet-stream")
+        .to_string()
+}
+
+fn load_attachment_store(app: &tauri::AppHandle) -> Arc<AttachmentStore> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("mosh"));
+    let store = AttachmentStore::new(&base)
+        .or_else(|_| AttachmentStore::new(std::env::temp_dir().join("mosh")))
+        .expect("attachment store directory should be creatable");
+    Arc::new(store)
+}
+
+#[tauri::command]
 fn channel_join(
     state: tauri::State<'_, ChannelState>,
     request: JoinChannelRequest,
@@ -400,7 +472,11 @@ pub fn run() {
             match MossFfiRuntime::load_from_app_handle(app.handle()) {
                 Ok(moss) => {
                     let moss = Arc::new(moss);
-                    app.manage(PrivateDmState::ready(Arc::clone(&moss)));
+                    let attachment_store = load_attachment_store(app.handle());
+                    app.manage(PrivateDmState::ready(
+                        Arc::clone(&moss),
+                        attachment_store,
+                    ));
                     app.manage(ChannelState::ready(Arc::clone(&moss)));
                     app.manage(PrivateGroupState::ready(moss));
                 }
@@ -422,6 +498,9 @@ pub fn run() {
             private_dm_poll_session,
             private_dm_list_sessions,
             private_dm_close_session,
+            private_dm_send_attachment,
+            private_dm_download_attachment,
+            private_dm_cancel_attachment,
             channel_join,
             channel_leave,
             channel_send,
