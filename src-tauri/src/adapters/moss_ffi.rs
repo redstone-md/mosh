@@ -14,6 +14,10 @@ const MOSS_OK: i32 = 0;
 const MOSS_ERR_NO_PEERS: i32 = -6;
 const DEFAULT_WAIT_MS: u64 = 3000;
 const POLL_MS: u64 = 50;
+// Moss_GetPublicKey returns a fixed-size Ed25519 public key. Keep this in
+// sync with `node.PublicKey() [32]byte` on the Go side; relying on the
+// constant prevents accidental drift in the raw-pointer deref below.
+const MOSS_PUBKEY_LEN: usize = 32;
 
 pub type MossHandle = i64;
 type MessageCallback = unsafe extern "C" fn(*const c_char, *const u8, *const u8, u32);
@@ -257,7 +261,10 @@ impl MossNode {
         if ptr.is_null() {
             return None;
         }
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, 32) }.to_vec();
+        // SAFETY: Moss_GetPublicKey on the Go side always returns a buffer
+        // sized by the MOSS_PUBKEY_LEN-byte Ed25519 public key. Reading any
+        // other length would be UB; the constant locks the contract.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, MOSS_PUBKEY_LEN) }.to_vec();
         unsafe { (self.runtime.free)(ptr as *mut c_void) };
         Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
     }
