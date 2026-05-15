@@ -16,7 +16,16 @@ import {
   IconUsers,
   IconX,
 } from "@tabler/icons-react";
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ClipboardEvent,
+  FormEvent,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   chatText,
   cryptoNotice,
@@ -28,6 +37,7 @@ import {
   groupText,
 } from "./private-dm.content";
 import {
+  AttachmentView,
   ChannelMessage,
   ChannelSnapshot,
   ChatMessage,
@@ -39,6 +49,20 @@ import {
   SnapshotEvent,
   nativeMessagingGateway,
 } from "./native/native-messaging-gateway";
+import {
+  AttachmentCard,
+  AttachmentPicker,
+  isAttachmentTooLarge,
+  readFileAsBase64,
+} from "./attachments";
+
+interface AttachmentApi {
+  readonly views: ReadonlyMap<string, AttachmentView>;
+  readonly busy: boolean;
+  readonly onSend: (file: File) => void;
+  readonly onDownload: (attachmentId: string) => void;
+  readonly onCancel: (attachmentId: string) => void;
+}
 
 const AUTO_POLL_MS = 1000;
 const READY_STATE = "ready";
@@ -316,6 +340,63 @@ export function PrivateDmScreen({
   const confirmFingerprint = (sessionId: string) =>
     setConfirmedFingerprints((current) => new Set(current).add(sessionId));
 
+  const sendAttachment = (file: File) => {
+    if (!active) {
+      return;
+    }
+    if (isAttachmentTooLarge(file)) {
+      setError("Attachment exceeds the 50 MB limit");
+      return;
+    }
+    const target = active;
+    void run(async () => {
+      const dataBase64 = await readFileAsBase64(file);
+      const mime = file.type ?? "";
+      if (target.type === "dm") {
+        await gateway.sendPrivateAttachment(target.id, file.name, mime, dataBase64);
+      } else if (target.type === "channel") {
+        await gateway.sendChannelAttachment(target.name, file.name, mime, dataBase64);
+      } else {
+        await gateway.sendGroupAttachment(target.id, file.name, mime, dataBase64);
+      }
+      await refresh(true);
+    });
+  };
+
+  const downloadAttachment = (attachmentId: string) => {
+    if (!active) {
+      return;
+    }
+    const target = active;
+    void run(async () => {
+      if (target.type === "dm") {
+        await gateway.downloadPrivateAttachment(target.id, attachmentId);
+      } else if (target.type === "channel") {
+        await gateway.downloadChannelAttachment(target.name, attachmentId);
+      } else {
+        await gateway.downloadGroupAttachment(target.id, attachmentId);
+      }
+      await refresh(true);
+    });
+  };
+
+  const cancelAttachment = (attachmentId: string) => {
+    if (!active) {
+      return;
+    }
+    const target = active;
+    void run(async () => {
+      if (target.type === "dm") {
+        await gateway.cancelPrivateAttachment(target.id, attachmentId);
+      } else if (target.type === "channel") {
+        await gateway.cancelChannelAttachment(target.name, attachmentId);
+      } else {
+        await gateway.cancelGroupAttachment(target.id, attachmentId);
+      }
+      await refresh(true);
+    });
+  };
+
   const activeSession =
     active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
   const activeChannel =
@@ -323,6 +404,19 @@ export function PrivateDmScreen({
   const activeGroup =
     active?.type === "group" ? groups.find((g) => g.group_id === active.id) ?? null : null;
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
+
+  const activeAttachments =
+    activeSession?.attachments ??
+    activeChannel?.attachments ??
+    activeGroup?.attachments ??
+    [];
+  const attachmentApi: AttachmentApi = {
+    views: new Map(activeAttachments.map((view) => [view.attachment_id, view])),
+    busy,
+    onSend: sendAttachment,
+    onDownload: downloadAttachment,
+    onCancel: cancelAttachment,
+  };
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
@@ -409,6 +503,7 @@ export function PrivateDmScreen({
               composer={composer}
               confirmed={confirmedFingerprints.has(activeSession.session_id)}
               busy={busy}
+              attachments={attachmentApi}
               onComposer={setComposer}
               onSend={sendMessage}
               onConfirm={() => confirmFingerprint(activeSession.session_id)}
@@ -419,6 +514,7 @@ export function PrivateDmScreen({
               channel={activeChannel}
               composer={composer}
               busy={busy}
+              attachments={attachmentApi}
               onComposer={setComposer}
               onSend={sendMessage}
               onClose={closeActive}
@@ -428,6 +524,7 @@ export function PrivateDmScreen({
               group={activeGroup}
               composer={composer}
               busy={busy}
+              attachments={attachmentApi}
               onComposer={setComposer}
               onSend={sendMessage}
               onClose={closeActive}
@@ -817,6 +914,7 @@ function ActiveDmChat(props: {
   composer: string;
   confirmed: boolean;
   busy: boolean;
+  attachments: AttachmentApi;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onConfirm: () => void;
@@ -854,14 +952,15 @@ function ActiveDmChat(props: {
 
       <CryptoNotice />
 
-      <div className="chat-scroll scroll">
-        <DmChatList messages={props.session.messages} />
-      </div>
+      <ChatDropZone disabled={!ready || props.busy} onAttach={props.attachments.onSend}>
+        <DmChatList messages={props.session.messages} attachments={props.attachments} />
+      </ChatDropZone>
 
       <Composer
         value={props.composer}
         onChange={props.onComposer}
         onSend={props.onSend}
+        onAttach={props.attachments.onSend}
         disabled={!ready || props.busy}
       />
     </>
@@ -872,6 +971,7 @@ function ActiveChannelChat(props: {
   channel: ChannelSnapshot;
   composer: string;
   busy: boolean;
+  attachments: AttachmentApi;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onClose: () => void;
@@ -899,14 +999,15 @@ function ActiveChannelChat(props: {
 
       <PublicNotice />
 
-      <div className="chat-scroll scroll">
-        <ChannelChatList messages={props.channel.messages} />
-      </div>
+      <ChatDropZone disabled={props.busy} onAttach={props.attachments.onSend}>
+        <ChannelChatList messages={props.channel.messages} attachments={props.attachments} />
+      </ChatDropZone>
 
       <Composer
         value={props.composer}
         onChange={props.onComposer}
         onSend={props.onSend}
+        onAttach={props.attachments.onSend}
         disabled={props.busy}
       />
     </>
@@ -917,6 +1018,7 @@ function ActiveGroupChat(props: {
   group: GroupSnapshot;
   composer: string;
   busy: boolean;
+  attachments: AttachmentApi;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onClose: () => void;
@@ -969,17 +1071,58 @@ function ActiveGroupChat(props: {
 
       <GroupNotice />
 
-      <div className="chat-scroll scroll">
-        <GroupChatList messages={props.group.messages} />
-      </div>
+      <ChatDropZone disabled={!ready || props.busy} onAttach={props.attachments.onSend}>
+        <GroupChatList messages={props.group.messages} attachments={props.attachments} />
+      </ChatDropZone>
 
       <Composer
         value={props.composer}
         onChange={props.onComposer}
         onSend={props.onSend}
+        onAttach={props.attachments.onSend}
         disabled={!ready || props.busy}
       />
     </>
+  );
+}
+
+/** Wraps the scroll area and turns a file drop into an attachment send. */
+function ChatDropZone({
+  disabled,
+  onAttach,
+  children,
+}: {
+  disabled: boolean;
+  onAttach: (file: File) => void;
+  children: ReactNode;
+}) {
+  const [dragging, setDragging] = useState(false);
+  return (
+    <div
+      className={`chat-scroll scroll${dragging ? " chat-scroll-dragging" : ""}`}
+      onDragOver={(event) => {
+        if (disabled) {
+          return;
+        }
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        if (disabled) {
+          return;
+        }
+        const file = event.dataTransfer.files?.[0];
+        if (file) {
+          onAttach(file);
+        }
+      }}
+    >
+      {children}
+      {dragging ? <div className="chat-drop-overlay">{chatText.dropHint}</div> : null}
+    </div>
   );
 }
 
@@ -997,7 +1140,13 @@ function GroupNotice() {
   );
 }
 
-function GroupChatList({ messages }: { messages: readonly GroupMessage[] }) {
+function GroupChatList({
+  messages,
+  attachments,
+}: {
+  messages: readonly GroupMessage[];
+  attachments: AttachmentApi;
+}) {
   const anchorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1015,14 +1164,24 @@ function GroupChatList({ messages }: { messages: readonly GroupMessage[] }) {
   return (
     <div className="message-stack">
       {messages.map((message, index) => (
-        <GroupMessageRow message={message} key={`${message.from_fingerprint}-${index}`} />
+        <GroupMessageRow
+          message={message}
+          attachments={attachments}
+          key={`${message.from_fingerprint}-${index}`}
+        />
       ))}
       <div ref={anchorRef} aria-hidden="true" />
     </div>
   );
 }
 
-function GroupMessageRow({ message }: { message: GroupMessage }) {
+function GroupMessageRow({
+  message,
+  attachments,
+}: {
+  message: GroupMessage;
+  attachments: AttachmentApi;
+}) {
   return (
     <article className="message-row">
       <Avatar name={message.from_device} />
@@ -1032,7 +1191,16 @@ function GroupMessageRow({ message }: { message: GroupMessage }) {
           <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
           <code>MLS</code>
         </div>
-        <p>{message.body}</p>
+        {message.body ? <p>{message.body}</p> : null}
+        {message.attachment ? (
+          <AttachmentCard
+            descriptor={message.attachment}
+            view={attachments.views.get(message.attachment.attachment_id)}
+            busy={attachments.busy}
+            onDownload={attachments.onDownload}
+            onCancel={attachments.onCancel}
+          />
+        ) : null}
         <div className="message-seal">
           <IconLockOpen size={10} />
           <span>OpenMLS · sealed</span>
@@ -1103,7 +1271,13 @@ function FingerprintBadge({
   );
 }
 
-function DmChatList({ messages }: { messages: readonly ChatMessage[] }) {
+function DmChatList({
+  messages,
+  attachments,
+}: {
+  messages: readonly ChatMessage[];
+  attachments: AttachmentApi;
+}) {
   const anchorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1121,14 +1295,24 @@ function DmChatList({ messages }: { messages: readonly ChatMessage[] }) {
   return (
     <div className="message-stack">
       {messages.map((message, index) => (
-        <DmMessageRow message={message} key={`${message.from_device}-${index}`} />
+        <DmMessageRow
+          message={message}
+          attachments={attachments}
+          key={`${message.from_device}-${index}`}
+        />
       ))}
       <div ref={anchorRef} aria-hidden="true" />
     </div>
   );
 }
 
-function DmMessageRow({ message }: { message: ChatMessage }) {
+function DmMessageRow({
+  message,
+  attachments,
+}: {
+  message: ChatMessage;
+  attachments: AttachmentApi;
+}) {
   return (
     <article className="message-row">
       <Avatar name={message.from_device} />
@@ -1137,7 +1321,16 @@ function DmMessageRow({ message }: { message: ChatMessage }) {
           <strong>{message.from_device}</strong>
           <code>MLS</code>
         </div>
-        <p>{message.body}</p>
+        {message.body ? <p>{message.body}</p> : null}
+        {message.attachment ? (
+          <AttachmentCard
+            descriptor={message.attachment}
+            view={attachments.views.get(message.attachment.attachment_id)}
+            busy={attachments.busy}
+            onDownload={attachments.onDownload}
+            onCancel={attachments.onCancel}
+          />
+        ) : null}
         <div className="message-seal">
           <IconLock size={10} />
           <span>OpenMLS · sealed</span>
@@ -1147,7 +1340,13 @@ function DmMessageRow({ message }: { message: ChatMessage }) {
   );
 }
 
-function ChannelChatList({ messages }: { messages: readonly ChannelMessage[] }) {
+function ChannelChatList({
+  messages,
+  attachments,
+}: {
+  messages: readonly ChannelMessage[];
+  attachments: AttachmentApi;
+}) {
   const anchorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1165,14 +1364,24 @@ function ChannelChatList({ messages }: { messages: readonly ChannelMessage[] }) 
   return (
     <div className="message-stack">
       {messages.map((message, index) => (
-        <ChannelMessageRow message={message} key={`${message.from_fingerprint}-${index}`} />
+        <ChannelMessageRow
+          message={message}
+          attachments={attachments}
+          key={`${message.from_fingerprint}-${index}`}
+        />
       ))}
       <div ref={anchorRef} aria-hidden="true" />
     </div>
   );
 }
 
-function ChannelMessageRow({ message }: { message: ChannelMessage }) {
+function ChannelMessageRow({
+  message,
+  attachments,
+}: {
+  message: ChannelMessage;
+  attachments: AttachmentApi;
+}) {
   return (
     <article className="message-row">
       <Avatar name={message.from_device} />
@@ -1181,7 +1390,16 @@ function ChannelMessageRow({ message }: { message: ChannelMessage }) {
           <strong>{message.from_device}</strong>
           <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
         </div>
-        <p>{message.body}</p>
+        {message.body ? <p>{message.body}</p> : null}
+        {message.attachment ? (
+          <AttachmentCard
+            descriptor={message.attachment}
+            view={attachments.views.get(message.attachment.attachment_id)}
+            busy={attachments.busy}
+            onDownload={attachments.onDownload}
+            onCancel={attachments.onCancel}
+          />
+        ) : null}
       </div>
     </article>
   );
@@ -1191,21 +1409,43 @@ function Composer({
   value,
   onChange,
   onSend,
+  onAttach,
   disabled,
 }: {
   value: string;
   disabled: boolean;
   onChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
+  onAttach?: (file: File) => void;
 }) {
+  const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    if (disabled || !onAttach) {
+      return;
+    }
+    const file = Array.from(event.clipboardData.items)
+      .find((item) => item.kind === "file")
+      ?.getAsFile();
+    if (file) {
+      event.preventDefault();
+      onAttach(file);
+    }
+  };
   return (
     <form className="composer" onSubmit={onSend}>
       <div className="composer-box">
+        {onAttach ? (
+          <AttachmentPicker
+            disabled={disabled}
+            onPick={onAttach}
+            ariaLabel={chatText.attachLabel}
+          />
+        ) : null}
         <input
           aria-label="Message"
           placeholder={chatText.composerPlaceholder}
           value={value}
           onChange={(event) => onChange(event.target.value)}
+          onPaste={handlePaste}
           disabled={disabled}
         />
         <button

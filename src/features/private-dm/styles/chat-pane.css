@@ -208,6 +208,128 @@
 .send-button:disabled { background: var(--bg-3); color: var(--fg-4); }
 .send-button:hover:not(:disabled) { background: var(--moss-300); }
 
+.attachment-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.composer-attach {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-3);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.composer-attach:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--fg-1);
+}
+
+.composer-attach:disabled { color: var(--fg-4); }
+
+.chat-scroll {
+  position: relative;
+}
+
+.chat-scroll-dragging {
+  outline: 2px dashed var(--moss);
+  outline-offset: -8px;
+}
+
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg-1) 82%, transparent);
+  color: var(--fg-1);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.attachment-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  max-width: 360px;
+}
+
+.attachment-card-failed { border-color: var(--danger, #d4503e); }
+
+.attachment-thumb {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--bg-3);
+  color: var(--fg-3);
+  overflow: hidden;
+}
+
+.attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.attachment-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attachment-name {
+  font-size: 12.5px;
+  color: var(--fg-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-meta {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.attachment-progress {
+  margin-top: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.attachment-progress-fill {
+  height: 100%;
+  background: var(--moss);
+  transition: width 0.2s ease;
+}
+
+.attachment-actions {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
 .avatar {
   width: 32px;
   height: 32px;

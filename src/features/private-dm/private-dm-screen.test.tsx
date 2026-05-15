@@ -50,6 +50,7 @@ function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
     invite_uri: INVITE,
     fingerprint: FINGERPRINT,
     messages: [{ from_device: "Alice", body: "hello from moss" }],
+    attachments: [],
     mesh: MESH_READY,
     events: EVENTS,
     ...overrides,
@@ -65,6 +66,7 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
     display_name: string;
     device_fingerprint: string;
     messages: Array<{ from_device: string; from_fingerprint: string; body: string }>;
+    attachments: never[];
     mesh: typeof MESH_READY | null;
     events: SnapshotEvent[];
   }> = [];
@@ -112,6 +114,7 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
         display_name: request.display_name,
         device_fingerprint: "abcdef0123456789",
         messages: [],
+        attachments: [],
         mesh: MESH_READY,
         events: [],
       };
@@ -150,6 +153,7 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
       member_count: 2,
       invite_uri: null,
       messages: [],
+      attachments: [],
       mesh: MESH_READY,
       events: [],
     })),
@@ -166,11 +170,33 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
       member_count: 2,
       invite_uri: null,
       messages: [],
+      attachments: [],
       mesh: MESH_READY,
       events: [],
     })),
     listPrivateGroups: vi.fn(async () => ({ groups: [] })),
     closePrivateGroup: vi.fn(async (group_id) => ({ group_id, closed: true })),
+    sendPrivateAttachment: vi.fn(async (session_id, _file, _mime, _data) => ({
+      session_id,
+      attachment_id: "attachment-test",
+      content_hash: "0".repeat(64),
+    })),
+    downloadPrivateAttachment: vi.fn(async () => {}),
+    cancelPrivateAttachment: vi.fn(async () => {}),
+    sendGroupAttachment: vi.fn(async (group_id, _file, _mime, _data) => ({
+      session_id: group_id,
+      attachment_id: "attachment-test",
+      content_hash: "0".repeat(64),
+    })),
+    downloadGroupAttachment: vi.fn(async () => {}),
+    cancelGroupAttachment: vi.fn(async () => {}),
+    sendChannelAttachment: vi.fn(async (name, _file, _mime, _data) => ({
+      session_id: name,
+      attachment_id: "attachment-test",
+      content_hash: "0".repeat(64),
+    })),
+    downloadChannelAttachment: vi.fn(async () => {}),
+    cancelChannelAttachment: vi.fn(async () => {}),
   };
 }
 

@@ -40,6 +40,8 @@ export const chatText = {
   emptyBody: "Once the peer joins and MLS handshake finishes, plaintext stays only on your devices.",
   composerPlaceholder: "Write a message…",
   sendLabel: "Send",
+  attachLabel: "Attach a file",
+  dropHint: "Drop a file to share it",
   cryptoFooter: "OpenMLS sealed · ciphertext over Moss gossip",
   noSessionTitle: "Welcome to Mosh.",
   noSessionBody: "Create an invite or paste one to start your first encrypted conversation.",
