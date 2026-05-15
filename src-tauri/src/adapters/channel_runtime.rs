@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ const TOPIC_PREFIX: &str = "public-channel/";
 const MESH_PREFIX: &str = "channel/";
 const MAX_NAME_LEN: usize = 64;
 const MAX_BODY_LEN: usize = 4096;
+const DEDUP_BUFFER_CAP: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JoinChannelRequest {
@@ -96,7 +97,8 @@ struct ChannelSession {
     device_fingerprint: String,
     node: MossNode,
     messages: Vec<ChannelMessage>,
-    seen: Vec<String>,
+    seen_set: HashSet<String>,
+    seen_order: VecDeque<String>,
 }
 
 impl ChannelRuntime {
@@ -141,7 +143,8 @@ impl ChannelRuntime {
             device_fingerprint,
             node,
             messages: Vec::new(),
-            seen: Vec::new(),
+            seen_set: HashSet::new(),
+            seen_order: VecDeque::new(),
         };
 
         self.channels.insert(normalized.clone(), session);
@@ -250,15 +253,22 @@ impl ChannelSession {
     }
 
     fn has_seen(&mut self, message: &MossReceivedMessage) -> bool {
+        // Encoded payload already embeds the sender's fingerprint via the
+        // ChannelMessage envelope, so it disambiguates per-peer publishes.
         let key = format!(
             "{}:{}",
             message.channel,
             base64_payload(&message.payload)
         );
-        if self.seen.contains(&key) {
+        if !self.seen_set.insert(key.clone()) {
             return true;
         }
-        self.seen.push(key);
+        self.seen_order.push_back(key);
+        if self.seen_order.len() > DEDUP_BUFFER_CAP {
+            if let Some(evicted) = self.seen_order.pop_front() {
+                self.seen_set.remove(&evicted);
+            }
+        }
         false
     }
 
