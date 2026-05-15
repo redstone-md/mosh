@@ -19,6 +19,15 @@ const PRIVATE_GROUP_SEND_COMMAND = "private_group_send";
 const PRIVATE_GROUP_POLL_COMMAND = "private_group_poll";
 const PRIVATE_GROUP_LIST_COMMAND = "private_group_list";
 const PRIVATE_GROUP_CLOSE_COMMAND = "private_group_close";
+const PRIVATE_DM_SEND_ATTACHMENT_COMMAND = "private_dm_send_attachment";
+const PRIVATE_DM_DOWNLOAD_ATTACHMENT_COMMAND = "private_dm_download_attachment";
+const PRIVATE_DM_CANCEL_ATTACHMENT_COMMAND = "private_dm_cancel_attachment";
+const PRIVATE_GROUP_SEND_ATTACHMENT_COMMAND = "private_group_send_attachment";
+const PRIVATE_GROUP_DOWNLOAD_ATTACHMENT_COMMAND = "private_group_download_attachment";
+const PRIVATE_GROUP_CANCEL_ATTACHMENT_COMMAND = "private_group_cancel_attachment";
+const CHANNEL_SEND_ATTACHMENT_COMMAND = "channel_send_attachment";
+const CHANNEL_DOWNLOAD_ATTACHMENT_COMMAND = "channel_download_attachment";
+const CHANNEL_CANCEL_ATTACHMENT_COMMAND = "channel_cancel_attachment";
 
 export interface DiagnosticsSnapshot {
   readonly app_name: string;
@@ -86,9 +95,41 @@ export interface InviteCreated {
   readonly listen_address: string;
 }
 
+export type AttachmentState =
+  | "available"
+  | "offered"
+  | "downloading"
+  | "failed"
+  | "cancelled";
+
+export interface AttachmentDescriptor {
+  readonly attachment_id: string;
+  readonly content_hash: string;
+  readonly file_name: string;
+  readonly mime: string;
+  readonly total_size: number;
+  readonly thumbnail_b64?: string;
+}
+
+export interface AttachmentView {
+  readonly attachment_id: string;
+  readonly direction: "incoming" | "outgoing";
+  readonly state: AttachmentState;
+  readonly completed_chunks: number;
+  readonly chunk_count: number;
+  readonly local_path?: string;
+}
+
+export interface AttachmentSendResult {
+  readonly session_id: string;
+  readonly attachment_id: string;
+  readonly content_hash: string;
+}
+
 export interface ChatMessage {
   readonly from_device: string;
   readonly body: string;
+  readonly attachment?: AttachmentDescriptor;
 }
 
 export interface MeshInfo {
@@ -117,6 +158,7 @@ export interface SessionSnapshot {
   readonly invite_uri: string | null;
   readonly fingerprint: string;
   readonly messages: readonly ChatMessage[];
+  readonly attachments: readonly AttachmentView[];
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
 }
@@ -154,6 +196,7 @@ export interface ChannelMessage {
   readonly from_device: string;
   readonly from_fingerprint: string;
   readonly body: string;
+  readonly attachment?: AttachmentDescriptor;
 }
 
 export interface ChannelSnapshot {
@@ -163,6 +206,7 @@ export interface ChannelSnapshot {
   readonly display_name: string;
   readonly device_fingerprint: string;
   readonly messages: readonly ChannelMessage[];
+  readonly attachments: readonly AttachmentView[];
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
 }
@@ -207,6 +251,7 @@ export interface GroupMessage {
   readonly from_device: string;
   readonly from_fingerprint: string;
   readonly body: string;
+  readonly attachment?: AttachmentDescriptor;
 }
 
 export interface GroupSnapshot {
@@ -221,6 +266,7 @@ export interface GroupSnapshot {
   readonly member_count: number;
   readonly invite_uri: string | null;
   readonly messages: readonly GroupMessage[];
+  readonly attachments: readonly AttachmentView[];
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
 }
@@ -259,6 +305,30 @@ export interface NativeMessagingGateway {
   pollPrivateGroup(groupId: string): Promise<GroupSnapshot>;
   listPrivateGroups(): Promise<GroupListSnapshot>;
   closePrivateGroup(groupId: string): Promise<GroupLeaveResult>;
+  sendPrivateAttachment(
+    sessionId: string,
+    fileName: string,
+    mime: string,
+    dataBase64: string,
+  ): Promise<AttachmentSendResult>;
+  downloadPrivateAttachment(sessionId: string, attachmentId: string): Promise<void>;
+  cancelPrivateAttachment(sessionId: string, attachmentId: string): Promise<void>;
+  sendGroupAttachment(
+    groupId: string,
+    fileName: string,
+    mime: string,
+    dataBase64: string,
+  ): Promise<AttachmentSendResult>;
+  downloadGroupAttachment(groupId: string, attachmentId: string): Promise<void>;
+  cancelGroupAttachment(groupId: string, attachmentId: string): Promise<void>;
+  sendChannelAttachment(
+    name: string,
+    fileName: string,
+    mime: string,
+    dataBase64: string,
+  ): Promise<AttachmentSendResult>;
+  downloadChannelAttachment(name: string, attachmentId: string): Promise<void>;
+  cancelChannelAttachment(name: string, attachmentId: string): Promise<void>;
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {
@@ -339,6 +409,72 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
 
   async closePrivateGroup(groupId: string): Promise<GroupLeaveResult> {
     return invoke<GroupLeaveResult>(PRIVATE_GROUP_CLOSE_COMMAND, { groupId });
+  }
+
+  async sendPrivateAttachment(
+    sessionId: string,
+    fileName: string,
+    mime: string,
+    dataBase64: string,
+  ): Promise<AttachmentSendResult> {
+    return invoke<AttachmentSendResult>(PRIVATE_DM_SEND_ATTACHMENT_COMMAND, {
+      sessionId,
+      fileName,
+      mime,
+      dataBase64,
+    });
+  }
+
+  async downloadPrivateAttachment(sessionId: string, attachmentId: string): Promise<void> {
+    await invoke(PRIVATE_DM_DOWNLOAD_ATTACHMENT_COMMAND, { sessionId, attachmentId });
+  }
+
+  async cancelPrivateAttachment(sessionId: string, attachmentId: string): Promise<void> {
+    await invoke(PRIVATE_DM_CANCEL_ATTACHMENT_COMMAND, { sessionId, attachmentId });
+  }
+
+  async sendGroupAttachment(
+    groupId: string,
+    fileName: string,
+    mime: string,
+    dataBase64: string,
+  ): Promise<AttachmentSendResult> {
+    return invoke<AttachmentSendResult>(PRIVATE_GROUP_SEND_ATTACHMENT_COMMAND, {
+      groupId,
+      fileName,
+      mime,
+      dataBase64,
+    });
+  }
+
+  async downloadGroupAttachment(groupId: string, attachmentId: string): Promise<void> {
+    await invoke(PRIVATE_GROUP_DOWNLOAD_ATTACHMENT_COMMAND, { groupId, attachmentId });
+  }
+
+  async cancelGroupAttachment(groupId: string, attachmentId: string): Promise<void> {
+    await invoke(PRIVATE_GROUP_CANCEL_ATTACHMENT_COMMAND, { groupId, attachmentId });
+  }
+
+  async sendChannelAttachment(
+    name: string,
+    fileName: string,
+    mime: string,
+    dataBase64: string,
+  ): Promise<AttachmentSendResult> {
+    return invoke<AttachmentSendResult>(CHANNEL_SEND_ATTACHMENT_COMMAND, {
+      name,
+      fileName,
+      mime,
+      dataBase64,
+    });
+  }
+
+  async downloadChannelAttachment(name: string, attachmentId: string): Promise<void> {
+    await invoke(CHANNEL_DOWNLOAD_ATTACHMENT_COMMAND, { name, attachmentId });
+  }
+
+  async cancelChannelAttachment(name: string, attachmentId: string): Promise<void> {
+    await invoke(CHANNEL_CANCEL_ATTACHMENT_COMMAND, { name, attachmentId });
   }
 }
 
