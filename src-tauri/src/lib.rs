@@ -1,6 +1,7 @@
 pub mod adapters;
 
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use adapters::channel_runtime::{
     ChannelLeaveResult, ChannelListSnapshot, ChannelRuntime, ChannelSendResult, ChannelSnapshot,
@@ -87,9 +88,14 @@ impl PrivateDmState {
     }
 }
 
+// Rapid join/leave thrashes one Moss socket per channel; the limiter caps
+// the rate at which a single ChannelState consumer can churn membership.
+const CHANNEL_MEMBERSHIP_MIN_INTERVAL: Duration = Duration::from_millis(250);
+
 struct ChannelState {
     runtime: Mutex<Option<ChannelRuntime>>,
     load_error: Option<String>,
+    last_membership_op: Mutex<Option<Instant>>,
 }
 
 impl ChannelState {
@@ -97,6 +103,7 @@ impl ChannelState {
         Self {
             runtime: Mutex::new(Some(ChannelRuntime::from_shared(moss))),
             load_error: None,
+            last_membership_op: Mutex::new(None),
         }
     }
 
@@ -104,6 +111,7 @@ impl ChannelState {
         Self {
             runtime: Mutex::new(None),
             load_error: Some(error),
+            last_membership_op: Mutex::new(None),
         }
     }
 
@@ -117,6 +125,21 @@ impl ChannelState {
             .map_err(|_| "channel runtime lock poisoned".to_string())?;
         let runtime = guard.as_mut().ok_or_else(|| self.unavailable_message())?;
         action(runtime)
+    }
+
+    fn check_membership_rate(&self) -> Result<(), String> {
+        let mut guard = self
+            .last_membership_op
+            .lock()
+            .map_err(|_| "channel rate-limit lock poisoned".to_string())?;
+        let now = Instant::now();
+        if let Some(previous) = *guard {
+            if now.duration_since(previous) < CHANNEL_MEMBERSHIP_MIN_INTERVAL {
+                return Err("channel membership rate limit exceeded".to_string());
+            }
+        }
+        *guard = Some(now);
+        Ok(())
     }
 
     fn unavailable_message(&self) -> String {
@@ -264,6 +287,7 @@ fn channel_join(
     state: tauri::State<'_, ChannelState>,
     request: JoinChannelRequest,
 ) -> Result<ChannelSnapshot, String> {
+    state.check_membership_rate()?;
     state.with_runtime(|runtime| runtime.join(request).map_err(|error| error.to_string()))
 }
 
@@ -272,6 +296,7 @@ fn channel_leave(
     state: tauri::State<'_, ChannelState>,
     name: String,
 ) -> Result<ChannelLeaveResult, String> {
+    state.check_membership_rate()?;
     state.with_runtime(|runtime| runtime.leave(&name).map_err(|error| error.to_string()))
 }
 
