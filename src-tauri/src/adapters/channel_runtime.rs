@@ -284,6 +284,7 @@ impl ChannelRuntime {
         file_name: String,
         mime: String,
         bytes: Vec<u8>,
+        thumbnail: Option<String>,
     ) -> Result<AttachmentSendResult, ChannelRuntimeError> {
         self.drain_inbound()?;
         let normalized = normalize_name(name)?;
@@ -291,7 +292,7 @@ impl ChannelRuntime {
             .channels
             .get_mut(&normalized)
             .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-        session.send_attachment(file_name, mime, bytes)
+        session.send_attachment(file_name, mime, bytes, thumbnail)
     }
 
     pub fn download_attachment(
@@ -486,8 +487,9 @@ impl ChannelSession {
         file_name: String,
         mime: String,
         bytes: Vec<u8>,
+        thumbnail: Option<String>,
     ) -> Result<AttachmentSendResult, ChannelRuntimeError> {
-        let attachment_id = format!("attachment-{}", sha256_hex(&bytes)[..16].to_string());
+        let attachment_id = format!("attachment-{}", &sha256_hex(&bytes)[..16]);
         if self.attachment_slots.contains_key(&attachment_id) {
             return Err(ChannelRuntimeError::Attachment(
                 "attachment already shared on this channel".to_string(),
@@ -499,7 +501,7 @@ impl ChannelSession {
             mime,
             self.device_fingerprint.clone(),
             bytes.clone(),
-            None,
+            thumbnail,
         )?;
         let stored = self
             .attachment_store

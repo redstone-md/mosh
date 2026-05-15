@@ -310,6 +310,7 @@ export interface NativeMessagingGateway {
     fileName: string,
     mime: string,
     dataBase64: string,
+    thumbnailBase64?: string,
   ): Promise<AttachmentSendResult>;
   downloadPrivateAttachment(sessionId: string, attachmentId: string): Promise<void>;
   cancelPrivateAttachment(sessionId: string, attachmentId: string): Promise<void>;
@@ -318,6 +319,7 @@ export interface NativeMessagingGateway {
     fileName: string,
     mime: string,
     dataBase64: string,
+    thumbnailBase64?: string,
   ): Promise<AttachmentSendResult>;
   downloadGroupAttachment(groupId: string, attachmentId: string): Promise<void>;
   cancelGroupAttachment(groupId: string, attachmentId: string): Promise<void>;
@@ -326,6 +328,7 @@ export interface NativeMessagingGateway {
     fileName: string,
     mime: string,
     dataBase64: string,
+    thumbnailBase64?: string,
   ): Promise<AttachmentSendResult>;
   downloadChannelAttachment(name: string, attachmentId: string): Promise<void>;
   cancelChannelAttachment(name: string, attachmentId: string): Promise<void>;
@@ -416,12 +419,14 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     fileName: string,
     mime: string,
     dataBase64: string,
+    thumbnailBase64?: string,
   ): Promise<AttachmentSendResult> {
     return invoke<AttachmentSendResult>(PRIVATE_DM_SEND_ATTACHMENT_COMMAND, {
       sessionId,
       fileName,
       mime,
       dataBase64,
+      thumbnailBase64: thumbnailBase64 ?? null,
     });
   }
 
@@ -438,12 +443,14 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     fileName: string,
     mime: string,
     dataBase64: string,
+    thumbnailBase64?: string,
   ): Promise<AttachmentSendResult> {
     return invoke<AttachmentSendResult>(PRIVATE_GROUP_SEND_ATTACHMENT_COMMAND, {
       groupId,
       fileName,
       mime,
       dataBase64,
+      thumbnailBase64: thumbnailBase64 ?? null,
     });
   }
 
@@ -460,12 +467,14 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     fileName: string,
     mime: string,
     dataBase64: string,
+    thumbnailBase64?: string,
   ): Promise<AttachmentSendResult> {
     return invoke<AttachmentSendResult>(CHANNEL_SEND_ATTACHMENT_COMMAND, {
       name,
       fileName,
       mime,
       dataBase64,
+      thumbnailBase64: thumbnailBase64 ?? null,
     });
   }
 

@@ -15,6 +15,7 @@ import type {
 } from "./native/native-messaging-gateway";
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
+const THUMBNAIL_MAX_EDGE = 320;
 
 /** Reads a File into the base64 string the Tauri attachment commands expect. */
 export async function readFileAsBase64(file: File): Promise<string> {
@@ -26,6 +27,40 @@ export async function readFileAsBase64(file: File): Promise<string> {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + stride));
   }
   return btoa(binary);
+}
+
+/**
+ * Renders a small JPEG preview of an image file and returns it as base64
+ * (no data: prefix). Resolves to undefined for non-images or on any
+ * decode/render failure — a missing thumbnail is never fatal.
+ */
+export async function createImageThumbnail(file: File): Promise<string | undefined> {
+  if (!file.type.startsWith("image/")) {
+    return undefined;
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(
+      1,
+      THUMBNAIL_MAX_EDGE / Math.max(bitmap.width, bitmap.height),
+    );
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return undefined;
+    }
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.62);
+    const comma = dataUrl.indexOf(",");
+    return comma >= 0 ? dataUrl.slice(comma + 1) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function isAttachmentTooLarge(file: File): boolean {
@@ -125,7 +160,7 @@ export function AttachmentCard({
       <div className="attachment-thumb">
         {descriptor.thumbnail_b64 && isImage ? (
           <img
-            src={`data:${descriptor.mime};base64,${descriptor.thumbnail_b64}`}
+            src={`data:image/jpeg;base64,${descriptor.thumbnail_b64}`}
             alt={descriptor.file_name}
           />
         ) : state === "failed" ? (

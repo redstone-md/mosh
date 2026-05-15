@@ -59,6 +59,7 @@ import {
 import {
   AttachmentCard,
   AttachmentPicker,
+  createImageThumbnail,
   isAttachmentTooLarge,
   readFileAsBase64,
 } from "./attachments";
@@ -354,13 +355,32 @@ export function PrivateDmScreen({
     const target = active;
     void run(async () => {
       const dataBase64 = await readFileAsBase64(file);
+      const thumbnail = await createImageThumbnail(file);
       const mime = file.type ?? "";
       if (target.type === "dm") {
-        await gateway.sendPrivateAttachment(target.id, file.name, mime, dataBase64);
+        await gateway.sendPrivateAttachment(
+          target.id,
+          file.name,
+          mime,
+          dataBase64,
+          thumbnail,
+        );
       } else if (target.type === "channel") {
-        await gateway.sendChannelAttachment(target.name, file.name, mime, dataBase64);
+        await gateway.sendChannelAttachment(
+          target.name,
+          file.name,
+          mime,
+          dataBase64,
+          thumbnail,
+        );
       } else {
-        await gateway.sendGroupAttachment(target.id, file.name, mime, dataBase64);
+        await gateway.sendGroupAttachment(
+          target.id,
+          file.name,
+          mime,
+          dataBase64,
+          thumbnail,
+        );
       }
       await refresh(true);
     });

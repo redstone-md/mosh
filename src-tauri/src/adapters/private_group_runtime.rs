@@ -404,13 +404,14 @@ impl PrivateGroupRuntime {
         file_name: String,
         mime: String,
         bytes: Vec<u8>,
+        thumbnail: Option<String>,
     ) -> Result<AttachmentSendResult, PrivateGroupError> {
         self.drain_inbound()?;
         let session = self
             .groups
             .get_mut(group_id)
             .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
-        session.send_attachment(file_name, mime, bytes)
+        session.send_attachment(file_name, mime, bytes, thumbnail)
     }
 
     pub fn download_attachment(
@@ -851,6 +852,7 @@ impl GroupSession {
         file_name: String,
         mime: String,
         bytes: Vec<u8>,
+        thumbnail: Option<String>,
     ) -> Result<AttachmentSendResult, PrivateGroupError> {
         if !self.joined || !self.crypto.is_ready() {
             return Err(PrivateGroupError::NotReady);
@@ -862,7 +864,7 @@ impl GroupSession {
             mime,
             self.device_fingerprint.clone(),
             bytes.clone(),
-            None,
+            thumbnail,
         )?;
         let stored = self
             .attachment_store

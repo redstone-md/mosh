@@ -219,10 +219,11 @@ impl PrivateDmRuntime {
         file_name: String,
         mime: String,
         bytes: Vec<u8>,
+        thumbnail: Option<String>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
         let session = self.session_mut(session_id)?;
-        session.send_attachment(file_name, mime, bytes)
+        session.send_attachment(file_name, mime, bytes, thumbnail)
     }
 
     /// Begins (or retries) downloading a peer's attachment.
@@ -554,6 +555,7 @@ impl PrivateDmSession {
         file_name: String,
         mime: String,
         bytes: Vec<u8>,
+        thumbnail: Option<String>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         if !self.peer_joined || !self.crypto.is_ready() {
             return Err(PrivateDmRuntimeError::NotReady);
@@ -565,7 +567,7 @@ impl PrivateDmSession {
             mime,
             self.fingerprint.clone(),
             bytes.clone(),
-            None,
+            thumbnail,
         )?;
         let stored = self
             .attachment_store
@@ -922,6 +924,7 @@ mod tests {
                 "photo.bin".to_string(),
                 "application/octet-stream".to_string(),
                 payload.clone(),
+                None,
             )
             .expect("Alice should send attachment");
 
