@@ -88,6 +88,8 @@ export function PrivateDmScreen({
   const [busy, setBusy] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const pollInFlight = useRef(false);
+  const pollPending = useRef(false);
+  const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
 
   const requestBase = useMemo(
     () => ({
@@ -101,6 +103,11 @@ export function PrivateDmScreen({
   const refresh = useCallback(
     async (quiet = false) => {
       if (pollInFlight.current) {
+        // Coalesce: remember that another refresh was requested so we can
+        // run it once the in-flight call completes. Without this, a rapid
+        // burst of session/channel/group mutations could leave the UI
+        // showing a stale roster until the next AUTO_POLL_MS tick.
+        pollPending.current = true;
         return;
       }
       pollInFlight.current = true;
@@ -148,10 +155,18 @@ export function PrivateDmScreen({
         setError(readableError(err));
       } finally {
         pollInFlight.current = false;
+        if (pollPending.current && refreshRef.current) {
+          pollPending.current = false;
+          const followUp = refreshRef.current;
+          // Defer so the next refresh runs on a fresh task and does not
+          // recursively extend the current finally block.
+          window.setTimeout(() => void followUp(true), 0);
+        }
       }
     },
     [gateway],
   );
+  refreshRef.current = refresh;
 
   useEffect(() => {
     void refresh(true);
@@ -350,6 +365,12 @@ export function PrivateDmScreen({
             setActive(null);
             setCreateState({ copied: false });
             setGroupCreateState({ copied: false });
+            // Reset setup-form inputs so stale text from an earlier visit
+            // does not silently leak into the next invite/channel attempt.
+            setInviteUri("");
+            setChannelName("");
+            setGroupInvite("");
+            setGroupLabel("");
           }}
         />
 
