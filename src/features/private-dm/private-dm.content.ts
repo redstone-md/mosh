@@ -81,6 +81,51 @@ export const groupText = {
   untitled: "Private group",
 } as const;
 
+export const onboardText = {
+  title: "Start a conversation",
+  subtitle:
+    "Pick how you want to connect. Private chats and groups are end-to-end encrypted; public channels are open.",
+  identityHint: "This is how peers see you",
+  startLabel: "Start",
+  joinLabel: "Join",
+  back: "Back",
+  advancedToggle: "Advanced connection settings",
+  aboutToggle: "How Mosh protects you",
+  tileChatTitle: "New private chat",
+  tileChatDesc: "One-to-one, end-to-end encrypted",
+  tileGroupTitle: "New group",
+  tileGroupDesc: "Encrypted group — you are the admin",
+  tileJoinTitle: "Join with a link",
+  tileJoinDesc: "Paste an invite a friend sent you",
+  tileChannelTitle: "Join a public channel",
+  tileChannelDesc: "Open broadcast room, joined by name",
+  chatStepBody:
+    "Create a one-time invite link, then send it to one person over any channel you trust.",
+  chatCreate: "Create invite link",
+  chatRecreate: "Replace invite link",
+  inviteReady: "Invite ready — share it with one person.",
+  groupStepBody:
+    "Spin up an MLS-encrypted group. You admit members and stay the admin.",
+  groupNamePlaceholder: "Group name (optional)",
+  groupCreate: "Create group",
+  groupRecreate: "Replace group invite",
+  groupInviteReady: "Group invite ready — send it to the people you want in.",
+  joinStepBody:
+    "Paste a mosh:// invite link. Mosh detects whether it opens a private chat or a group.",
+  joinPlaceholder: "mosh://invite?…  or  mosh://group?…",
+  joinDetectChat: "Private chat invite detected",
+  joinDetectGroup: "Group invite detected",
+  joinDetectNone: "Waiting for a mosh:// link…",
+  joinDetectBad: "That does not look like a mosh:// invite",
+  joinConnect: "Connect",
+  channelStepBody:
+    "Public channels are not end-to-end encrypted — anyone who knows the name can read along.",
+  channelPlaceholder: "channel-name",
+  channelJoin: "Join channel",
+  copyLink: "Copy link",
+  copied: "Copied",
+} as const;
+
 export const channelText = {
   cardTitle: "Join a public channel",
   cardHint: "Type a channel name to subscribe. Anyone who knows the name can join. Messages are NOT end-to-end encrypted — only Moss transport (Noise) protects in-flight bytes.",

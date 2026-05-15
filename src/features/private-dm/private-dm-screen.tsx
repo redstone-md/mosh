@@ -1,18 +1,24 @@
 import {
   IconActivity,
+  IconArrowLeft,
   IconCheck,
+  IconChevronDown,
+  IconChevronRight,
   IconCopy,
   IconCrown,
   IconHash,
+  IconLink,
   IconLock,
   IconLockOpen,
   IconLogout,
   IconMessageCircle,
+  IconPencil,
   IconPlugConnected,
   IconPlus,
   IconRefresh,
   IconSend,
   IconShieldCheck,
+  IconSettings,
   IconUsers,
   IconX,
 } from "@tabler/icons-react";
@@ -30,6 +36,7 @@ import {
   chatText,
   cryptoNotice,
   inviteText,
+  onboardText,
   setupText,
   shellText,
   stateLabels,
@@ -96,10 +103,6 @@ export function PrivateDmScreen({
   const [displayName, setDisplayName] = useState(defaultDisplayName);
   const [staticPeer, setStaticPeer] = useState("");
   const [listenPort, setListenPort] = useState<number>(DEFAULT_LISTEN_PORT);
-  const [inviteUri, setInviteUri] = useState("");
-  const [channelName, setChannelName] = useState("");
-  const [groupLabel, setGroupLabel] = useState("");
-  const [groupInvite, setGroupInvite] = useState("");
   const [composer, setComposer] = useState("");
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>([]);
   const [channels, setChannels] = useState<readonly ChannelSnapshot[]>([]);
@@ -220,51 +223,52 @@ export function PrivateDmScreen({
       await refresh(true);
     });
 
-  const acceptInvite = () =>
+  const acceptInvite = (uri: string) =>
     run(async () => {
+      const trimmed = uri.trim();
+      if (!trimmed) {
+        return;
+      }
       const snapshot = await gateway.acceptPrivateInvite({
         ...requestBase,
-        invite_uri: inviteUri.trim(),
+        invite_uri: trimmed,
       });
-      setInviteUri("");
       setActive({ type: "dm", id: snapshot.session_id });
       setShowSetup(false);
       await refresh(true);
     });
 
-  const joinChannel = () =>
+  const joinChannel = (name: string) =>
     run(async () => {
-      const name = channelName.trim();
-      if (!name) {
+      const trimmed = name.trim();
+      if (!trimmed) {
         return;
       }
       const snapshot = await gateway.joinChannel({
         ...requestBase,
-        name,
+        name: trimmed,
       });
-      setChannelName("");
       setActive({ type: "channel", name: snapshot.name });
       setShowSetup(false);
       await refresh(true);
     });
 
-  const createGroup = () =>
+  const createGroup = (label: string) =>
     run(async () => {
       const created = await gateway.createPrivateGroup({
         ...requestBase,
-        label: groupLabel.trim() || null,
+        label: label.trim() || null,
       });
       await copyText(created.invite_uri);
       setGroupCreateState({ inviteUri: created.invite_uri, copied: true });
       setActive({ type: "group", id: created.group_id });
       setShowSetup(true);
-      setGroupLabel("");
       await refresh(true);
     });
 
-  const joinGroup = () =>
+  const joinGroup = (uri: string) =>
     run(async () => {
-      const trimmed = groupInvite.trim();
+      const trimmed = uri.trim();
       if (!trimmed) {
         return;
       }
@@ -272,7 +276,6 @@ export function PrivateDmScreen({
         ...requestBase,
         invite_uri: trimmed,
       });
-      setGroupInvite("");
       setActive({ type: "group", id: snapshot.group_id });
       setShowSetup(false);
       await refresh(true);
@@ -459,12 +462,6 @@ export function PrivateDmScreen({
             setActive(null);
             setCreateState({ copied: false });
             setGroupCreateState({ copied: false });
-            // Reset setup-form inputs so stale text from an earlier visit
-            // does not silently leak into the next invite/channel attempt.
-            setInviteUri("");
-            setChannelName("");
-            setGroupInvite("");
-            setGroupLabel("");
           }}
         />
 
@@ -474,10 +471,6 @@ export function PrivateDmScreen({
               displayName={displayName}
               staticPeer={staticPeer}
               listenPort={listenPort}
-              inviteUri={inviteUri}
-              channelName={channelName}
-              groupLabel={groupLabel}
-              groupInvite={groupInvite}
               busy={busy}
               createState={createState}
               groupCreateState={groupCreateState}
@@ -485,10 +478,6 @@ export function PrivateDmScreen({
               onDisplayName={setDisplayName}
               onStaticPeer={setStaticPeer}
               onListenPort={setListenPort}
-              onInviteUri={setInviteUri}
-              onChannelName={setChannelName}
-              onGroupLabel={setGroupLabel}
-              onGroupInvite={setGroupInvite}
               onCreate={createInvite}
               onAccept={acceptInvite}
               onJoinChannel={joinChannel}
@@ -708,14 +697,26 @@ function GroupRailItem({
   );
 }
 
+type OnboardStep = "menu" | "chat" | "group" | "join" | "channel";
+
+function detectInviteKind(value: string): "dm" | "group" | "empty" | "unknown" {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "empty";
+  }
+  if (trimmed.startsWith("mosh://invite")) {
+    return "dm";
+  }
+  if (trimmed.startsWith("mosh://group")) {
+    return "group";
+  }
+  return "unknown";
+}
+
 function NewSessionPanel(props: {
   displayName: string;
   staticPeer: string;
   listenPort: number;
-  inviteUri: string;
-  channelName: string;
-  groupLabel: string;
-  groupInvite: string;
   busy: boolean;
   createState: CreateState;
   groupCreateState: GroupCreateState;
@@ -723,188 +724,407 @@ function NewSessionPanel(props: {
   onDisplayName: (value: string) => void;
   onStaticPeer: (value: string) => void;
   onListenPort: (value: number) => void;
-  onInviteUri: (value: string) => void;
-  onChannelName: (value: string) => void;
-  onGroupLabel: (value: string) => void;
-  onGroupInvite: (value: string) => void;
   onCreate: () => void;
-  onAccept: () => void;
-  onJoinChannel: () => void;
-  onCreateGroup: () => void;
-  onJoinGroup: () => void;
+  onAccept: (uri: string) => void;
+  onJoinChannel: (name: string) => void;
+  onCreateGroup: (label: string) => void;
+  onJoinGroup: (uri: string) => void;
   onCopyInvite: () => void;
   onCopyGroupInvite: () => void;
 }) {
-  const hasInvite = Boolean(props.createState.inviteUri);
-  const hasGroupInvite = Boolean(props.groupCreateState.inviteUri);
-  const canAccept = props.inviteUri.trim().length > 0 && !props.busy;
-  const canJoinChannel = props.channelName.trim().length > 0 && !props.busy;
-  const canJoinGroup = props.groupInvite.trim().length > 0 && !props.busy;
+  const [step, setStep] = useState<OnboardStep>("menu");
+  const [joinValue, setJoinValue] = useState("");
+  const [channelValue, setChannelValue] = useState("");
+  const [groupLabelValue, setGroupLabelValue] = useState("");
+
   return (
-    <div className="new-session-pane">
-      <header className="new-session-header">
-        <h1>{inviteText.newSessionTitle}</h1>
-        <p>{cryptoNotice.body}</p>
-      </header>
-
-      <section className="card" aria-label={setupText.sectionTitle}>
-        <h2>{setupText.sectionTitle}</h2>
-        <Field label={setupText.displayNameLabel}>
-          <input
-            aria-label="Display name"
-            placeholder={setupText.displayNamePlaceholder}
-            value={props.displayName}
-            onChange={(event) => props.onDisplayName(event.target.value)}
+    <div className="onboard scroll">
+      <div className="onboard-shell">
+        {step === "menu" ? (
+          <OnboardMenu
+            displayName={props.displayName}
+            staticPeer={props.staticPeer}
+            listenPort={props.listenPort}
+            onDisplayName={props.onDisplayName}
+            onStaticPeer={props.onStaticPeer}
+            onListenPort={props.onListenPort}
+            onPick={setStep}
           />
-        </Field>
-        <Field label={setupText.staticPeerLabel} hint={setupText.staticPeerHint}>
-          <input
-            aria-label="Static peer"
-            placeholder={setupText.staticPeerPlaceholder}
-            value={props.staticPeer}
-            onChange={(event) => props.onStaticPeer(event.target.value)}
-          />
-        </Field>
-        <Field label={setupText.listenPortLabel} hint={setupText.listenPortHint}>
-          <input
-            type="number"
-            min={0}
-            max={65535}
-            aria-label="Listen port"
-            value={props.listenPort}
-            onChange={(event) => props.onListenPort(Number(event.target.value) || 0)}
-          />
-        </Field>
-      </section>
-
-      <div className="new-session-grid">
-        <section className="card" aria-label={inviteText.createSectionTitle}>
-          <h2>{inviteText.createSectionTitle}</h2>
-          <p className="card-hint">{inviteText.createHint}</p>
-          <div className="card-actions">
+        ) : step === "chat" ? (
+          <OnboardStepFrame title={onboardText.tileChatTitle} onBack={() => setStep("menu")}>
+            <p className="step-body">{onboardText.chatStepBody}</p>
             <button
-              className="btn btn-primary"
+              className="btn btn-primary btn-block"
               type="button"
               onClick={props.onCreate}
               disabled={props.busy}
             >
-              {hasInvite ? inviteText.recreateButton : inviteText.createButton}
+              {props.createState.inviteUri ? onboardText.chatRecreate : onboardText.chatCreate}
             </button>
-            {hasInvite ? (
-              <button className="btn btn-ghost" type="button" onClick={props.onCopyInvite}>
-                {props.createState.copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-                {props.createState.copied ? inviteText.copiedButton : inviteText.copyButton}
-              </button>
+            {props.createState.inviteUri ? (
+              <InviteResult
+                note={onboardText.inviteReady}
+                uri={props.createState.inviteUri}
+                copied={props.createState.copied}
+                onCopy={props.onCopyInvite}
+              />
             ) : null}
-          </div>
-          {hasInvite ? <code className="invite-code">{props.createState.inviteUri}</code> : null}
-        </section>
-
-        <section className="card" aria-label={inviteText.joinSectionTitle}>
-          <h2>{inviteText.joinSectionTitle}</h2>
-          <p className="card-hint">{inviteText.joinHint}</p>
-          <textarea
-            aria-label="Invite URI"
-            placeholder={inviteText.joinPlaceholder}
-            value={props.inviteUri}
-            onChange={(event) => props.onInviteUri(event.target.value)}
-          />
-          <div className="card-actions">
-            <button
-              className="btn btn-primary"
-              type="button"
-              onClick={props.onAccept}
-              disabled={!canAccept}
-            >
-              {inviteText.joinButton}
-            </button>
-          </div>
-        </section>
-
-        <section className="card" aria-label={channelText.cardTitle}>
-          <h2>{channelText.cardTitle}</h2>
-          <p className="card-hint">{channelText.cardHint}</p>
-          <Field label={channelText.nameLabel}>
+          </OnboardStepFrame>
+        ) : step === "group" ? (
+          <OnboardStepFrame title={onboardText.tileGroupTitle} onBack={() => setStep("menu")}>
+            <p className="step-body">{onboardText.groupStepBody}</p>
             <input
-              aria-label="Channel name"
-              placeholder={channelText.namePlaceholder}
-              value={props.channelName}
-              onChange={(event) => props.onChannelName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && canJoinChannel) {
-                  event.preventDefault();
-                  props.onJoinChannel();
-                }
-              }}
-            />
-          </Field>
-          <div className="card-actions">
-            <button
-              className="btn btn-primary"
-              type="button"
-              onClick={props.onJoinChannel}
-              disabled={!canJoinChannel}
-            >
-              {channelText.joinButton}
-            </button>
-          </div>
-        </section>
-
-        <section className="card" aria-label={groupText.createCardTitle}>
-          <h2>{groupText.createCardTitle}</h2>
-          <p className="card-hint">{groupText.createHint}</p>
-          <Field label={groupText.labelLabel} hint={groupText.labelHint}>
-            <input
+              className="step-input"
               aria-label="Group label"
-              placeholder={groupText.labelPlaceholder}
-              value={props.groupLabel}
-              onChange={(event) => props.onGroupLabel(event.target.value)}
+              placeholder={onboardText.groupNamePlaceholder}
+              value={groupLabelValue}
+              onChange={(event) => setGroupLabelValue(event.target.value)}
             />
-          </Field>
-          <div className="card-actions">
             <button
-              className="btn btn-primary"
+              className="btn btn-primary btn-block"
               type="button"
-              onClick={props.onCreateGroup}
+              onClick={() => props.onCreateGroup(groupLabelValue)}
               disabled={props.busy}
             >
-              {hasGroupInvite ? groupText.recreateButton : groupText.createButton}
+              {props.groupCreateState.inviteUri
+                ? onboardText.groupRecreate
+                : onboardText.groupCreate}
             </button>
-            {hasGroupInvite ? (
-              <button className="btn btn-ghost" type="button" onClick={props.onCopyGroupInvite}>
-                {props.groupCreateState.copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-                {props.groupCreateState.copied ? inviteText.copiedButton : inviteText.copyButton}
-              </button>
+            {props.groupCreateState.inviteUri ? (
+              <InviteResult
+                note={onboardText.groupInviteReady}
+                uri={props.groupCreateState.inviteUri}
+                copied={props.groupCreateState.copied}
+                onCopy={props.onCopyGroupInvite}
+              />
             ) : null}
-          </div>
-          {hasGroupInvite ? (
-            <code className="invite-code">{props.groupCreateState.inviteUri}</code>
-          ) : null}
-        </section>
-
-        <section className="card" aria-label={groupText.joinCardTitle}>
-          <h2>{groupText.joinCardTitle}</h2>
-          <p className="card-hint">{groupText.joinHint}</p>
-          <textarea
-            aria-label="Group invite URI"
-            placeholder={groupText.joinPlaceholder}
-            value={props.groupInvite}
-            onChange={(event) => props.onGroupInvite(event.target.value)}
+          </OnboardStepFrame>
+        ) : step === "join" ? (
+          <OnboardJoinStep
+            value={joinValue}
+            busy={props.busy}
+            onChange={setJoinValue}
+            onBack={() => setStep("menu")}
+            onAccept={props.onAccept}
+            onJoinGroup={props.onJoinGroup}
           />
-          <div className="card-actions">
+        ) : (
+          <OnboardStepFrame
+            title={onboardText.tileChannelTitle}
+            onBack={() => setStep("menu")}
+          >
+            <p className="step-body">{onboardText.channelStepBody}</p>
+            <div className="step-channel-input">
+              <span aria-hidden="true">#</span>
+              <input
+                aria-label="Channel name"
+                placeholder={onboardText.channelPlaceholder}
+                value={channelValue}
+                onChange={(event) => setChannelValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && channelValue.trim() && !props.busy) {
+                    event.preventDefault();
+                    props.onJoinChannel(channelValue);
+                  }
+                }}
+              />
+            </div>
             <button
-              className="btn btn-primary"
+              className="btn btn-primary btn-block"
               type="button"
-              onClick={props.onJoinGroup}
-              disabled={!canJoinGroup}
+              onClick={() => props.onJoinChannel(channelValue)}
+              disabled={props.busy || !channelValue.trim()}
             >
-              {groupText.joinButton}
+              {onboardText.channelJoin}
             </button>
-          </div>
-        </section>
+          </OnboardStepFrame>
+        )}
+
+        {props.error ? <div className="inline-error">{props.error}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function OnboardMenu(props: {
+  displayName: string;
+  staticPeer: string;
+  listenPort: number;
+  onDisplayName: (value: string) => void;
+  onStaticPeer: (value: string) => void;
+  onListenPort: (value: number) => void;
+  onPick: (step: OnboardStep) => void;
+}) {
+  return (
+    <div className="onboard-menu">
+      <IdentityChip name={props.displayName} onRename={props.onDisplayName} />
+
+      <header className="onboard-head">
+        <h1>{onboardText.title}</h1>
+        <p>{onboardText.subtitle}</p>
+      </header>
+
+      <div className="onboard-section-label">{onboardText.startLabel}</div>
+      <div className="onboard-tiles">
+        <OnboardTile
+          icon={<IconMessageCircle size={20} />}
+          title={onboardText.tileChatTitle}
+          desc={onboardText.tileChatDesc}
+          onClick={() => props.onPick("chat")}
+        />
+        <OnboardTile
+          icon={<IconUsers size={20} />}
+          title={onboardText.tileGroupTitle}
+          desc={onboardText.tileGroupDesc}
+          onClick={() => props.onPick("group")}
+        />
       </div>
 
-      {props.error ? <div className="inline-error">{props.error}</div> : null}
+      <div className="onboard-section-label">{onboardText.joinLabel}</div>
+      <div className="onboard-tiles">
+        <OnboardTile
+          icon={<IconLink size={20} />}
+          title={onboardText.tileJoinTitle}
+          desc={onboardText.tileJoinDesc}
+          onClick={() => props.onPick("join")}
+        />
+        <OnboardTile
+          icon={<IconHash size={20} />}
+          title={onboardText.tileChannelTitle}
+          desc={onboardText.tileChannelDesc}
+          onClick={() => props.onPick("channel")}
+        />
+      </div>
+
+      <div className="onboard-foot">
+        <Disclosure
+          icon={<IconSettings size={14} />}
+          label={onboardText.advancedToggle}
+        >
+          <Field label={setupText.staticPeerLabel} hint={setupText.staticPeerHint}>
+            <input
+              aria-label="Static peer"
+              placeholder={setupText.staticPeerPlaceholder}
+              value={props.staticPeer}
+              onChange={(event) => props.onStaticPeer(event.target.value)}
+            />
+          </Field>
+          <Field label={setupText.listenPortLabel} hint={setupText.listenPortHint}>
+            <input
+              type="number"
+              min={0}
+              max={65535}
+              aria-label="Listen port"
+              value={props.listenPort}
+              onChange={(event) => props.onListenPort(Number(event.target.value) || 0)}
+            />
+          </Field>
+        </Disclosure>
+        <Disclosure icon={<IconShieldCheck size={14} />} label={onboardText.aboutToggle}>
+          <p className="disclosure-text">{cryptoNotice.body}</p>
+        </Disclosure>
+      </div>
+    </div>
+  );
+}
+
+function IdentityChip({
+  name,
+  onRename,
+}: {
+  name: string;
+  onRename: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className="onboard-identity">
+      <Avatar name={name} />
+      {editing ? (
+        <input
+          className="identity-input"
+          aria-label="Display name"
+          autoFocus
+          value={name}
+          onChange={(event) => onRename(event.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === "Escape") {
+              event.preventDefault();
+              setEditing(false);
+            }
+          }}
+        />
+      ) : (
+        <div className="identity-text">
+          <strong>{name}</strong>
+          <span>{onboardText.identityHint}</span>
+        </div>
+      )}
+      {editing ? null : (
+        <button
+          type="button"
+          className="identity-edit"
+          aria-label="Edit display name"
+          title="Edit display name"
+          onClick={() => setEditing(true)}
+        >
+          <IconPencil size={13} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function OnboardTile({
+  icon,
+  title,
+  desc,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  desc: string;
+  onClick: () => void;
+}) {
+  return (
+    <button type="button" className="onboard-tile" onClick={onClick}>
+      <span className="tile-icon">{icon}</span>
+      <span className="tile-text">
+        <strong>{title}</strong>
+        <span>{desc}</span>
+      </span>
+      <IconChevronRight size={16} className="tile-chevron" />
+    </button>
+  );
+}
+
+function OnboardStepFrame({
+  title,
+  onBack,
+  children,
+}: {
+  title: string;
+  onBack: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="step-frame">
+      <button type="button" className="step-back" onClick={onBack}>
+        <IconArrowLeft size={14} />
+        {onboardText.back}
+      </button>
+      <h1 className="step-title">{title}</h1>
+      {children}
+    </div>
+  );
+}
+
+function OnboardJoinStep(props: {
+  value: string;
+  busy: boolean;
+  onChange: (value: string) => void;
+  onBack: () => void;
+  onAccept: (uri: string) => void;
+  onJoinGroup: (uri: string) => void;
+}) {
+  const kind = detectInviteKind(props.value);
+  const ready = (kind === "dm" || kind === "group") && !props.busy;
+  const detectClass =
+    kind === "dm" || kind === "group"
+      ? "detect-badge detect-badge-ok"
+      : kind === "unknown"
+        ? "detect-badge detect-badge-bad"
+        : "detect-badge";
+  const detectLabel =
+    kind === "dm"
+      ? onboardText.joinDetectChat
+      : kind === "group"
+        ? onboardText.joinDetectGroup
+        : kind === "unknown"
+          ? onboardText.joinDetectBad
+          : onboardText.joinDetectNone;
+  const connect = () => {
+    if (kind === "dm") {
+      props.onAccept(props.value);
+    } else if (kind === "group") {
+      props.onJoinGroup(props.value);
+    }
+  };
+  return (
+    <OnboardStepFrame title={onboardText.tileJoinTitle} onBack={props.onBack}>
+      <p className="step-body">{onboardText.joinStepBody}</p>
+      <textarea
+        className="step-textarea"
+        aria-label="Invite link"
+        placeholder={onboardText.joinPlaceholder}
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+      <div className={detectClass}>
+        {kind === "dm" || kind === "group" ? <IconCheck size={13} /> : null}
+        <span>{detectLabel}</span>
+      </div>
+      <button
+        className="btn btn-primary btn-block"
+        type="button"
+        onClick={connect}
+        disabled={!ready}
+      >
+        {onboardText.joinConnect}
+      </button>
+    </OnboardStepFrame>
+  );
+}
+
+function InviteResult({
+  note,
+  uri,
+  copied,
+  onCopy,
+}: {
+  note: string;
+  uri: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="invite-ready">
+      <div className="invite-ready-note">
+        <IconCheck size={14} />
+        <span>{note}</span>
+      </div>
+      <code className="invite-code">{uri}</code>
+      <button className="btn btn-ghost btn-block" type="button" onClick={onCopy}>
+        {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+        {copied ? onboardText.copied : onboardText.copyLink}
+      </button>
+    </div>
+  );
+}
+
+function Disclosure({
+  icon,
+  label,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={`disclosure${open ? " disclosure-open" : ""}`}>
+      <button
+        type="button"
+        className="disclosure-head"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {icon}
+        <span>{label}</span>
+        <IconChevronDown size={14} className="disclosure-caret" />
+      </button>
+      {open ? <div className="disclosure-body">{children}</div> : null}
     </div>
   );
 }

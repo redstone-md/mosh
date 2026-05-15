@@ -207,8 +207,8 @@ describe("PrivateDmScreen", () => {
     expect(screen.getByRole("main", { name: "MOSH" })).toBeInTheDocument();
     expect(await screen.findByRole("complementary", { name: "Active sessions" })).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Peer status" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Static peer" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create invite" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /New private chat/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Join a public channel/ })).toBeInTheDocument();
   });
 
   it("creates and copies an invite, then surfaces the active session", async () => {
@@ -216,7 +216,8 @@ describe("PrivateDmScreen", () => {
     const gateway = createGateway();
     render(<PrivateDmScreen gateway={gateway} />);
 
-    await user.click(screen.getByRole("button", { name: "Create invite" }));
+    await user.click(screen.getByRole("button", { name: /New private chat/ }));
+    await user.click(screen.getByRole("button", { name: "Create invite link" }));
 
     expect(gateway.createPrivateInvite).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -225,7 +226,7 @@ describe("PrivateDmScreen", () => {
         static_peer: null,
       }),
     );
-    await screen.findByRole("button", { name: "Copied" });
+    await screen.findByRole("button", { name: /Copied/ });
     expect(screen.getByText(INVITE)).toBeInTheDocument();
   });
 
@@ -234,7 +235,8 @@ describe("PrivateDmScreen", () => {
     const gateway = createGateway();
     render(<PrivateDmScreen gateway={gateway} />);
 
-    await user.type(screen.getByRole("textbox", { name: "Invite URI" }), INVITE);
+    await user.click(screen.getByRole("button", { name: /Join with a link/ }));
+    await user.type(screen.getByRole("textbox", { name: "Invite link" }), INVITE);
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
     expect(gateway.acceptPrivateInvite).toHaveBeenCalledWith(
@@ -294,7 +296,12 @@ describe("PrivateDmScreen", () => {
   });
 
   it("does not overclaim tracker privacy", async () => {
+    const user = userEvent.setup();
     render(<PrivateDmScreen gateway={createGateway()} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /How Mosh protects you/ }),
+    );
     expect(
       await screen.findByText(/peer discovery metadata is NOT hidden/i),
     ).toBeInTheDocument();
@@ -305,6 +312,7 @@ describe("PrivateDmScreen", () => {
     const gateway = createGateway();
     render(<PrivateDmScreen gateway={gateway} />);
 
+    await user.click(screen.getByRole("button", { name: /Join a public channel/ }));
     await user.type(screen.getByRole("textbox", { name: "Channel name" }), "@mosh-dev");
     await user.click(screen.getByRole("button", { name: "Join channel" }));
 
