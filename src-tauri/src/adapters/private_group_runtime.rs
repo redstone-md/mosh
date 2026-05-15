@@ -3,19 +3,27 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::attachment_runtime::{
+    AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest, CHUNK_SIZE,
+};
+use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::{MlsCryptoError, MlsSessionCrypto};
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
-use crate::adapters::private_dm_runtime::{MeshInfo, SnapshotEvent};
+use crate::adapters::private_dm_runtime::{
+    AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, MeshInfo,
+    SnapshotEvent,
+};
 
 const CONTROL_CHANNEL_PREFIX: &str = "group-control/";
 const DATA_CHANNEL_PREFIX: &str = "group-data/";
+const BLOB_CHANNEL_PREFIX: &str = "group-blob/";
 const INVITE_PREFIX: &str = "mosh://group";
 const MAX_LABEL_LEN: usize = 64;
 const MAX_BODY_LEN: usize = 4096;
-const DEDUP_BUFFER_CAP: usize = 256;
+const DEDUP_BUFFER_CAP: usize = 4096;
 const INVITE_FINGERPRINT_LEN: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +56,8 @@ pub struct GroupMessage {
     pub from_device: String,
     pub from_fingerprint: String,
     pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<AttachmentDescriptor>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -63,6 +73,7 @@ pub struct GroupSnapshot {
     pub member_count: usize,
     pub invite_uri: Option<String>,
     pub messages: Vec<GroupMessage>,
+    pub attachments: Vec<AttachmentView>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
 }
@@ -94,6 +105,8 @@ pub enum PrivateGroupError {
     MissingGroup(String),
     DuplicateGroup(String),
     NotReady,
+    Attachment(String),
+    MissingAttachment(String),
 }
 
 impl std::fmt::Display for PrivateGroupError {
@@ -107,6 +120,8 @@ impl std::fmt::Display for PrivateGroupError {
             Self::MissingGroup(id) => write!(formatter, "group not joined: {id}"),
             Self::DuplicateGroup(id) => write!(formatter, "already joined group: {id}"),
             Self::NotReady => write!(formatter, "group not ready"),
+            Self::Attachment(error) => write!(formatter, "attachment error: {error}"),
+            Self::MissingAttachment(id) => write!(formatter, "attachment not found: {id}"),
         }
     }
 }
@@ -120,6 +135,18 @@ impl From<MlsCryptoError> for PrivateGroupError {
             MlsCryptoError::Codec(message) => Self::Codec(message),
             MlsCryptoError::NotReady => Self::NotReady,
         }
+    }
+}
+
+impl From<crate::adapters::attachment_runtime::AttachmentRuntimeError> for PrivateGroupError {
+    fn from(error: crate::adapters::attachment_runtime::AttachmentRuntimeError) -> Self {
+        Self::Attachment(error.to_string())
+    }
+}
+
+impl From<crate::adapters::attachment_store::AttachmentStoreError> for PrivateGroupError {
+    fn from(error: crate::adapters::attachment_store::AttachmentStoreError) -> Self {
+        Self::Attachment(error.to_string())
     }
 }
 
@@ -156,6 +183,15 @@ enum ControlEnvelope {
         from_fingerprint: String,
         proposal_b64: String,
     },
+    /// AttachmentManifest encrypted as an MLS application message, broadcast
+    /// to every member so they can later request the chunks.
+    AttachmentManifest {
+        group_id: String,
+        participant_id: String,
+        from_device: String,
+        from_fingerprint: String,
+        manifest_ciphertext_b64: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -167,8 +203,39 @@ struct DataEnvelope {
     ciphertext_b64: String,
 }
 
+/// Blob channel traffic. Chunk payloads are AES-GCM sealed by the
+/// attachment runtime, so this envelope is plain routing metadata.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum BlobEnvelope {
+    Request {
+        participant_id: String,
+        request: ChunkRequest,
+    },
+    Chunk {
+        participant_id: String,
+        frame: ChunkFrame,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttachmentDirection {
+    Outgoing,
+    Incoming,
+}
+
+struct AttachmentSlot {
+    descriptor: AttachmentDescriptor,
+    direction: AttachmentDirection,
+    local_path: Option<String>,
+    download_requested: bool,
+    failed: bool,
+    cancelled: bool,
+}
+
 pub struct PrivateGroupRuntime {
     moss: Arc<MossFfiRuntime>,
+    attachment_store: Arc<AttachmentStore>,
     groups: HashMap<String, GroupSession>,
 }
 
@@ -191,16 +258,24 @@ struct GroupSession {
     seen_order: VecDeque<String>,
     control_channel: String,
     data_channel: String,
+    blob_channel: String,
+    attachment_store: Arc<AttachmentStore>,
+    attachments: AttachmentRuntime,
+    attachment_slots: HashMap<String, AttachmentSlot>,
 }
 
 impl PrivateGroupRuntime {
-    pub fn new(moss: MossFfiRuntime) -> Self {
-        Self::from_shared(Arc::new(moss))
+    pub fn new(moss: MossFfiRuntime, attachment_store: Arc<AttachmentStore>) -> Self {
+        Self::from_shared(Arc::new(moss), attachment_store)
     }
 
-    pub fn from_shared(moss: Arc<MossFfiRuntime>) -> Self {
+    pub fn from_shared(
+        moss: Arc<MossFfiRuntime>,
+        attachment_store: Arc<AttachmentStore>,
+    ) -> Self {
         Self {
             moss,
+            attachment_store,
             groups: HashMap::new(),
         }
     }
@@ -247,6 +322,10 @@ impl PrivateGroupRuntime {
             seen_order: VecDeque::new(),
             control_channel: format!("{CONTROL_CHANNEL_PREFIX}{group_id}"),
             data_channel: format!("{DATA_CHANNEL_PREFIX}{group_id}"),
+            blob_channel: format!("{BLOB_CHANNEL_PREFIX}{group_id}"),
+            attachment_store: Arc::clone(&self.attachment_store),
+            attachments: AttachmentRuntime::new(),
+            attachment_slots: HashMap::new(),
         };
 
         self.groups.insert(group_id.clone(), session);
@@ -308,9 +387,57 @@ impl PrivateGroupRuntime {
             seen_order: VecDeque::new(),
             control_channel,
             data_channel: format!("{DATA_CHANNEL_PREFIX}{}", invite.group_id),
+            blob_channel: format!("{BLOB_CHANNEL_PREFIX}{}", invite.group_id),
+            attachment_store: Arc::clone(&self.attachment_store),
+            attachments: AttachmentRuntime::new(),
+            attachment_slots: HashMap::new(),
         };
         self.groups.insert(invite.group_id.clone(), session);
         self.poll(&invite.group_id)
+    }
+
+    /// Encrypts a file, stores the sender's copy, and broadcasts the manifest
+    /// to every group member over the MLS-protected control channel.
+    pub fn send_attachment(
+        &mut self,
+        group_id: &str,
+        file_name: String,
+        mime: String,
+        bytes: Vec<u8>,
+    ) -> Result<AttachmentSendResult, PrivateGroupError> {
+        self.drain_inbound()?;
+        let session = self
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+        session.send_attachment(file_name, mime, bytes)
+    }
+
+    pub fn download_attachment(
+        &mut self,
+        group_id: &str,
+        attachment_id: &str,
+    ) -> Result<(), PrivateGroupError> {
+        self.drain_inbound()?;
+        let session = self
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+        session.start_attachment_download(attachment_id)?;
+        session.pump_attachment_requests();
+        Ok(())
+    }
+
+    pub fn cancel_attachment(
+        &mut self,
+        group_id: &str,
+        attachment_id: &str,
+    ) -> Result<(), PrivateGroupError> {
+        let session = self
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+        session.cancel_attachment(attachment_id)
     }
 
     pub fn send(
@@ -342,6 +469,7 @@ impl PrivateGroupRuntime {
             from_device: session.display_name.clone(),
             from_fingerprint: session.device_fingerprint.clone(),
             body,
+            attachment: None,
         });
         Ok(GroupSendResult {
             group_id: session.group_id.clone(),
@@ -425,6 +553,7 @@ impl PrivateGroupRuntime {
         let inbound = drain_messages_where(|message| {
             message.channel.starts_with(CONTROL_CHANNEL_PREFIX)
                 || message.channel.starts_with(DATA_CHANNEL_PREFIX)
+                || message.channel.starts_with(BLOB_CHANNEL_PREFIX)
         });
         for message in inbound {
             let group_id = match channel_group_id(&message.channel) {
@@ -434,6 +563,9 @@ impl PrivateGroupRuntime {
             if let Some(session) = self.groups.get_mut(&group_id) {
                 session.handle_moss_message(message)?;
             }
+        }
+        for session in self.groups.values_mut() {
+            session.pump_attachment_requests();
         }
         Ok(())
     }
@@ -451,13 +583,19 @@ impl GroupSession {
             self.handle_control(message.payload)
         } else if message.channel == self.data_channel {
             self.handle_data(message.payload)
+        } else if message.channel == self.blob_channel {
+            self.handle_blob(message.payload)
         } else {
             Ok(())
         }
     }
 
     fn has_seen(&mut self, message: &MossReceivedMessage) -> bool {
-        let key = format!("{}:{}", message.channel, encode(&message.payload));
+        let key = format!(
+            "{}:{}",
+            message.channel,
+            crate::adapters::attachment_crypto::sha256_hex(&message.payload)
+        );
         if !self.seen_set.insert(key.clone()) {
             return true;
         }
@@ -587,6 +725,21 @@ impl GroupSession {
                 };
                 publish_json(&self.node, &self.control_channel, &commit_envelope)
             }
+            ControlEnvelope::AttachmentManifest {
+                group_id,
+                participant_id,
+                from_device,
+                from_fingerprint,
+                manifest_ciphertext_b64,
+            } if self.joined
+                && self.group_id == group_id
+                && participant_id != self.participant_id =>
+            {
+                let manifest_json =
+                    self.crypto.decrypt(&decode(&manifest_ciphertext_b64)?)?;
+                let manifest: AttachmentManifest = decode_json(&manifest_json)?;
+                self.accept_incoming_manifest(from_device, from_fingerprint, manifest)
+            }
             _ => Ok(()),
         }
     }
@@ -603,8 +756,223 @@ impl GroupSession {
             from_device: envelope.from_device,
             from_fingerprint: envelope.from_fingerprint,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
+            attachment: None,
         });
         Ok(())
+    }
+
+    fn handle_blob(&mut self, payload: Vec<u8>) -> Result<(), PrivateGroupError> {
+        let envelope: BlobEnvelope = decode_json(&payload)?;
+        match envelope {
+            BlobEnvelope::Request {
+                participant_id,
+                request,
+            } if participant_id != self.participant_id => {
+                // Only the original sender holds the outgoing transfer;
+                // every other member simply has nothing to serve.
+                let frames = match self.attachments.serve_chunks(&request) {
+                    Ok(frames) => frames,
+                    Err(_) => return Ok(()),
+                };
+                for frame in frames {
+                    let chunk = BlobEnvelope::Chunk {
+                        participant_id: self.participant_id.clone(),
+                        frame,
+                    };
+                    publish_json(&self.node, &self.blob_channel, &chunk)?;
+                }
+                Ok(())
+            }
+            BlobEnvelope::Chunk {
+                participant_id,
+                frame,
+            } if participant_id != self.participant_id => {
+                let attachment_id = frame.attachment_id.clone();
+                match self.attachments.ingest_chunk(&frame) {
+                    Ok(ChunkOutcome::Complete {
+                        content_hash, bytes, ..
+                    }) => {
+                        let path = self
+                            .attachment_store
+                            .write_blob(&content_hash, &bytes)?;
+                        if let Some(slot) = self.attachment_slots.get_mut(&attachment_id) {
+                            slot.local_path = Some(path.to_string_lossy().into_owned());
+                            slot.failed = false;
+                        }
+                        Ok(())
+                    }
+                    Ok(_) => Ok(()),
+                    Err(_) => {
+                        if let Some(slot) = self.attachment_slots.get_mut(&attachment_id) {
+                            slot.failed = true;
+                        }
+                        Ok(())
+                    }
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn accept_incoming_manifest(
+        &mut self,
+        from_device: String,
+        from_fingerprint: String,
+        manifest: AttachmentManifest,
+    ) -> Result<(), PrivateGroupError> {
+        let attachment_id = manifest.attachment_id.clone();
+        if self.attachment_slots.contains_key(&attachment_id) {
+            return Ok(());
+        }
+        let descriptor = descriptor_of(&manifest);
+        self.attachments.register_incoming(manifest)?;
+        self.attachment_slots.insert(
+            attachment_id,
+            AttachmentSlot {
+                descriptor: descriptor.clone(),
+                direction: AttachmentDirection::Incoming,
+                local_path: None,
+                download_requested: false,
+                failed: false,
+                cancelled: false,
+            },
+        );
+        self.messages.push(GroupMessage {
+            from_device,
+            from_fingerprint,
+            body: String::new(),
+            attachment: Some(descriptor),
+        });
+        Ok(())
+    }
+
+    fn send_attachment(
+        &mut self,
+        file_name: String,
+        mime: String,
+        bytes: Vec<u8>,
+    ) -> Result<AttachmentSendResult, PrivateGroupError> {
+        if !self.joined || !self.crypto.is_ready() {
+            return Err(PrivateGroupError::NotReady);
+        }
+        let attachment_id = self.crypto.random_token("attachment")?;
+        let manifest = self.attachments.prepare_outgoing(
+            attachment_id.clone(),
+            file_name,
+            mime,
+            self.device_fingerprint.clone(),
+            bytes.clone(),
+            None,
+        )?;
+        let stored = self
+            .attachment_store
+            .write_blob(&manifest.content_hash, &bytes)?;
+        let manifest_json = serde_json::to_vec(&manifest)
+            .map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
+        let ciphertext = self.crypto.encrypt(&manifest_json)?;
+        let envelope = ControlEnvelope::AttachmentManifest {
+            group_id: self.group_id.clone(),
+            participant_id: self.participant_id.clone(),
+            from_device: self.display_name.clone(),
+            from_fingerprint: self.device_fingerprint.clone(),
+            manifest_ciphertext_b64: encode(&ciphertext),
+        };
+        publish_json(&self.node, &self.control_channel, &envelope)?;
+
+        let descriptor = descriptor_of(&manifest);
+        self.attachment_slots.insert(
+            attachment_id.clone(),
+            AttachmentSlot {
+                descriptor: descriptor.clone(),
+                direction: AttachmentDirection::Outgoing,
+                local_path: Some(stored.to_string_lossy().into_owned()),
+                download_requested: false,
+                failed: false,
+                cancelled: false,
+            },
+        );
+        self.messages.push(GroupMessage {
+            from_device: self.display_name.clone(),
+            from_fingerprint: self.device_fingerprint.clone(),
+            body: String::new(),
+            attachment: Some(descriptor),
+        });
+        Ok(AttachmentSendResult {
+            session_id: self.group_id.clone(),
+            attachment_id,
+            content_hash: manifest.content_hash,
+        })
+    }
+
+    fn start_attachment_download(
+        &mut self,
+        attachment_id: &str,
+    ) -> Result<(), PrivateGroupError> {
+        let slot = self
+            .attachment_slots
+            .get_mut(attachment_id)
+            .ok_or_else(|| {
+                PrivateGroupError::MissingAttachment(attachment_id.to_string())
+            })?;
+        if slot.direction != AttachmentDirection::Incoming {
+            return Err(PrivateGroupError::Attachment(
+                "cannot download an outgoing attachment".to_string(),
+            ));
+        }
+        slot.download_requested = true;
+        slot.failed = false;
+        slot.cancelled = false;
+        self.attachments.start_download(attachment_id)?;
+        Ok(())
+    }
+
+    fn cancel_attachment(
+        &mut self,
+        attachment_id: &str,
+    ) -> Result<(), PrivateGroupError> {
+        let slot = self
+            .attachment_slots
+            .get_mut(attachment_id)
+            .ok_or_else(|| {
+                PrivateGroupError::MissingAttachment(attachment_id.to_string())
+            })?;
+        slot.cancelled = true;
+        slot.download_requested = false;
+        self.attachments.cancel(attachment_id);
+        Ok(())
+    }
+
+    fn pump_attachment_requests(&mut self) {
+        let active: Vec<String> = self
+            .attachment_slots
+            .iter()
+            .filter(|(_, slot)| {
+                slot.direction == AttachmentDirection::Incoming
+                    && slot.download_requested
+                    && slot.local_path.is_none()
+                    && !slot.cancelled
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for attachment_id in active {
+            if let Some(request) = self.attachments.next_chunk_request(&attachment_id) {
+                let envelope = BlobEnvelope::Request {
+                    participant_id: self.participant_id.clone(),
+                    request,
+                };
+                let _ = publish_json(&self.node, &self.blob_channel, &envelope);
+            }
+        }
+    }
+
+    fn attachment_views(&self) -> Vec<AttachmentView> {
+        let mut views: Vec<AttachmentView> = self
+            .attachment_slots
+            .values()
+            .map(|slot| slot.view(&self.attachments))
+            .collect();
+        views.sort_by(|a, b| a.attachment_id.cmp(&b.attachment_id));
+        views
     }
 
     fn snapshot(&self) -> GroupSnapshot {
@@ -620,6 +988,7 @@ impl GroupSession {
             member_count: self.crypto.member_count(),
             invite_uri: self.invite_uri.clone(),
             messages: self.messages.clone(),
+            attachments: self.attachment_views(),
             mesh: self.mesh_info(),
             events: snapshot_event_log()
                 .into_iter()
@@ -650,6 +1019,60 @@ impl GroupSession {
         } else {
             "waiting".to_string()
         }
+    }
+}
+
+impl AttachmentSlot {
+    fn view(&self, attachments: &AttachmentRuntime) -> AttachmentView {
+        let chunk_count = self
+            .descriptor
+            .total_size
+            .div_ceil(u64::from(CHUNK_SIZE))
+            .max(1);
+        let (direction, progress) = match self.direction {
+            AttachmentDirection::Outgoing => (
+                "outgoing",
+                attachments.outgoing_progress(&self.descriptor.attachment_id),
+            ),
+            AttachmentDirection::Incoming => (
+                "incoming",
+                attachments.incoming_progress(&self.descriptor.attachment_id),
+            ),
+        };
+        let completed_chunks = progress
+            .as_ref()
+            .map(|value| value.completed_chunks)
+            .unwrap_or(0);
+        let state = if self.cancelled {
+            AttachmentState::Cancelled
+        } else if self.failed {
+            AttachmentState::Failed
+        } else if self.local_path.is_some() {
+            AttachmentState::Available
+        } else if self.download_requested {
+            AttachmentState::Downloading
+        } else {
+            AttachmentState::Offered
+        };
+        AttachmentView {
+            attachment_id: self.descriptor.attachment_id.clone(),
+            direction: direction.to_string(),
+            state,
+            completed_chunks,
+            chunk_count,
+            local_path: self.local_path.clone(),
+        }
+    }
+}
+
+fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
+    AttachmentDescriptor {
+        attachment_id: manifest.attachment_id.clone(),
+        content_hash: manifest.content_hash.clone(),
+        file_name: manifest.file_name.clone(),
+        mime: manifest.mime.clone(),
+        total_size: manifest.total_size,
+        thumbnail_b64: manifest.thumbnail_b64.clone(),
     }
 }
 
@@ -731,6 +1154,7 @@ fn channel_group_id(channel: &str) -> Option<&str> {
     channel
         .strip_prefix(CONTROL_CHANNEL_PREFIX)
         .or_else(|| channel.strip_prefix(DATA_CHANNEL_PREFIX))
+        .or_else(|| channel.strip_prefix(BLOB_CHANNEL_PREFIX))
 }
 
 fn start_node(
@@ -759,6 +1183,8 @@ fn start_node(
     node.subscribe(&format!("{CONTROL_CHANNEL_PREFIX}{group_id}"))
         .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
     node.subscribe(&format!("{DATA_CHANNEL_PREFIX}{group_id}"))
+        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
+    node.subscribe(&format!("{BLOB_CHANNEL_PREFIX}{group_id}"))
         .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
     Ok(node)
 }

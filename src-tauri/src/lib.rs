@@ -158,9 +158,12 @@ struct PrivateGroupState {
 }
 
 impl PrivateGroupState {
-    fn ready(moss: Arc<MossFfiRuntime>) -> Self {
+    fn ready(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
         Self {
-            runtime: Mutex::new(Some(PrivateGroupRuntime::from_shared(moss))),
+            runtime: Mutex::new(Some(PrivateGroupRuntime::from_shared(
+                moss,
+                attachment_store,
+            ))),
             load_error: None,
         }
     }
@@ -464,6 +467,49 @@ fn private_group_close(
     })
 }
 
+#[tauri::command]
+fn private_group_send_attachment(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+    file_name: String,
+    mime: String,
+    data_base64: String,
+) -> Result<AttachmentSendResult, String> {
+    let bytes = decode_base64(&data_base64)?;
+    let mime = resolve_mime(mime, &file_name);
+    state.with_runtime(|runtime| {
+        runtime
+            .send_attachment(&group_id, file_name, mime, bytes)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_group_download_attachment(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .download_attachment(&group_id, &attachment_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_group_cancel_attachment(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .cancel_attachment(&group_id, &attachment_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -475,10 +521,10 @@ pub fn run() {
                     let attachment_store = load_attachment_store(app.handle());
                     app.manage(PrivateDmState::ready(
                         Arc::clone(&moss),
-                        attachment_store,
+                        Arc::clone(&attachment_store),
                     ));
                     app.manage(ChannelState::ready(Arc::clone(&moss)));
-                    app.manage(PrivateGroupState::ready(moss));
+                    app.manage(PrivateGroupState::ready(moss, attachment_store));
                 }
                 Err(error) => {
                     let message = error.to_string();
@@ -511,7 +557,10 @@ pub fn run() {
             private_group_send,
             private_group_poll,
             private_group_list,
-            private_group_close
+            private_group_close,
+            private_group_send_attachment,
+            private_group_download_attachment,
+            private_group_cancel_attachment
         ])
         .run(tauri::generate_context!())
         .expect(RUN_ERROR);
