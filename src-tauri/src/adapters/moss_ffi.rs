@@ -281,7 +281,7 @@ impl Drop for MossNode {
 pub fn drain_received_messages() -> Vec<MossReceivedMessage> {
     let mut messages = RECEIVED_MESSAGES
         .lock()
-        .expect("Moss message lock poisoned");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::mem::take(&mut *messages)
 }
 
@@ -289,33 +289,45 @@ pub fn drain_messages_where<F>(predicate: F) -> Vec<MossReceivedMessage>
 where
     F: Fn(&MossReceivedMessage) -> bool,
 {
-    let mut log = RECEIVED_MESSAGES
-        .lock()
-        .expect("Moss message lock poisoned");
+    // Take the queue out from under the mutex before running the user
+    // predicate. Holding the lock across an arbitrary closure would poison
+    // it on any predicate panic and stall every other Moss consumer.
+    let drained: Vec<MossReceivedMessage> = {
+        let mut log = RECEIVED_MESSAGES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::take(&mut *log)
+    };
     let mut taken = Vec::new();
-    let mut kept = Vec::with_capacity(log.len());
-    for message in log.drain(..) {
+    let mut kept = Vec::with_capacity(drained.len());
+    for message in drained {
         if predicate(&message) {
             taken.push(message);
         } else {
             kept.push(message);
         }
     }
-    *log = kept;
+    if !kept.is_empty() {
+        let mut log = RECEIVED_MESSAGES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        kept.append(&mut *log);
+        *log = kept;
+    }
     taken
 }
 
 pub fn snapshot_event_log() -> Vec<MossEvent> {
     EVENT_LOG
         .lock()
-        .expect("Moss event lock poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone()
 }
 
 pub fn clear_event_log() {
     EVENT_LOG
         .lock()
-        .expect("Moss event lock poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clear();
 }
 
