@@ -101,9 +101,9 @@ struct ChannelState {
 }
 
 impl ChannelState {
-    fn ready(moss: Arc<MossFfiRuntime>) -> Self {
+    fn ready(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
         Self {
-            runtime: Mutex::new(Some(ChannelRuntime::from_shared(moss))),
+            runtime: Mutex::new(Some(ChannelRuntime::from_shared(moss, attachment_store))),
             load_error: None,
             last_membership_op: Mutex::new(None),
         }
@@ -404,6 +404,49 @@ fn channel_list(
 }
 
 #[tauri::command]
+fn channel_send_attachment(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+    file_name: String,
+    mime: String,
+    data_base64: String,
+) -> Result<AttachmentSendResult, String> {
+    let bytes = decode_base64(&data_base64)?;
+    let mime = resolve_mime(mime, &file_name);
+    state.with_runtime(|runtime| {
+        runtime
+            .send_attachment(&name, file_name, mime, bytes)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn channel_download_attachment(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .download_attachment(&name, &attachment_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn channel_cancel_attachment(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .cancel_attachment(&name, &attachment_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
 fn private_group_create(
     state: tauri::State<'_, PrivateGroupState>,
     request: CreateGroupRequest,
@@ -523,7 +566,10 @@ pub fn run() {
                         Arc::clone(&moss),
                         Arc::clone(&attachment_store),
                     ));
-                    app.manage(ChannelState::ready(Arc::clone(&moss)));
+                    app.manage(ChannelState::ready(
+                        Arc::clone(&moss),
+                        Arc::clone(&attachment_store),
+                    ));
                     app.manage(PrivateGroupState::ready(moss, attachment_store));
                 }
                 Err(error) => {
@@ -552,6 +598,9 @@ pub fn run() {
             channel_send,
             channel_poll,
             channel_list,
+            channel_send_attachment,
+            channel_download_attachment,
+            channel_cancel_attachment,
             private_group_create,
             private_group_join,
             private_group_send,
