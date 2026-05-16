@@ -789,13 +789,18 @@ impl GroupSession {
                 frame,
             } if participant_id != self.participant_id => {
                 let attachment_id = frame.attachment_id.clone();
+                let file_name = self
+                    .attachment_slots
+                    .get(&attachment_id)
+                    .map(|slot| slot.descriptor.file_name.clone())
+                    .unwrap_or_else(|| "file".to_string());
                 match self.attachments.ingest_chunk(&frame) {
                     Ok(ChunkOutcome::Complete {
                         content_hash, bytes, ..
                     }) => {
                         let path = self
                             .attachment_store
-                            .write_blob(&content_hash, &bytes)?;
+                            .write_blob(&content_hash, &file_name, &bytes)?;
                         if let Some(slot) = self.attachment_slots.get_mut(&attachment_id) {
                             slot.local_path = Some(path.to_string_lossy().into_owned());
                             slot.failed = false;
@@ -868,7 +873,7 @@ impl GroupSession {
         )?;
         let stored = self
             .attachment_store
-            .write_blob(&manifest.content_hash, &bytes)?;
+            .write_blob(&manifest.content_hash, &manifest.file_name, &bytes)?;
         let manifest_json = serde_json::to_vec(&manifest)
             .map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
         let ciphertext = self.crypto.encrypt(&manifest_json)?;
