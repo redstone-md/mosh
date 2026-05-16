@@ -24,6 +24,30 @@ export function isViewableMedia(mime: string): boolean {
   );
 }
 
+export function isStreamableMedia(mime: string): boolean {
+  return mime.startsWith("video/") || mime.startsWith("audio/");
+}
+
+/** Source URL for a fully-downloaded attachment served from disk. */
+export function localFileSrc(path: string): string {
+  return convertFileSrc(path);
+}
+
+/**
+ * Source URL for the moshmedia:// streaming protocol. Used while a video or
+ * audio attachment is still downloading so playback can start immediately.
+ */
+export function streamingMediaSrc(
+  kind: "dm" | "group" | "channel",
+  host: string,
+  attachmentId: string,
+): string {
+  // Tauri exposes a custom scheme on Windows as http://<scheme>.localhost.
+  return `http://moshmedia.localhost/${kind}/${encodeURIComponent(
+    host,
+  )}/${encodeURIComponent(attachmentId)}`;
+}
+
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 const THUMBNAIL_MAX_EDGE = 320;
 
@@ -358,14 +382,18 @@ export function AttachmentCard({
   );
 }
 
-/** Full-screen in-app viewer for a downloaded image, video, or audio file. */
+/**
+ * Full-screen in-app viewer for an image, video, or audio attachment. The
+ * src is a complete-file asset URL or a moshmedia:// streaming URL — the
+ * viewer itself does not care which.
+ */
 export function MediaViewer({
   descriptor,
-  path,
+  src,
   onClose,
 }: {
   descriptor: AttachmentDescriptor;
-  path: string;
+  src: string;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -378,7 +406,6 @@ export function MediaViewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const src = convertFileSrc(path);
   const mime = descriptor.mime;
   const isImage = mime.startsWith("image/");
   const isVideo = mime.startsWith("video/");

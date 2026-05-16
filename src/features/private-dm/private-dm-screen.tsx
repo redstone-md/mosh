@@ -62,7 +62,10 @@ import {
   MediaViewer,
   createThumbnail,
   isAttachmentTooLarge,
+  isStreamableMedia,
+  localFileSrc,
   readFileAsBase64,
+  streamingMediaSrc,
 } from "./attachments";
 import type { AttachmentDescriptor } from "./native/native-messaging-gateway";
 
@@ -119,7 +122,7 @@ export function PrivateDmScreen({
   const [busy, setBusy] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [viewer, setViewer] = useState<
-    { descriptor: AttachmentDescriptor; path: string } | null
+    { descriptor: AttachmentDescriptor; src: string } | null
   >(null);
   const [pendingOpen, setPendingOpen] = useState<AttachmentDescriptor | null>(null);
   const pollInFlight = useRef(false);
@@ -445,17 +448,30 @@ export function PrivateDmScreen({
   );
 
   const openAttachment = (descriptor: AttachmentDescriptor) => {
-    const view = attachmentViews.get(descriptor.attachment_id);
-    if (view?.local_path) {
-      setViewer({ descriptor, path: view.local_path });
+    if (!active) {
       return;
     }
-    // Not on disk yet: download, then open once the file lands.
+    const view = attachmentViews.get(descriptor.attachment_id);
+    if (view?.local_path) {
+      setViewer({ descriptor, src: localFileSrc(view.local_path) });
+      return;
+    }
+    if (isStreamableMedia(descriptor.mime)) {
+      // Video and audio open right away and play while they download.
+      const host = active.type === "channel" ? active.name : active.id;
+      downloadAttachment(descriptor.attachment_id);
+      setViewer({
+        descriptor,
+        src: streamingMediaSrc(active.type, host, descriptor.attachment_id),
+      });
+      return;
+    }
+    // Images cannot stream: download, then open the finished file.
     setPendingOpen(descriptor);
     downloadAttachment(descriptor.attachment_id);
   };
 
-  // Auto-open the viewer when a click-to-open download finishes.
+  // Auto-open the viewer when a click-to-open image download finishes.
   useEffect(() => {
     if (!pendingOpen) {
       return;
@@ -464,7 +480,7 @@ export function PrivateDmScreen({
       (candidate) => candidate.attachment_id === pendingOpen.attachment_id,
     );
     if (view?.local_path) {
-      setViewer({ descriptor: pendingOpen, path: view.local_path });
+      setViewer({ descriptor: pendingOpen, src: localFileSrc(view.local_path) });
       setPendingOpen(null);
     } else if (view && (view.state === "failed" || view.state === "cancelled")) {
       setPendingOpen(null);
@@ -624,7 +640,7 @@ export function PrivateDmScreen({
       {viewer ? (
         <MediaViewer
           descriptor={viewer.descriptor}
-          path={viewer.path}
+          src={viewer.src}
           onClose={() => setViewer(null)}
         />
       ) : null}
