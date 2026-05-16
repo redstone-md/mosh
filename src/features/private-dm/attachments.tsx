@@ -4,6 +4,7 @@ import {
   IconFileAlert,
   IconExternalLink,
   IconPaperclip,
+  IconPlayerPlayFilled,
   IconRefresh,
   IconX,
 } from "@tabler/icons-react";
@@ -29,38 +30,97 @@ export async function readFileAsBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-/**
- * Renders a small JPEG preview of an image file and returns it as base64
- * (no data: prefix). Resolves to undefined for non-images or on any
- * decode/render failure — a missing thumbnail is never fatal.
- */
-export async function createImageThumbnail(file: File): Promise<string | undefined> {
-  if (!file.type.startsWith("image/")) {
-    return undefined;
-  }
+function canvasToBase64(canvas: HTMLCanvasElement): string | undefined {
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+  const comma = dataUrl.indexOf(",");
+  return comma >= 0 ? dataUrl.slice(comma + 1) : undefined;
+}
+
+function scaledSize(width: number, height: number): { w: number; h: number } {
+  const scale = Math.min(1, THUMBNAIL_MAX_EDGE / Math.max(width, height, 1));
+  return {
+    w: Math.max(1, Math.round(width * scale)),
+    h: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+async function imageThumbnail(file: File): Promise<string | undefined> {
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(
-      1,
-      THUMBNAIL_MAX_EDGE / Math.max(bitmap.width, bitmap.height),
-    );
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const { w, h } = scaledSize(bitmap.width, bitmap.height);
     const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = w;
+    canvas.height = h;
     const context = canvas.getContext("2d");
     if (!context) {
       return undefined;
     }
-    context.drawImage(bitmap, 0, 0, width, height);
+    context.drawImage(bitmap, 0, 0, w, h);
     bitmap.close();
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.62);
-    const comma = dataUrl.indexOf(",");
-    return comma >= 0 ? dataUrl.slice(comma + 1) : undefined;
+    return canvasToBase64(canvas);
   } catch {
     return undefined;
   }
+}
+
+function videoThumbnail(file: File): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.muted = true;
+    video.preload = "metadata";
+    let settled = false;
+    const finish = (result?: string) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(result);
+    };
+    video.onerror = () => finish(undefined);
+    video.onloadeddata = () => {
+      try {
+        video.currentTime = Math.min(1, (video.duration || 2) * 0.1);
+      } catch {
+        finish(undefined);
+      }
+    };
+    video.onseeked = () => {
+      try {
+        const { w, h } = scaledSize(video.videoWidth, video.videoHeight);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          finish(undefined);
+          return;
+        }
+        context.drawImage(video, 0, 0, w, h);
+        finish(canvasToBase64(canvas));
+      } catch {
+        finish(undefined);
+      }
+    };
+    video.src = url;
+    window.setTimeout(() => finish(undefined), 6000);
+  });
+}
+
+/**
+ * Renders a JPEG preview frame for an image or video file and returns it as
+ * base64 (no data: prefix). Resolves to undefined for other file types or on
+ * any decode failure — a missing thumbnail is never fatal.
+ */
+export async function createThumbnail(file: File): Promise<string | undefined> {
+  if (file.type.startsWith("image/")) {
+    return imageThumbnail(file);
+  }
+  if (file.type.startsWith("video/")) {
+    return videoThumbnail(file);
+  }
+  return undefined;
 }
 
 export function isAttachmentTooLarge(file: File): boolean {
@@ -147,6 +207,8 @@ export function AttachmentCard({
   const outgoing = view?.direction === "outgoing";
   const state = view?.state ?? (outgoing ? "available" : "offered");
   const isImage = descriptor.mime.startsWith("image/");
+  const isVideo = descriptor.mime.startsWith("video/");
+  const hasPreview = Boolean(descriptor.thumbnail_b64) && (isImage || isVideo);
   const percent = progressPercent(view);
 
   const open = () => {
@@ -155,84 +217,114 @@ export function AttachmentCard({
     }
   };
 
-  return (
-    <div className={`attachment-card attachment-card-${state}`}>
-      <div className="attachment-thumb">
-        {descriptor.thumbnail_b64 && isImage ? (
+  const actions = (
+    <div className="attachment-actions">
+      {state === "available" ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon"
+          aria-label={`Open ${descriptor.file_name}`}
+          title="Open"
+          disabled={!view?.local_path}
+          onClick={open}
+        >
+          <IconExternalLink size={15} />
+        </button>
+      ) : null}
+      {!outgoing && (state === "offered" || state === "cancelled") ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon"
+          aria-label={`Download ${descriptor.file_name}`}
+          title="Download"
+          disabled={busy}
+          onClick={() => onDownload(id)}
+        >
+          <IconDownload size={15} />
+        </button>
+      ) : null}
+      {!outgoing && state === "failed" ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon"
+          aria-label={`Retry ${descriptor.file_name}`}
+          title="Retry"
+          disabled={busy}
+          onClick={() => onDownload(id)}
+        >
+          <IconRefresh size={15} />
+        </button>
+      ) : null}
+      {!outgoing && state === "downloading" ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon"
+          aria-label={`Cancel ${descriptor.file_name}`}
+          title="Cancel"
+          onClick={() => onCancel(id)}
+        >
+          <IconX size={15} />
+        </button>
+      ) : null}
+    </div>
+  );
+
+  const meta = (
+    <span className="attachment-meta">
+      {formatBytes(descriptor.total_size)}
+      {state === "downloading" ? ` · ${percent}%` : ""}
+      {state === "failed" ? " · transfer failed" : ""}
+    </span>
+  );
+
+  const progressBar =
+    state === "downloading" ? (
+      <div className="attachment-progress" aria-hidden="true">
+        <div className="attachment-progress-fill" style={{ width: `${percent}%` }} />
+      </div>
+    ) : null;
+
+  if (hasPreview) {
+    return (
+      <div className={`attachment-card attachment-card-media attachment-card-${state}`}>
+        <div className="attachment-preview">
           <img
             src={`data:image/jpeg;base64,${descriptor.thumbnail_b64}`}
             alt={descriptor.file_name}
           />
-        ) : state === "failed" ? (
-          <IconFileAlert size={22} />
-        ) : (
-          <IconFile size={22} />
-        )}
+          {isVideo ? (
+            <span className="attachment-play" aria-hidden="true">
+              <IconPlayerPlayFilled size={20} />
+            </span>
+          ) : null}
+        </div>
+        <div className="attachment-bar">
+          <div className="attachment-info">
+            <strong className="attachment-name" title={descriptor.file_name}>
+              {descriptor.file_name}
+            </strong>
+            {meta}
+            {progressBar}
+          </div>
+          {actions}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`attachment-card attachment-card-${state}`}>
+      <div className="attachment-thumb">
+        {state === "failed" ? <IconFileAlert size={22} /> : <IconFile size={22} />}
       </div>
       <div className="attachment-info">
         <strong className="attachment-name" title={descriptor.file_name}>
           {descriptor.file_name}
         </strong>
-        <span className="attachment-meta">
-          {formatBytes(descriptor.total_size)}
-          {state === "downloading" ? ` · ${percent}%` : ""}
-          {state === "failed" ? " · transfer failed" : ""}
-        </span>
-        {state === "downloading" ? (
-          <div className="attachment-progress" aria-hidden="true">
-            <div className="attachment-progress-fill" style={{ width: `${percent}%` }} />
-          </div>
-        ) : null}
+        {meta}
+        {progressBar}
       </div>
-      <div className="attachment-actions">
-        {state === "available" ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon"
-            aria-label={`Open ${descriptor.file_name}`}
-            title="Open"
-            disabled={!view?.local_path}
-            onClick={open}
-          >
-            <IconExternalLink size={15} />
-          </button>
-        ) : null}
-        {!outgoing && (state === "offered" || state === "cancelled") ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon"
-            aria-label={`Download ${descriptor.file_name}`}
-            title="Download"
-            disabled={busy}
-            onClick={() => onDownload(id)}
-          >
-            <IconDownload size={15} />
-          </button>
-        ) : null}
-        {!outgoing && state === "failed" ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon"
-            aria-label={`Retry ${descriptor.file_name}`}
-            title="Retry"
-            disabled={busy}
-            onClick={() => onDownload(id)}
-          >
-            <IconRefresh size={15} />
-          </button>
-        ) : null}
-        {!outgoing && state === "downloading" ? (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon"
-            aria-label={`Cancel ${descriptor.file_name}`}
-            title="Cancel"
-            onClick={() => onCancel(id)}
-          >
-            <IconX size={15} />
-          </button>
-        ) : null}
-      </div>
+      {actions}
     </div>
   );
 }

@@ -59,7 +59,7 @@ import {
 import {
   AttachmentCard,
   AttachmentPicker,
-  createImageThumbnail,
+  createThumbnail,
   isAttachmentTooLarge,
   readFileAsBase64,
 } from "./attachments";
@@ -355,7 +355,7 @@ export function PrivateDmScreen({
     const target = active;
     void run(async () => {
       const dataBase64 = await readFileAsBase64(file);
-      const thumbnail = await createImageThumbnail(file);
+      const thumbnail = await createThumbnail(file);
       const mime = file.type ?? "";
       if (target.type === "dm") {
         await gateway.sendPrivateAttachment(
