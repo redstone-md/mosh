@@ -67,6 +67,7 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
     device_fingerprint: string;
     messages: Array<{ from_device: string; from_fingerprint: string; body: string }>;
     attachments: never[];
+    dm_offers: never[];
     mesh: typeof MESH_READY | null;
     events: SnapshotEvent[];
   }> = [];
@@ -115,6 +116,7 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
         device_fingerprint: "abcdef0123456789",
         messages: [],
         attachments: [],
+        dm_offers: [],
         mesh: MESH_READY,
         events: [],
       };
@@ -154,6 +156,7 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
       invite_uri: null,
       messages: [],
       attachments: [],
+      dm_offers: [],
       mesh: MESH_READY,
       events: [],
     })),
@@ -171,6 +174,7 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
       invite_uri: null,
       messages: [],
       attachments: [],
+      dm_offers: [],
       mesh: MESH_READY,
       events: [],
     })),
@@ -197,6 +201,10 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
     })),
     downloadChannelAttachment: vi.fn(async () => {}),
     cancelChannelAttachment: vi.fn(async () => {}),
+    sendChannelDmOffer: vi.fn(async () => {}),
+    dismissChannelDmOffer: vi.fn(async () => {}),
+    sendGroupDmOffer: vi.fn(async () => {}),
+    dismissGroupDmOffer: vi.fn(async () => {}),
   };
 }
 

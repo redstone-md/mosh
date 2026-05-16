@@ -67,7 +67,7 @@ import {
   readFileAsBase64,
   streamingMediaSrc,
 } from "./attachments";
-import type { AttachmentDescriptor } from "./native/native-messaging-gateway";
+import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
 
 interface AttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
@@ -76,6 +76,18 @@ interface AttachmentApi {
   readonly onDownload: (attachmentId: string) => void;
   readonly onCancel: (attachmentId: string) => void;
   readonly onOpen: (descriptor: AttachmentDescriptor) => void;
+}
+
+type PendingDmOffer = DmOffer & {
+  readonly kind: "channel" | "group";
+  readonly host: string;
+};
+
+interface PeerActions {
+  readonly ownFingerprint: string;
+  readonly offered: ReadonlySet<string>;
+  readonly busy: boolean;
+  readonly onMessage: (fingerprint: string) => void;
 }
 
 const AUTO_POLL_MS = 1000;
@@ -125,6 +137,9 @@ export function PrivateDmScreen({
     { descriptor: AttachmentDescriptor; src: string } | null
   >(null);
   const [pendingOpen, setPendingOpen] = useState<AttachmentDescriptor | null>(null);
+  const [offeredFingerprints, setOfferedFingerprints] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
@@ -430,6 +445,72 @@ export function PrivateDmScreen({
     });
   };
 
+  // Initiate a private DM with a member seen in a channel or group: mint an
+  // invite and publish it as an offer the targeted peer can accept.
+  const offerDm = (targetFingerprint: string) => {
+    if (!active || active.type === "dm" || offeredFingerprints.has(targetFingerprint)) {
+      return;
+    }
+    const target = active;
+    void run(async () => {
+      const invite = await gateway.createPrivateInvite(requestBase);
+      if (target.type === "channel") {
+        await gateway.sendChannelDmOffer(target.name, targetFingerprint, invite.invite_uri);
+      } else {
+        await gateway.sendGroupDmOffer(target.id, targetFingerprint, invite.invite_uri);
+      }
+      setOfferedFingerprints((prev) => new Set(prev).add(targetFingerprint));
+      setActive({ type: "dm", id: invite.session_id });
+      setShowSetup(false);
+      await refresh(true);
+    });
+  };
+
+  const acceptDmOffer = (offer: PendingDmOffer) => {
+    void run(async () => {
+      const snapshot = await gateway.acceptPrivateInvite({
+        ...requestBase,
+        invite_uri: offer.invite_uri,
+      });
+      if (offer.kind === "channel") {
+        await gateway.dismissChannelDmOffer(offer.host, offer.offer_id);
+      } else {
+        await gateway.dismissGroupDmOffer(offer.host, offer.offer_id);
+      }
+      setActive({ type: "dm", id: snapshot.session_id });
+      setShowSetup(false);
+      await refresh(true);
+    });
+  };
+
+  const dismissDmOffer = (offer: PendingDmOffer) => {
+    void run(async () => {
+      if (offer.kind === "channel") {
+        await gateway.dismissChannelDmOffer(offer.host, offer.offer_id);
+      } else {
+        await gateway.dismissGroupDmOffer(offer.host, offer.offer_id);
+      }
+      await refresh(true);
+    });
+  };
+
+  const pendingOffers: PendingDmOffer[] = [
+    ...channels.flatMap((channel) =>
+      channel.dm_offers.map((offer) => ({
+        ...offer,
+        kind: "channel" as const,
+        host: channel.name,
+      })),
+    ),
+    ...groups.flatMap((group) =>
+      group.dm_offers.map((offer) => ({
+        ...offer,
+        kind: "group" as const,
+        host: group.group_id,
+      })),
+    ),
+  ];
+
   const activeSession =
     active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
   const activeChannel =
@@ -527,11 +608,14 @@ export function PrivateDmScreen({
           sessions={sessions}
           channels={channels}
           groups={groups}
+          offers={pendingOffers}
           active={active}
           onSelect={(item) => {
             setActive(item);
             setShowSetup(false);
           }}
+          onAcceptOffer={acceptDmOffer}
+          onDismissOffer={dismissDmOffer}
           onNew={() => {
             setShowSetup(true);
             setActive(null);
@@ -579,6 +663,12 @@ export function PrivateDmScreen({
               composer={composer}
               busy={busy}
               attachments={attachmentApi}
+              peer={{
+                ownFingerprint: activeChannel.device_fingerprint,
+                offered: offeredFingerprints,
+                busy,
+                onMessage: offerDm,
+              }}
               onComposer={setComposer}
               onSend={sendMessage}
               onClose={closeActive}
@@ -589,6 +679,12 @@ export function PrivateDmScreen({
               composer={composer}
               busy={busy}
               attachments={attachmentApi}
+              peer={{
+                ownFingerprint: activeGroup.device_fingerprint,
+                offered: offeredFingerprints,
+                busy,
+                onMessage: offerDm,
+              }}
               onComposer={setComposer}
               onSend={sendMessage}
               onClose={closeActive}
@@ -652,15 +748,21 @@ function SessionRail({
   sessions,
   channels,
   groups,
+  offers,
   active,
   onSelect,
+  onAcceptOffer,
+  onDismissOffer,
   onNew,
 }: {
   sessions: readonly SessionSnapshot[];
   channels: readonly ChannelSnapshot[];
   groups: readonly GroupSnapshot[];
+  offers: readonly PendingDmOffer[];
   active: ActiveItem | null;
   onSelect: (item: ActiveItem) => void;
+  onAcceptOffer: (offer: PendingDmOffer) => void;
+  onDismissOffer: (offer: PendingDmOffer) => void;
   onNew: () => void;
 }) {
   return (
@@ -670,6 +772,15 @@ function SessionRail({
       </button>
       <div className="rail-divider" />
       <div className="rail-list">
+        {offers.map((offer) => (
+          <OfferRailItem
+            key={`offer-${offer.offer_id}`}
+            offer={offer}
+            onAccept={() => onAcceptOffer(offer)}
+            onDismiss={() => onDismissOffer(offer)}
+          />
+        ))}
+        {offers.length > 0 ? <div className="rail-divider" /> : null}
         {sessions.map((session) => (
           <SessionRailItem
             key={`dm-${session.session_id}`}
@@ -700,6 +811,42 @@ function SessionRail({
         ))}
       </div>
     </aside>
+  );
+}
+
+function OfferRailItem({
+  offer,
+  onAccept,
+  onDismiss,
+}: {
+  offer: PendingDmOffer;
+  onAccept: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="rail-offer">
+      <button
+        type="button"
+        className="rail-item rail-offer-accept"
+        onClick={onAccept}
+        title={`${offer.from_device} wants to chat — accept`}
+        aria-label={`Accept chat invite from ${offer.from_device}`}
+      >
+        <Avatar name={offer.from_device} />
+        <span className="rail-offer-badge" aria-hidden="true">
+          <IconMessageCircle size={10} />
+        </span>
+      </button>
+      <button
+        type="button"
+        className="rail-offer-dismiss"
+        onClick={onDismiss}
+        title="Dismiss invite"
+        aria-label={`Dismiss invite from ${offer.from_device}`}
+      >
+        <IconX size={10} />
+      </button>
+    </div>
   );
 }
 
@@ -1275,6 +1422,7 @@ function ActiveChannelChat(props: {
   composer: string;
   busy: boolean;
   attachments: AttachmentApi;
+  peer: PeerActions;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onClose: () => void;
@@ -1303,7 +1451,11 @@ function ActiveChannelChat(props: {
       <PublicNotice />
 
       <ChatDropZone disabled={props.busy} onAttach={props.attachments.onSend}>
-        <ChannelChatList messages={props.channel.messages} attachments={props.attachments} />
+        <ChannelChatList
+          messages={props.channel.messages}
+          attachments={props.attachments}
+          peer={props.peer}
+        />
       </ChatDropZone>
 
       <Composer
@@ -1322,6 +1474,7 @@ function ActiveGroupChat(props: {
   composer: string;
   busy: boolean;
   attachments: AttachmentApi;
+  peer: PeerActions;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onClose: () => void;
@@ -1375,7 +1528,11 @@ function ActiveGroupChat(props: {
       <GroupNotice />
 
       <ChatDropZone disabled={!ready || props.busy} onAttach={props.attachments.onSend}>
-        <GroupChatList messages={props.group.messages} attachments={props.attachments} />
+        <GroupChatList
+          messages={props.group.messages}
+          attachments={props.attachments}
+          peer={props.peer}
+        />
       </ChatDropZone>
 
       <Composer
@@ -1443,12 +1600,66 @@ function GroupNotice() {
   );
 }
 
+/** A channel/group sender's name; clicking a peer's name offers a DM. */
+function PeerNickname({
+  name,
+  fingerprint,
+  peer,
+}: {
+  name: string;
+  fingerprint: string;
+  peer: PeerActions;
+}) {
+  const [open, setOpen] = useState(false);
+  if (fingerprint === peer.ownFingerprint) {
+    return <strong>{name}</strong>;
+  }
+  const alreadyOffered = peer.offered.has(fingerprint);
+  return (
+    <span className="nick-anchor">
+      <button
+        type="button"
+        className="nick-button"
+        onClick={() => setOpen((value) => !value)}
+      >
+        {name}
+      </button>
+      {open ? (
+        <>
+          <div
+            className="nick-popover-backdrop"
+            aria-hidden="true"
+            onClick={() => setOpen(false)}
+          />
+          <div className="nick-popover" role="dialog" aria-label={`Actions for ${name}`}>
+            <div className="nick-popover-name">{name}</div>
+            <button
+              type="button"
+              className="btn btn-primary btn-block"
+              disabled={alreadyOffered || peer.busy}
+              onClick={() => {
+                peer.onMessage(fingerprint);
+                setOpen(false);
+              }}
+            >
+              <IconMessageCircle size={13} />
+              {alreadyOffered ? "Invite sent" : "Message"}
+            </button>
+          </div>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
 function GroupChatList({
   messages,
   attachments,
+  peer,
 }: {
   messages: readonly GroupMessage[];
   attachments: AttachmentApi;
+  peer: PeerActions;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
 
@@ -1470,6 +1681,7 @@ function GroupChatList({
         <GroupMessageRow
           message={message}
           attachments={attachments}
+          peer={peer}
           key={`${message.from_fingerprint}-${index}`}
         />
       ))}
@@ -1481,16 +1693,22 @@ function GroupChatList({
 function GroupMessageRow({
   message,
   attachments,
+  peer,
 }: {
   message: GroupMessage;
   attachments: AttachmentApi;
+  peer: PeerActions;
 }) {
   return (
     <article className="message-row">
       <Avatar name={message.from_device} />
       <div className="message-body">
         <div className="message-meta">
-          <strong>{message.from_device}</strong>
+          <PeerNickname
+            name={message.from_device}
+            fingerprint={message.from_fingerprint}
+            peer={peer}
+          />
           <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
           <code>MLS</code>
         </div>
@@ -1648,9 +1866,11 @@ function DmMessageRow({
 function ChannelChatList({
   messages,
   attachments,
+  peer,
 }: {
   messages: readonly ChannelMessage[];
   attachments: AttachmentApi;
+  peer: PeerActions;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
 
@@ -1672,6 +1892,7 @@ function ChannelChatList({
         <ChannelMessageRow
           message={message}
           attachments={attachments}
+          peer={peer}
           key={`${message.from_fingerprint}-${index}`}
         />
       ))}
@@ -1683,16 +1904,22 @@ function ChannelChatList({
 function ChannelMessageRow({
   message,
   attachments,
+  peer,
 }: {
   message: ChannelMessage;
   attachments: AttachmentApi;
+  peer: PeerActions;
 }) {
   return (
     <article className="message-row">
       <Avatar name={message.from_device} />
       <div className="message-body">
         <div className="message-meta">
-          <strong>{message.from_device}</strong>
+          <PeerNickname
+            name={message.from_device}
+            fingerprint={message.from_fingerprint}
+            peer={peer}
+          />
           <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
         </div>
         {message.body ? <p>{message.body}</p> : null}

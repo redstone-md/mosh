@@ -28,6 +28,10 @@ const PRIVATE_GROUP_CANCEL_ATTACHMENT_COMMAND = "private_group_cancel_attachment
 const CHANNEL_SEND_ATTACHMENT_COMMAND = "channel_send_attachment";
 const CHANNEL_DOWNLOAD_ATTACHMENT_COMMAND = "channel_download_attachment";
 const CHANNEL_CANCEL_ATTACHMENT_COMMAND = "channel_cancel_attachment";
+const CHANNEL_SEND_DM_OFFER_COMMAND = "channel_send_dm_offer";
+const CHANNEL_DISMISS_DM_OFFER_COMMAND = "channel_dismiss_dm_offer";
+const PRIVATE_GROUP_SEND_DM_OFFER_COMMAND = "private_group_send_dm_offer";
+const PRIVATE_GROUP_DISMISS_DM_OFFER_COMMAND = "private_group_dismiss_dm_offer";
 
 export interface DiagnosticsSnapshot {
   readonly app_name: string;
@@ -126,6 +130,14 @@ export interface AttachmentSendResult {
   readonly content_hash: string;
 }
 
+export interface DmOffer {
+  readonly offer_id: string;
+  readonly from_device: string;
+  readonly from_fingerprint: string;
+  readonly target_fingerprint: string;
+  readonly invite_uri: string;
+}
+
 export interface ChatMessage {
   readonly from_device: string;
   readonly body: string;
@@ -207,6 +219,7 @@ export interface ChannelSnapshot {
   readonly device_fingerprint: string;
   readonly messages: readonly ChannelMessage[];
   readonly attachments: readonly AttachmentView[];
+  readonly dm_offers: readonly DmOffer[];
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
 }
@@ -267,6 +280,7 @@ export interface GroupSnapshot {
   readonly invite_uri: string | null;
   readonly messages: readonly GroupMessage[];
   readonly attachments: readonly AttachmentView[];
+  readonly dm_offers: readonly DmOffer[];
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
 }
@@ -332,6 +346,18 @@ export interface NativeMessagingGateway {
   ): Promise<AttachmentSendResult>;
   downloadChannelAttachment(name: string, attachmentId: string): Promise<void>;
   cancelChannelAttachment(name: string, attachmentId: string): Promise<void>;
+  sendChannelDmOffer(
+    name: string,
+    targetFingerprint: string,
+    inviteUri: string,
+  ): Promise<void>;
+  dismissChannelDmOffer(name: string, offerId: string): Promise<void>;
+  sendGroupDmOffer(
+    groupId: string,
+    targetFingerprint: string,
+    inviteUri: string,
+  ): Promise<void>;
+  dismissGroupDmOffer(groupId: string, offerId: string): Promise<void>;
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {
@@ -484,6 +510,38 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
 
   async cancelChannelAttachment(name: string, attachmentId: string): Promise<void> {
     await invoke(CHANNEL_CANCEL_ATTACHMENT_COMMAND, { name, attachmentId });
+  }
+
+  async sendChannelDmOffer(
+    name: string,
+    targetFingerprint: string,
+    inviteUri: string,
+  ): Promise<void> {
+    await invoke(CHANNEL_SEND_DM_OFFER_COMMAND, {
+      name,
+      targetFingerprint,
+      inviteUri,
+    });
+  }
+
+  async dismissChannelDmOffer(name: string, offerId: string): Promise<void> {
+    await invoke(CHANNEL_DISMISS_DM_OFFER_COMMAND, { name, offerId });
+  }
+
+  async sendGroupDmOffer(
+    groupId: string,
+    targetFingerprint: string,
+    inviteUri: string,
+  ): Promise<void> {
+    await invoke(PRIVATE_GROUP_SEND_DM_OFFER_COMMAND, {
+      groupId,
+      targetFingerprint,
+      inviteUri,
+    });
+  }
+
+  async dismissGroupDmOffer(groupId: string, offerId: string): Promise<void> {
+    await invoke(PRIVATE_GROUP_DISMISS_DM_OFFER_COMMAND, { groupId, offerId });
   }
 }
 

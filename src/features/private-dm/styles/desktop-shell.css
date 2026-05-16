@@ -180,6 +180,57 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .rail-dot-waiting { background: var(--warn); }
 .rail-dot-idle { background: var(--fg-3); }
 
+.rail-offer {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.rail-offer-accept {
+  box-shadow: inset 0 0 0 2px var(--moss);
+  animation: rail-offer-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes rail-offer-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 2px var(--moss); }
+  50% { box-shadow: inset 0 0 0 2px var(--moss), 0 0 8px var(--moss-glow); }
+}
+
+.rail-offer-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--moss);
+  color: var(--moss-ink);
+  box-shadow: 0 0 0 2.5px var(--bg-0);
+}
+
+.rail-offer-dismiss {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg-4);
+  color: var(--fg-2);
+  box-shadow: 0 0 0 2px var(--bg-0);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.rail-offer:hover .rail-offer-dismiss { opacity: 1; }
+.rail-offer-dismiss:hover { background: var(--danger); color: #fff; }
+
 .rail-channel {
   background: rgba(108,183,232,0.10);
   color: var(--info);
