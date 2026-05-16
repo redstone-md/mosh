@@ -232,9 +232,9 @@ impl AttachmentRuntime {
                 ciphertext_b64: encode(&ciphertext),
             });
         }
-        if transfer.served_chunks.len() as u64 >= transfer.manifest.chunk_count {
-            transfer.state = TransferState::Complete;
-        }
+        // The outgoing transfer is never auto-completed: there is no receiver
+        // ack, so it must stay Active to keep re-serving chunks that were
+        // dropped in transit. It is dropped when the host session closes.
         Ok(frames)
     }
 
