@@ -8,12 +8,21 @@ import {
   IconRefresh,
   IconX,
 } from "@tabler/icons-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type {
   AttachmentDescriptor,
   AttachmentView,
 } from "./native/native-messaging-gateway";
+
+export function isViewableMedia(mime: string): boolean {
+  return (
+    mime.startsWith("image/") ||
+    mime.startsWith("video/") ||
+    mime.startsWith("audio/")
+  );
+}
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 const THUMBNAIL_MAX_EDGE = 320;
@@ -196,18 +205,22 @@ export function AttachmentCard({
   busy,
   onDownload,
   onCancel,
+  onOpen,
 }: {
   descriptor: AttachmentDescriptor;
   view: AttachmentView | undefined;
   busy: boolean;
   onDownload: (attachmentId: string) => void;
   onCancel: (attachmentId: string) => void;
+  onOpen: (descriptor: AttachmentDescriptor) => void;
 }) {
   const id = descriptor.attachment_id;
   const outgoing = view?.direction === "outgoing";
   const state = view?.state ?? (outgoing ? "available" : "offered");
   const isImage = descriptor.mime.startsWith("image/");
   const isVideo = descriptor.mime.startsWith("video/");
+  const isAudio = descriptor.mime.startsWith("audio/");
+  const viewable = isImage || isVideo || isAudio;
   const hasPreview = Boolean(descriptor.thumbnail_b64) && (isImage || isVideo);
   const percent = progressPercent(view);
 
@@ -287,7 +300,12 @@ export function AttachmentCard({
   if (hasPreview) {
     return (
       <div className={`attachment-card attachment-card-media attachment-card-${state}`}>
-        <div className="attachment-preview">
+        <button
+          type="button"
+          className="attachment-preview"
+          aria-label={`Open ${descriptor.file_name}`}
+          onClick={() => onOpen(descriptor)}
+        >
           <img
             src={`data:image/jpeg;base64,${descriptor.thumbnail_b64}`}
             alt={descriptor.file_name}
@@ -297,7 +315,7 @@ export function AttachmentCard({
               <IconPlayerPlayFilled size={20} />
             </span>
           ) : null}
-        </div>
+        </button>
         <div className="attachment-bar">
           <div className="attachment-info">
             <strong className="attachment-name" title={descriptor.file_name}>
@@ -314,9 +332,20 @@ export function AttachmentCard({
 
   return (
     <div className={`attachment-card attachment-card-${state}`}>
-      <div className="attachment-thumb">
-        {state === "failed" ? <IconFileAlert size={22} /> : <IconFile size={22} />}
-      </div>
+      {viewable ? (
+        <button
+          type="button"
+          className="attachment-thumb attachment-thumb-button"
+          aria-label={`Open ${descriptor.file_name}`}
+          onClick={() => onOpen(descriptor)}
+        >
+          <IconPlayerPlayFilled size={20} />
+        </button>
+      ) : (
+        <div className="attachment-thumb">
+          {state === "failed" ? <IconFileAlert size={22} /> : <IconFile size={22} />}
+        </div>
+      )}
       <div className="attachment-info">
         <strong className="attachment-name" title={descriptor.file_name}>
           {descriptor.file_name}
@@ -325,6 +354,71 @@ export function AttachmentCard({
         {progressBar}
       </div>
       {actions}
+    </div>
+  );
+}
+
+/** Full-screen in-app viewer for a downloaded image, video, or audio file. */
+export function MediaViewer({
+  descriptor,
+  path,
+  onClose,
+}: {
+  descriptor: AttachmentDescriptor;
+  path: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const src = convertFileSrc(path);
+  const mime = descriptor.mime;
+  const isImage = mime.startsWith("image/");
+  const isVideo = mime.startsWith("video/");
+  const isAudio = mime.startsWith("audio/");
+
+  return (
+    <div
+      className="media-viewer"
+      role="dialog"
+      aria-modal="true"
+      aria-label={descriptor.file_name}
+      onClick={onClose}
+    >
+      <button
+        type="button"
+        className="media-viewer-close"
+        aria-label="Close viewer"
+        onClick={onClose}
+      >
+        <IconX size={18} />
+      </button>
+      <div className="media-viewer-stage" onClick={(event) => event.stopPropagation()}>
+        {isImage ? (
+          <img className="media-viewer-image" src={src} alt={descriptor.file_name} />
+        ) : isVideo ? (
+          <video className="media-viewer-video" src={src} controls autoPlay />
+        ) : isAudio ? (
+          <div className="media-viewer-audio">
+            <IconPlayerPlayFilled size={32} />
+            <strong>{descriptor.file_name}</strong>
+            <audio src={src} controls autoPlay />
+          </div>
+        ) : (
+          <div className="media-viewer-audio">
+            <IconFile size={32} />
+            <strong>{descriptor.file_name}</strong>
+          </div>
+        )}
+      </div>
+      <div className="media-viewer-caption">{descriptor.file_name}</div>
     </div>
   );
 }

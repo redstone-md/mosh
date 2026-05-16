@@ -290,6 +290,32 @@
   align-items: center;
   max-height: 260px;
   overflow: hidden;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.attachment-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(11, 12, 13, 0);
+  transition: background 0.14s ease;
+}
+
+.attachment-preview:hover::after {
+  background: rgba(11, 12, 13, 0.18);
+}
+
+.attachment-thumb-button {
+  border: 0;
+  cursor: pointer;
+  color: var(--moss);
+  transition: background 0.14s ease;
+}
+
+.attachment-thumb-button:hover {
+  background: var(--bg-4);
 }
 
 .attachment-preview img {
@@ -319,6 +345,91 @@
 }
 
 .attachment-bar .attachment-info { flex: 1; min-width: 0; }
+
+/* ── In-app media viewer ─────────────────────────────────────── */
+
+.media-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 48px 32px 32px;
+  background: rgba(8, 9, 10, 0.92);
+  backdrop-filter: blur(6px);
+  animation: media-viewer-in 0.16s ease both;
+}
+
+@keyframes media-viewer-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.media-viewer-close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.media-viewer-close:hover {
+  background: var(--bg-3);
+  color: var(--fg-1);
+}
+
+.media-viewer-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 92vw;
+  max-height: 82vh;
+}
+
+.media-viewer-image,
+.media-viewer-video {
+  max-width: 92vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--bg-0);
+}
+
+.media-viewer-audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 40px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-2);
+  color: var(--moss);
+}
+
+.media-viewer-audio strong {
+  color: var(--fg-1);
+  font-size: 13px;
+}
+
+.media-viewer-caption {
+  max-width: 80vw;
+  color: var(--fg-2);
+  font-size: 12.5px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
 
 .attachment-thumb {
   width: 40px;

@@ -59,10 +59,12 @@ import {
 import {
   AttachmentCard,
   AttachmentPicker,
+  MediaViewer,
   createThumbnail,
   isAttachmentTooLarge,
   readFileAsBase64,
 } from "./attachments";
+import type { AttachmentDescriptor } from "./native/native-messaging-gateway";
 
 interface AttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
@@ -70,6 +72,7 @@ interface AttachmentApi {
   readonly onSend: (file: File) => void;
   readonly onDownload: (attachmentId: string) => void;
   readonly onCancel: (attachmentId: string) => void;
+  readonly onOpen: (descriptor: AttachmentDescriptor) => void;
 }
 
 const AUTO_POLL_MS = 1000;
@@ -115,6 +118,10 @@ export function PrivateDmScreen({
   const [error, setError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
+  const [viewer, setViewer] = useState<
+    { descriptor: AttachmentDescriptor; path: string } | null
+  >(null);
+  const [pendingOpen, setPendingOpen] = useState<AttachmentDescriptor | null>(null);
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
@@ -433,12 +440,44 @@ export function PrivateDmScreen({
     activeChannel?.attachments ??
     activeGroup?.attachments ??
     [];
+  const attachmentViews = new Map(
+    activeAttachments.map((view) => [view.attachment_id, view]),
+  );
+
+  const openAttachment = (descriptor: AttachmentDescriptor) => {
+    const view = attachmentViews.get(descriptor.attachment_id);
+    if (view?.local_path) {
+      setViewer({ descriptor, path: view.local_path });
+      return;
+    }
+    // Not on disk yet: download, then open once the file lands.
+    setPendingOpen(descriptor);
+    downloadAttachment(descriptor.attachment_id);
+  };
+
+  // Auto-open the viewer when a click-to-open download finishes.
+  useEffect(() => {
+    if (!pendingOpen) {
+      return;
+    }
+    const view = activeAttachments.find(
+      (candidate) => candidate.attachment_id === pendingOpen.attachment_id,
+    );
+    if (view?.local_path) {
+      setViewer({ descriptor: pendingOpen, path: view.local_path });
+      setPendingOpen(null);
+    } else if (view && (view.state === "failed" || view.state === "cancelled")) {
+      setPendingOpen(null);
+    }
+  }, [activeAttachments, pendingOpen]);
+
   const attachmentApi: AttachmentApi = {
-    views: new Map(activeAttachments.map((view) => [view.attachment_id, view])),
+    views: attachmentViews,
     busy,
     onSend: sendAttachment,
     onDownload: downloadAttachment,
     onCancel: cancelAttachment,
+    onOpen: openAttachment,
   };
 
   return (
@@ -581,6 +620,14 @@ export function PrivateDmScreen({
           ) : null}
         </aside>
       </div>
+
+      {viewer ? (
+        <MediaViewer
+          descriptor={viewer.descriptor}
+          path={viewer.path}
+          onClose={() => setViewer(null)}
+        />
+      ) : null}
     </main>
   );
 }
@@ -1439,6 +1486,7 @@ function GroupMessageRow({
             busy={attachments.busy}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
+            onOpen={attachments.onOpen}
           />
         ) : null}
         <div className="message-seal">
@@ -1569,6 +1617,7 @@ function DmMessageRow({
             busy={attachments.busy}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
+            onOpen={attachments.onOpen}
           />
         ) : null}
         <div className="message-seal">
@@ -1638,6 +1687,7 @@ function ChannelMessageRow({
             busy={attachments.busy}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
+            onOpen={attachments.onOpen}
           />
         ) : null}
       </div>
