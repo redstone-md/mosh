@@ -14,7 +14,7 @@ use crate::adapters::moss_ffi::{
     MossNodeConfig, MossReceivedMessage,
 };
 use crate::adapters::private_dm_runtime::{
-    AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, MeshInfo,
+    AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent,
 };
 
@@ -75,6 +75,7 @@ pub struct GroupSnapshot {
     pub invite_uri: Option<String>,
     pub messages: Vec<GroupMessage>,
     pub attachments: Vec<AttachmentView>,
+    pub dm_offers: Vec<DmOffer>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
 }
@@ -193,6 +194,11 @@ enum ControlEnvelope {
         from_fingerprint: String,
         manifest_ciphertext_b64: String,
     },
+    /// A private-DM invitation aimed at one group member.
+    DmOffer {
+        group_id: String,
+        offer: DmOffer,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -263,6 +269,7 @@ struct GroupSession {
     attachment_store: Arc<AttachmentStore>,
     attachments: AttachmentRuntime,
     attachment_slots: HashMap<String, AttachmentSlot>,
+    dm_offers: Vec<DmOffer>,
 }
 
 impl PrivateGroupRuntime {
@@ -327,6 +334,7 @@ impl PrivateGroupRuntime {
             attachment_store: Arc::clone(&self.attachment_store),
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            dm_offers: Vec::new(),
         };
 
         self.groups.insert(group_id.clone(), session);
@@ -392,6 +400,7 @@ impl PrivateGroupRuntime {
             attachment_store: Arc::clone(&self.attachment_store),
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            dm_offers: Vec::new(),
         };
         self.groups.insert(invite.group_id.clone(), session);
         self.poll(&invite.group_id)
@@ -440,6 +449,50 @@ impl PrivateGroupRuntime {
             .get_mut(group_id)
             .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
         session.cancel_attachment(attachment_id)
+    }
+
+    /// Publishes a private-DM invitation aimed at one group member.
+    pub fn send_dm_offer(
+        &mut self,
+        group_id: &str,
+        target_fingerprint: String,
+        invite_uri: String,
+    ) -> Result<(), PrivateGroupError> {
+        let session = self
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+        let offer = DmOffer {
+            offer_id: format!(
+                "offer-{}",
+                &crate::adapters::attachment_crypto::sha256_hex(invite_uri.as_bytes())[..16]
+            ),
+            from_device: session.display_name.clone(),
+            from_fingerprint: session.device_fingerprint.clone(),
+            target_fingerprint,
+            invite_uri,
+        };
+        publish_json(
+            &session.node,
+            &session.control_channel,
+            &ControlEnvelope::DmOffer {
+                group_id: session.group_id.clone(),
+                offer,
+            },
+        )
+    }
+
+    pub fn dismiss_dm_offer(
+        &mut self,
+        group_id: &str,
+        offer_id: &str,
+    ) -> Result<(), PrivateGroupError> {
+        let session = self
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+        session.dm_offers.retain(|offer| offer.offer_id != offer_id);
+        Ok(())
     }
 
     /// Serves a byte range for streaming playback of a group attachment.
@@ -765,6 +818,20 @@ impl GroupSession {
                 let manifest: AttachmentManifest = decode_json(&manifest_json)?;
                 self.accept_incoming_manifest(from_device, from_fingerprint, manifest)
             }
+            ControlEnvelope::DmOffer { group_id, offer }
+                if self.group_id == group_id
+                    && offer.target_fingerprint == self.device_fingerprint
+                    && offer.from_fingerprint != self.device_fingerprint =>
+            {
+                if !self
+                    .dm_offers
+                    .iter()
+                    .any(|existing| existing.offer_id == offer.offer_id)
+                {
+                    self.dm_offers.push(offer);
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -1020,6 +1087,7 @@ impl GroupSession {
             invite_uri: self.invite_uri.clone(),
             messages: self.messages.clone(),
             attachments: self.attachment_views(),
+            dm_offers: self.dm_offers.clone(),
             mesh: self.mesh_info(),
             events: snapshot_event_log()
                 .into_iter()

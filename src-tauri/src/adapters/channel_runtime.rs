@@ -14,7 +14,7 @@ use crate::adapters::moss_ffi::{
     MossNodeConfig, MossReceivedMessage,
 };
 use crate::adapters::private_dm_runtime::{
-    AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, MeshInfo,
+    AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent,
 };
 
@@ -51,6 +51,7 @@ pub struct ChannelSnapshot {
     pub device_fingerprint: String,
     pub messages: Vec<ChannelMessage>,
     pub attachments: Vec<AttachmentView>,
+    pub dm_offers: Vec<DmOffer>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
 }
@@ -74,6 +75,10 @@ enum ChannelBlobEnvelope {
     Chunk {
         from_fingerprint: String,
         frame: ChunkFrame,
+    },
+    /// A private-DM invitation aimed at one channel member.
+    DmOffer {
+        offer: DmOffer,
     },
 }
 
@@ -170,6 +175,7 @@ struct ChannelSession {
     attachment_store: Arc<AttachmentStore>,
     attachments: AttachmentRuntime,
     attachment_slots: HashMap<String, AttachmentSlot>,
+    dm_offers: Vec<DmOffer>,
 }
 
 impl ChannelRuntime {
@@ -226,10 +232,51 @@ impl ChannelRuntime {
             attachment_store: Arc::clone(&self.attachment_store),
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            dm_offers: Vec::new(),
         };
 
         self.channels.insert(normalized.clone(), session);
         self.poll(&normalized)
+    }
+
+    /// Publishes a private-DM invitation aimed at one channel member.
+    pub fn send_dm_offer(
+        &mut self,
+        name: &str,
+        target_fingerprint: String,
+        invite_uri: String,
+    ) -> Result<(), ChannelRuntimeError> {
+        let normalized = normalize_name(name)?;
+        let session = self
+            .channels
+            .get_mut(&normalized)
+            .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+        let offer = DmOffer {
+            offer_id: format!("offer-{}", &sha256_hex(invite_uri.as_bytes())[..16]),
+            from_device: session.display_name.clone(),
+            from_fingerprint: session.device_fingerprint.clone(),
+            target_fingerprint,
+            invite_uri,
+        };
+        publish_json(
+            &session.node,
+            &session.blob_topic,
+            &ChannelBlobEnvelope::DmOffer { offer },
+        )
+    }
+
+    pub fn dismiss_dm_offer(
+        &mut self,
+        name: &str,
+        offer_id: &str,
+    ) -> Result<(), ChannelRuntimeError> {
+        let normalized = normalize_name(name)?;
+        let session = self
+            .channels
+            .get_mut(&normalized)
+            .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+        session.dm_offers.retain(|offer| offer.offer_id != offer_id);
+        Ok(())
     }
 
     pub fn leave(&mut self, name: &str) -> Result<ChannelLeaveResult, ChannelRuntimeError> {
@@ -441,6 +488,19 @@ impl ChannelSession {
                         frame,
                     };
                     publish_json(&self.node, &self.blob_topic, &chunk)?;
+                }
+                Ok(())
+            }
+            ChannelBlobEnvelope::DmOffer { offer }
+                if offer.target_fingerprint == self.device_fingerprint
+                    && offer.from_fingerprint != self.device_fingerprint =>
+            {
+                if !self
+                    .dm_offers
+                    .iter()
+                    .any(|existing| existing.offer_id == offer.offer_id)
+                {
+                    self.dm_offers.push(offer);
                 }
                 Ok(())
             }
@@ -662,6 +722,7 @@ impl ChannelSession {
             device_fingerprint: self.device_fingerprint.clone(),
             messages: self.messages.clone(),
             attachments: self.attachment_views(),
+            dm_offers: self.dm_offers.clone(),
             mesh: self.mesh_info(),
             events: snapshot_event_log()
                 .into_iter()

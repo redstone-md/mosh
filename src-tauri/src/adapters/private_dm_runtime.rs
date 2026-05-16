@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 pub use contracts::{
     AcceptInviteRequest, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
-    AttachmentView, ChatMessage, CloseSessionResult, InviteCreated, MeshInfo,
+    AttachmentView, ChatMessage, CloseSessionResult, DmOffer, InviteCreated, MeshInfo,
     PrivateDmRuntimeError, SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent,
     StartSessionRequest,
 };

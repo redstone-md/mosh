@@ -570,6 +570,33 @@ fn channel_cancel_attachment(
 }
 
 #[tauri::command]
+fn channel_send_dm_offer(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+    target_fingerprint: String,
+    invite_uri: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .send_dm_offer(&name, target_fingerprint, invite_uri)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn channel_dismiss_dm_offer(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+    offer_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .dismiss_dm_offer(&name, &offer_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
 fn private_group_create(
     state: tauri::State<'_, PrivateGroupState>,
     request: CreateGroupRequest,
@@ -677,6 +704,33 @@ fn private_group_cancel_attachment(
     })
 }
 
+#[tauri::command]
+fn private_group_send_dm_offer(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+    target_fingerprint: String,
+    invite_uri: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .send_dm_offer(&group_id, target_fingerprint, invite_uri)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_group_dismiss_dm_offer(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+    offer_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .dismiss_dm_offer(&group_id, &offer_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -732,6 +786,8 @@ pub fn run() {
             channel_send_attachment,
             channel_download_attachment,
             channel_cancel_attachment,
+            channel_send_dm_offer,
+            channel_dismiss_dm_offer,
             private_group_create,
             private_group_join,
             private_group_send,
@@ -740,7 +796,9 @@ pub fn run() {
             private_group_close,
             private_group_send_attachment,
             private_group_download_attachment,
-            private_group_cancel_attachment
+            private_group_cancel_attachment,
+            private_group_send_dm_offer,
+            private_group_dismiss_dm_offer
         ])
         .run(tauri::generate_context!())
         .expect(RUN_ERROR);
