@@ -7,6 +7,7 @@ use adapters::channel_runtime::{
     ChannelLeaveResult, ChannelListSnapshot, ChannelRuntime, ChannelSendResult, ChannelSnapshot,
     JoinChannelRequest,
 };
+use adapters::attachment_runtime::StreamRange;
 use adapters::attachment_store::AttachmentStore;
 use adapters::moss_ffi::MossFfiRuntime;
 use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
@@ -358,6 +359,126 @@ fn load_attachment_store(app: &tauri::AppHandle) -> Arc<AttachmentStore> {
     Arc::new(store)
 }
 
+const STREAM_RESPONSE_WINDOW: u64 = 512 * 1024;
+const STREAM_DEADLINE: Duration = Duration::from_secs(30);
+const STREAM_POLL_INTERVAL: Duration = Duration::from_millis(60);
+
+/// Parses an HTTP `Range` header into a `(start, optional inclusive end)`.
+fn parse_range_header(header: Option<&tauri::http::HeaderValue>) -> (u64, Option<u64>) {
+    let Some(raw) = header.and_then(|value| value.to_str().ok()) else {
+        return (0, None);
+    };
+    let spec = raw.trim().strip_prefix("bytes=").unwrap_or("").trim();
+    let mut parts = spec.splitn(2, '-');
+    let start = parts
+        .next()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    let end = parts.next().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            trimmed.parse::<u64>().ok()
+        }
+    });
+    (start, end)
+}
+
+fn stream_range_once(
+    app: &tauri::AppHandle,
+    kind: &str,
+    host: &str,
+    attachment: &str,
+    start: u64,
+    end: u64,
+) -> Result<StreamRange, String> {
+    match kind {
+        "dm" => app
+            .state::<PrivateDmState>()
+            .with_runtime(|runtime| {
+                runtime
+                    .stream_attachment_range(host, attachment, start, end)
+                    .map_err(|error| error.to_string())
+            }),
+        "group" => app
+            .state::<PrivateGroupState>()
+            .with_runtime(|runtime| {
+                runtime
+                    .stream_attachment_range(host, attachment, start, end)
+                    .map_err(|error| error.to_string())
+            }),
+        "channel" => app
+            .state::<ChannelState>()
+            .with_runtime(|runtime| {
+                runtime
+                    .stream_attachment_range(host, attachment, start, end)
+                    .map_err(|error| error.to_string())
+            }),
+        _ => Err("unknown stream kind".to_string()),
+    }
+}
+
+fn stream_status_response(code: u16) -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(code)
+        .header("Access-Control-Allow-Origin", "*")
+        .body(Vec::new())
+        .expect("static stream response should build")
+}
+
+/// Serves a `moshmedia://` request by streaming an attachment's byte range,
+/// waiting for the covering chunks to arrive when they are not in yet.
+fn serve_media_stream(
+    app: &tauri::AppHandle,
+    request: &tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let path = request.uri().path().to_string();
+    let segments: Vec<&str> = path.trim_matches('/').splitn(3, '/').collect();
+    if segments.len() != 3 || segments.iter().any(|segment| segment.is_empty()) {
+        return stream_status_response(404);
+    }
+    let (kind, host, attachment) = (segments[0], segments[1], segments[2]);
+    let (start, end) = parse_range_header(request.headers().get(tauri::http::header::RANGE));
+    let request_end = match end {
+        Some(value) => (value + 1).min(start + STREAM_RESPONSE_WINDOW),
+        None => start + STREAM_RESPONSE_WINDOW,
+    };
+
+    let deadline = Instant::now() + STREAM_DEADLINE;
+    loop {
+        match stream_range_once(app, kind, host, attachment, start, request_end) {
+            Ok(StreamRange::Ready {
+                bytes,
+                total_size,
+                mime,
+            }) => {
+                let length = bytes.len() as u64;
+                let last = if length == 0 { start } else { start + length - 1 };
+                return tauri::http::Response::builder()
+                    .status(206)
+                    .header(tauri::http::header::CONTENT_TYPE, mime)
+                    .header(tauri::http::header::ACCEPT_RANGES, "bytes")
+                    .header(
+                        tauri::http::header::CONTENT_RANGE,
+                        format!("bytes {start}-{last}/{total_size}"),
+                    )
+                    .header(tauri::http::header::CONTENT_LENGTH, length.to_string())
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(bytes)
+                    .unwrap_or_else(|_| stream_status_response(500));
+            }
+            Ok(StreamRange::Pending { .. }) => {
+                if Instant::now() >= deadline {
+                    return stream_status_response(504);
+                }
+                std::thread::sleep(STREAM_POLL_INTERVAL);
+            }
+            Ok(StreamRange::Unknown) | Err(_) => return stream_status_response(404),
+        }
+    }
+}
+
 #[tauri::command]
 fn channel_join(
     state: tauri::State<'_, ChannelState>,
@@ -560,6 +681,13 @@ fn private_group_cancel_attachment(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .register_asynchronous_uri_scheme_protocol("moshmedia", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            std::thread::spawn(move || {
+                let response = serve_media_stream(&app, &request);
+                responder.respond(response);
+            });
+        })
         .setup(|app| {
             match MossFfiRuntime::load_from_app_handle(app.handle()) {
                 Ok(moss) => {

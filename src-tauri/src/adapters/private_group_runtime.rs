@@ -4,7 +4,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::attachment_runtime::{
-    AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest, CHUNK_SIZE,
+    AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest, StreamRange,
+    CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::{MlsCryptoError, MlsSessionCrypto};
@@ -439,6 +440,29 @@ impl PrivateGroupRuntime {
             .get_mut(group_id)
             .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
         session.cancel_attachment(attachment_id)
+    }
+
+    /// Serves a byte range for streaming playback of a group attachment.
+    pub fn stream_attachment_range(
+        &mut self,
+        group_id: &str,
+        attachment_id: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<StreamRange, PrivateGroupError> {
+        self.drain_inbound()?;
+        let session = self
+            .groups
+            .get_mut(group_id)
+            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+        if let Some(slot) = session.attachment_slots.get_mut(attachment_id) {
+            slot.download_requested = true;
+            slot.cancelled = false;
+        }
+        let _ = session.attachments.start_download(attachment_id);
+        let outcome = session.attachments.stream_range(attachment_id, start, end);
+        session.pump_attachment_requests();
+        Ok(outcome)
     }
 
     pub fn send(

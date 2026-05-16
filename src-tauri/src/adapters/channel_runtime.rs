@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::attachment_crypto::sha256_hex;
 use crate::adapters::attachment_runtime::{
-    AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest, CHUNK_SIZE,
+    AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest, StreamRange,
+    CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::moss_ffi::{
@@ -322,6 +323,30 @@ impl ChannelRuntime {
             .get_mut(&normalized)
             .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
         session.cancel_attachment(attachment_id)
+    }
+
+    /// Serves a byte range for streaming playback of a channel attachment.
+    pub fn stream_attachment_range(
+        &mut self,
+        name: &str,
+        attachment_id: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<StreamRange, ChannelRuntimeError> {
+        self.drain_inbound()?;
+        let normalized = normalize_name(name)?;
+        let session = self
+            .channels
+            .get_mut(&normalized)
+            .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+        if let Some(slot) = session.attachment_slots.get_mut(attachment_id) {
+            slot.download_requested = true;
+            slot.cancelled = false;
+        }
+        let _ = session.attachments.start_download(attachment_id);
+        let outcome = session.attachments.stream_range(attachment_id, start, end);
+        session.pump_attachment_requests();
+        Ok(outcome)
     }
 
     pub fn poll(&mut self, name: &str) -> Result<ChannelSnapshot, ChannelRuntimeError> {

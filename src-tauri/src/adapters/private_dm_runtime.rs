@@ -13,7 +13,7 @@ pub use contracts::{
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use crate::adapters::attachment_runtime::{
-    AttachmentManifest, AttachmentRuntime, ChunkOutcome, CHUNK_SIZE,
+    AttachmentManifest, AttachmentRuntime, ChunkOutcome, StreamRange, CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::MlsSessionCrypto;
@@ -246,6 +246,27 @@ impl PrivateDmRuntime {
     ) -> Result<(), PrivateDmRuntimeError> {
         let session = self.session_mut(session_id)?;
         session.cancel_attachment(attachment_id)
+    }
+
+    /// Serves a byte range for streaming playback, fetching the region ahead
+    /// of the sequential cursor when it has not arrived yet.
+    pub fn stream_attachment_range(
+        &mut self,
+        session_id: &str,
+        attachment_id: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<StreamRange, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        if let Some(slot) = session.attachment_slots.get_mut(attachment_id) {
+            slot.download_requested = true;
+            slot.cancelled = false;
+        }
+        let _ = session.attachments.start_download(attachment_id);
+        let outcome = session.attachments.stream_range(attachment_id, start, end);
+        session.pump_attachment_requests();
+        Ok(outcome)
     }
 
     pub fn poll_session(

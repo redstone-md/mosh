@@ -136,6 +136,24 @@ struct IncomingTransfer {
     state: TransferState,
     download_started: bool,
     request_cursor: u64,
+    /// When a streaming player asks for bytes the receiver does not have
+    /// yet, this chunk index is fetched ahead of the sequential cursor.
+    priority_chunk: Option<u64>,
+}
+
+/// Result of asking an incoming transfer for a byte range.
+#[derive(Debug)]
+pub enum StreamRange {
+    /// Every covering chunk is present; the decrypted slice is returned.
+    Ready {
+        bytes: Vec<u8>,
+        total_size: u64,
+        mime: String,
+    },
+    /// Some covering chunk is still missing; the download was nudged
+    /// toward it.
+    Pending { total_size: u64 },
+    Unknown,
 }
 
 pub struct AttachmentRuntime {
@@ -276,9 +294,66 @@ impl AttachmentRuntime {
                 state: TransferState::Active,
                 download_started: false,
                 request_cursor: 0,
+                priority_chunk: None,
             },
         );
         Ok(())
+    }
+
+    /// Returns decrypted bytes for [start, end) when every covering chunk is
+    /// in. Otherwise records a priority so the missing region is fetched
+    /// ahead of the sequential cursor and reports Pending.
+    pub fn stream_range(
+        &mut self,
+        attachment_id: &str,
+        start: u64,
+        end: u64,
+    ) -> StreamRange {
+        let Some(transfer) = self.incoming.get_mut(attachment_id) else {
+            return StreamRange::Unknown;
+        };
+        transfer.download_started = true;
+        let total = transfer.manifest.total_size;
+        let mime = transfer.manifest.mime.clone();
+        if total == 0 || start >= total {
+            return StreamRange::Ready {
+                bytes: Vec::new(),
+                total_size: total,
+                mime,
+            };
+        }
+        let end = end.min(total).max(start);
+        let chunk = u64::from(transfer.manifest.chunk_size);
+        let first = start / chunk;
+        let last = if end > start { (end - 1) / chunk } else { first };
+
+        let mut missing = None;
+        for index in first..=last {
+            if !transfer.chunks.contains_key(&index) {
+                missing = Some(index);
+                break;
+            }
+        }
+        if let Some(index) = missing {
+            transfer.priority_chunk = Some(index);
+            return StreamRange::Pending { total_size: total };
+        }
+
+        let mut assembled = Vec::new();
+        for index in first..=last {
+            assembled.extend_from_slice(&transfer.chunks[&index]);
+        }
+        let offset = (start - first * chunk) as usize;
+        let span = (end - start) as usize;
+        let slice = assembled
+            .get(offset..(offset + span).min(assembled.len()))
+            .unwrap_or(&[])
+            .to_vec();
+        StreamRange::Ready {
+            bytes: slice,
+            total_size: total,
+            mime,
+        }
     }
 
     /// Marks an incoming transfer as actively downloading. Until this is
@@ -302,6 +377,26 @@ impl AttachmentRuntime {
             return None;
         }
         let mut indices = Vec::new();
+        // A streaming player's requested region jumps the queue so playback
+        // is not blocked behind the sequential cursor.
+        if let Some(priority) = transfer.priority_chunk {
+            for index in priority..transfer.manifest.chunk_count {
+                if !transfer.chunks.contains_key(&index) {
+                    indices.push(index);
+                    if indices.len() >= MAX_REQUEST_BATCH {
+                        break;
+                    }
+                }
+            }
+            if indices.is_empty() {
+                transfer.priority_chunk = None;
+            } else {
+                return Some(ChunkRequest {
+                    attachment_id: attachment_id.to_string(),
+                    chunk_indices: indices,
+                });
+            }
+        }
         for index in 0..transfer.request_cursor {
             if !transfer.chunks.contains_key(&index) {
                 indices.push(index);
@@ -706,6 +801,56 @@ mod tests {
         receiver.ingest_chunk(&frames[0]).unwrap();
         let resume = receiver.next_chunk_request("a").unwrap();
         assert_eq!(resume.chunk_indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn stream_range_returns_pending_then_ready() {
+        let mut sender = AttachmentRuntime::new();
+        let mut receiver = AttachmentRuntime::new();
+        let bytes = payload((CHUNK_SIZE as usize) * 3 + 40);
+        let manifest = sender
+            .prepare_outgoing(
+                "a".to_string(),
+                "v.bin".to_string(),
+                "video/mp4".to_string(),
+                "fp".to_string(),
+                bytes.clone(),
+                None,
+            )
+            .unwrap();
+        receiver.register_incoming(manifest).unwrap();
+
+        // Nothing downloaded yet: a range read is pending and arms a priority.
+        let start = (CHUNK_SIZE as u64) * 2;
+        let end = start + 100;
+        assert!(matches!(
+            receiver.stream_range("a", start, end),
+            StreamRange::Pending { .. }
+        ));
+        let request = receiver.next_chunk_request("a").unwrap();
+        assert_eq!(request.chunk_indices.first().copied(), Some(2));
+
+        // Deliver every chunk, then the same range reads back exactly.
+        loop {
+            let Some(request) = receiver.next_chunk_request("a") else {
+                break;
+            };
+            for frame in sender.serve_chunks(&request).unwrap() {
+                let _ = receiver.ingest_chunk(&frame).unwrap();
+            }
+        }
+        match receiver.stream_range("a", start, end) {
+            StreamRange::Ready {
+                bytes: slice,
+                total_size,
+                mime,
+            } => {
+                assert_eq!(total_size, bytes.len() as u64);
+                assert_eq!(mime, "video/mp4");
+                assert_eq!(slice, &bytes[start as usize..end as usize]);
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
     }
 
     #[test]
