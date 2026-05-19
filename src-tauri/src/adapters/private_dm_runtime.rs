@@ -203,6 +203,7 @@ impl PrivateDmRuntime {
             from_device: session.device_id.clone(),
             body,
             attachment: None,
+            call_event: None,
         });
 
         Ok(SendMessageResult {
@@ -490,6 +491,7 @@ impl PrivateDmSession {
             from_device: envelope.from_device,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
             attachment: None,
+            call_event: None,
         });
 
         Ok(())
@@ -574,6 +576,7 @@ impl PrivateDmSession {
             from_device,
             body: String::new(),
             attachment: Some(descriptor),
+            call_event: None,
         });
         Ok(())
     }
@@ -629,6 +632,7 @@ impl PrivateDmSession {
             from_device: self.device_id.clone(),
             body: String::new(),
             attachment: Some(descriptor),
+            call_event: None,
         });
         Ok(AttachmentSendResult {
             session_id: self.session_id.clone(),
@@ -741,6 +745,8 @@ impl PrivateDmSession {
                     epoch_millis: event.epoch_millis,
                 })
                 .collect(),
+            pending_call: None,
+            active_call: None,
         }
     }
 

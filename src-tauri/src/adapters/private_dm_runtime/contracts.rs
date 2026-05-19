@@ -40,6 +40,10 @@ pub struct SessionSnapshot {
     pub attachments: Vec<AttachmentView>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_call: Option<PendingCall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_call: Option<ActiveCall>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,6 +118,42 @@ pub struct ChatMessage {
     pub body: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_event: Option<CallEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingCall {
+    pub call_id: String,
+    pub from_device: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveCall {
+    pub call_id: String,
+    /// "caller" or "callee" — drives the nonce direction bit on the frontend.
+    pub direction: String,
+    pub key_b64: String,
+    pub nonce_prefix_b64: String,
+    /// Unix millis when the call became Active. The frontend renders the
+    /// running timer from this anchor.
+    pub started_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallEvent {
+    /// "completed" or "missed".
+    pub kind: String,
+    pub duration_ms: u64,
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallStarted {
+    pub session_id: String,
+    pub call_id: String,
+    pub key_b64: String,
+    pub nonce_prefix_b64: String,
 }
 
 /// Immutable attachment metadata stamped onto the message log. Mutable
