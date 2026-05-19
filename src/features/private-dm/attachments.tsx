@@ -15,6 +15,7 @@ import type {
   AttachmentDescriptor,
   AttachmentView,
 } from "./native/native-messaging-gateway";
+import { VoiceMessage } from "./voice/VoiceMessage";
 
 export function isViewableMedia(mime: string): boolean {
   return (
@@ -227,6 +228,8 @@ export function AttachmentCard({
   descriptor,
   view,
   busy,
+  surface,
+  host,
   onDownload,
   onCancel,
   onOpen,
@@ -234,10 +237,23 @@ export function AttachmentCard({
   descriptor: AttachmentDescriptor;
   view: AttachmentView | undefined;
   busy: boolean;
+  surface: "dm" | "group" | "channel";
+  host: string;
   onDownload: (attachmentId: string) => void;
   onCancel: (attachmentId: string) => void;
   onOpen: (descriptor: AttachmentDescriptor) => void;
 }) {
+  if (descriptor.voice) {
+    return (
+      <VoiceMessage
+        descriptor={descriptor}
+        view={view}
+        surface={surface}
+        host={host}
+      />
+    );
+  }
+
   const id = descriptor.attachment_id;
   const outgoing = view?.direction === "outgoing";
   const state = view?.state ?? (outgoing ? "available" : "offered");

@@ -2,3 +2,4 @@
 @import "./features/private-dm/styles/desktop-shell.css";
 @import "./features/private-dm/styles/middle-column.css";
 @import "./features/private-dm/styles/chat-pane.css";
+@import "./features/private-dm/styles/voice.css";

@@ -68,11 +68,16 @@ import {
   streamingMediaSrc,
 } from "./attachments";
 import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
+import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
 
 interface AttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
   readonly busy: boolean;
+  readonly surface: "dm" | "group" | "channel";
+  readonly host: string;
   readonly onSend: (file: File) => void;
+  readonly onSendVoice: (voice: VoiceSend) => void;
+  readonly onVoiceError: (message: string) => void;
   readonly onDownload: (attachmentId: string) => void;
   readonly onCancel: (attachmentId: string) => void;
   readonly onOpen: (descriptor: AttachmentDescriptor) => void;
@@ -411,6 +416,51 @@ export function PrivateDmScreen({
     });
   };
 
+  const sendVoice = (voice: VoiceSend) => {
+    if (!active) {
+      return;
+    }
+    const target = active;
+    const fileName = voice.mime.includes("ogg")
+      ? "voice-message.ogg"
+      : "voice-message.webm";
+    const meta = { duration_ms: voice.durationMs, peaks_b64: voice.peaksB64 };
+    void run(async () => {
+      const dataBase64 = await readFileAsBase64(
+        new File([voice.blob], fileName, { type: voice.mime }),
+      );
+      if (target.type === "dm") {
+        await gateway.sendPrivateAttachment(
+          target.id,
+          fileName,
+          voice.mime,
+          dataBase64,
+          undefined,
+          meta,
+        );
+      } else if (target.type === "channel") {
+        await gateway.sendChannelAttachment(
+          target.name,
+          fileName,
+          voice.mime,
+          dataBase64,
+          undefined,
+          meta,
+        );
+      } else {
+        await gateway.sendGroupAttachment(
+          target.id,
+          fileName,
+          voice.mime,
+          dataBase64,
+          undefined,
+          meta,
+        );
+      }
+      await refresh(true);
+    });
+  };
+
   const downloadAttachment = (attachmentId: string) => {
     if (!active) {
       return;
@@ -568,10 +618,21 @@ export function PrivateDmScreen({
     }
   }, [activeAttachments, pendingOpen]);
 
+  const mediaSurface: "dm" | "group" | "channel" = active?.type ?? "dm";
+  const mediaHost = active
+    ? active.type === "channel"
+      ? active.name
+      : active.id
+    : "";
+
   const attachmentApi: AttachmentApi = {
     views: attachmentViews,
     busy,
+    surface: mediaSurface,
+    host: mediaHost,
     onSend: sendAttachment,
+    onSendVoice: sendVoice,
+    onVoiceError: setError,
     onDownload: downloadAttachment,
     onCancel: cancelAttachment,
     onOpen: openAttachment,
@@ -1411,6 +1472,8 @@ function ActiveDmChat(props: {
         onChange={props.onComposer}
         onSend={props.onSend}
         onAttach={props.attachments.onSend}
+        onSendVoice={props.attachments.onSendVoice}
+        onVoiceError={props.attachments.onVoiceError}
         disabled={!ready || props.busy}
       />
     </>
@@ -1463,6 +1526,8 @@ function ActiveChannelChat(props: {
         onChange={props.onComposer}
         onSend={props.onSend}
         onAttach={props.attachments.onSend}
+        onSendVoice={props.attachments.onSendVoice}
+        onVoiceError={props.attachments.onVoiceError}
         disabled={props.busy}
       />
     </>
@@ -1540,6 +1605,8 @@ function ActiveGroupChat(props: {
         onChange={props.onComposer}
         onSend={props.onSend}
         onAttach={props.attachments.onSend}
+        onSendVoice={props.attachments.onSendVoice}
+        onVoiceError={props.attachments.onVoiceError}
         disabled={!ready || props.busy}
       />
     </>
@@ -1718,6 +1785,8 @@ function GroupMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
+            surface={attachments.surface}
+            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
@@ -1849,6 +1918,8 @@ function DmMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
+            surface={attachments.surface}
+            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
@@ -1928,6 +1999,8 @@ function ChannelMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
+            surface={attachments.surface}
+            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
@@ -1943,6 +2016,8 @@ function Composer({
   onChange,
   onSend,
   onAttach,
+  onSendVoice,
+  onVoiceError,
   disabled,
 }: {
   value: string;
@@ -1950,6 +2025,8 @@ function Composer({
   onChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onAttach?: (file: File) => void;
+  onSendVoice?: (voice: VoiceSend) => void;
+  onVoiceError?: (message: string) => void;
 }) {
   const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
     if (disabled || !onAttach) {
@@ -1971,6 +2048,13 @@ function Composer({
             disabled={disabled}
             onPick={onAttach}
             ariaLabel={chatText.attachLabel}
+          />
+        ) : null}
+        {onSendVoice ? (
+          <VoiceComposer
+            disabled={disabled}
+            onSend={onSendVoice}
+            onError={onVoiceError ?? (() => {})}
           />
         ) : null}
         <input
