@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::attachment_runtime::VoiceMeta;
 use crate::adapters::mls_crypto::MlsCryptoError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +127,8 @@ pub struct AttachmentDescriptor {
     pub total_size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail_b64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceMeta>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

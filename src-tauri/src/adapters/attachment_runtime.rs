@@ -57,6 +57,17 @@ impl From<AttachmentCryptoError> for AttachmentRuntimeError {
 /// Carries the secret material and metadata for one attachment. Hosts send
 /// this over their confidential control path (MLS-encrypted for DM and
 /// groups, plaintext broadcast for public channels).
+/// Voice-message metadata carried alongside an audio attachment. Its presence
+/// is the sole marker that an attachment is a recorded voice message rather
+/// than a user-picked audio file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceMeta {
+    /// Recording length in milliseconds.
+    pub duration_ms: u32,
+    /// 64 amplitude buckets (one byte each, 0-255), base64-encoded.
+    pub peaks_b64: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentManifest {
     pub attachment_id: String,
@@ -69,6 +80,8 @@ pub struct AttachmentManifest {
     pub key_b64: String,
     pub nonce_prefix_b64: String,
     pub thumbnail_b64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceMeta>,
     pub from_fingerprint: String,
 }
 
@@ -867,11 +880,44 @@ mod tests {
             key_b64: encode(&[0u8; ATTACHMENT_KEY_LEN]),
             nonce_prefix_b64: encode(&[0u8; ATTACHMENT_NONCE_PREFIX_LEN]),
             thumbnail_b64: None,
+            voice: None,
             from_fingerprint: "fp".to_string(),
         };
         assert!(matches!(
             runtime.register_incoming(manifest),
             Err(AttachmentRuntimeError::ManifestMismatch(_))
         ));
+    }
+
+    #[test]
+    fn voice_meta_roundtrips_through_json() {
+        let meta = VoiceMeta {
+            duration_ms: 4200,
+            peaks_b64: "AAECAwQF".to_string(),
+        };
+        let json = serde_json::to_string(&meta).expect("serialize");
+        let back: VoiceMeta = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.duration_ms, 4200);
+        assert_eq!(back.peaks_b64, "AAECAwQF");
+    }
+
+    #[test]
+    fn manifest_without_voice_omits_the_field() {
+        let manifest = AttachmentManifest {
+            attachment_id: "a".into(),
+            content_hash: "h".into(),
+            file_name: "f".into(),
+            mime: "audio/webm".into(),
+            total_size: 1,
+            chunk_size: 1,
+            chunk_count: 1,
+            key_b64: "k".into(),
+            nonce_prefix_b64: "n".into(),
+            thumbnail_b64: None,
+            voice: None,
+            from_fingerprint: "fp".into(),
+        };
+        let json = serde_json::to_string(&manifest).expect("serialize");
+        assert!(!json.contains("voice"), "voice must be omitted when None");
     }
 }
