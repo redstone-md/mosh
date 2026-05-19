@@ -31,6 +31,13 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn random_b64(bytes: usize) -> String {
+    use rand::RngCore;
+    let mut buf = vec![0u8; bytes];
+    rand::thread_rng().fill_bytes(&mut buf);
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf)
+}
+
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
@@ -349,6 +356,67 @@ impl PrivateDmRuntime {
         self.sessions
             .get(session_id)
             .ok_or(PrivateDmRuntimeError::MissingSession)
+    }
+
+    pub fn call_start(
+        &mut self,
+        session_id: &str,
+    ) -> Result<CallStarted, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_start()
+    }
+
+    pub fn call_accept(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_accept(call_id)
+    }
+
+    pub fn call_decline(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+        reason: &str,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_decline(call_id, reason)
+    }
+
+    pub fn call_end(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+        reason: &str,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_end(call_id, reason)
+    }
+
+    pub fn call_send_frame(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+        frame: Vec<u8>,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let session = self.session_mut(session_id)?;
+        session.call_send_frame(call_id, frame)
+    }
+
+    pub fn call_drain_frames(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+    ) -> Result<Vec<Vec<u8>>, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        Ok(session.call_drain_frames(call_id))
     }
 }
 
@@ -880,8 +948,29 @@ impl PrivateDmSession {
                     epoch_millis: event.epoch_millis,
                 })
                 .collect(),
-            pending_call: None,
-            active_call: None,
+            pending_call: self.call.as_ref().and_then(|call| {
+                if call.phase == CallPhase::Ringing {
+                    Some(PendingCall {
+                        call_id: call.call_id.clone(),
+                        from_device: call.remote_device.clone(),
+                    })
+                } else {
+                    None
+                }
+            }),
+            active_call: self.call.as_ref().and_then(|call| {
+                if call.phase == CallPhase::Active {
+                    Some(ActiveCall {
+                        call_id: call.call_id.clone(),
+                        direction: call.direction.as_str().to_string(),
+                        key_b64: call.key_b64.clone(),
+                        nonce_prefix_b64: call.nonce_prefix_b64.clone(),
+                        started_at_ms: call.started_at_ms,
+                    })
+                } else {
+                    None
+                }
+            }),
         }
     }
 
@@ -902,6 +991,134 @@ impl PrivateDmSession {
         } else {
             "waiting".to_string()
         }
+    }
+
+    fn call_start(&mut self) -> Result<CallStarted, PrivateDmRuntimeError> {
+        if !self.peer_joined || !self.crypto.is_ready() {
+            return Err(PrivateDmRuntimeError::NotReady);
+        }
+        if self.call.is_some() {
+            return Err(PrivateDmRuntimeError::Attachment(
+                "another call is already in flight".to_string(),
+            ));
+        }
+        let call_id = self.crypto.random_token("call")?;
+        let key_b64 = random_b64(32);
+        let nonce_prefix_b64 = random_b64(4);
+        self.call = Some(CallState::outgoing(
+            call_id.clone(),
+            key_b64.clone(),
+            nonce_prefix_b64.clone(),
+            String::new(),
+        ));
+        self.node
+            .subscribe(&voice_call_channel(&call_id))
+            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+        let envelope = ControlEnvelope::CallOffer {
+            session_id: self.session_id.clone(),
+            participant_id: self.participant_id.clone(),
+            from_device: self.device_id.clone(),
+            call_id: call_id.clone(),
+            key_b64: key_b64.clone(),
+            nonce_prefix_b64: nonce_prefix_b64.clone(),
+        };
+        publish_json(&self.node, &self.control_channel, &envelope)?;
+        Ok(CallStarted {
+            session_id: self.session_id.clone(),
+            call_id,
+            key_b64,
+            nonce_prefix_b64,
+        })
+    }
+
+    fn call_accept(&mut self, call_id: &str) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call) = self.call.as_mut() else {
+            return Err(PrivateDmRuntimeError::MissingSession);
+        };
+        if call.call_id != call_id || call.phase != CallPhase::Ringing {
+            return Err(PrivateDmRuntimeError::MissingSession);
+        }
+        call.become_active(now_ms());
+        let envelope = ControlEnvelope::CallAccept {
+            session_id: self.session_id.clone(),
+            participant_id: self.participant_id.clone(),
+            call_id: call_id.to_string(),
+        };
+        publish_json(&self.node, &self.control_channel, &envelope)
+    }
+
+    fn call_decline(&mut self, call_id: &str, reason: &str) -> Result<(), PrivateDmRuntimeError> {
+        if let Some(call) = self.call.take() {
+            if call.call_id == call_id {
+                let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                let remote = call.remote_device.clone();
+                let call_id_owned = call.call_id.clone();
+                self.append_call_event_message(&remote, "missed", 0, &call_id_owned);
+                let envelope = ControlEnvelope::CallDecline {
+                    session_id: self.session_id.clone(),
+                    participant_id: self.participant_id.clone(),
+                    call_id: call_id.to_string(),
+                    reason: reason.to_string(),
+                };
+                publish_json(&self.node, &self.control_channel, &envelope)?;
+            } else {
+                self.call = Some(call);
+            }
+        }
+        Ok(())
+    }
+
+    fn call_end(&mut self, call_id: &str, reason: &str) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call) = self.call.take() else {
+            return Ok(());
+        };
+        if call.call_id != call_id {
+            self.call = Some(call);
+            return Ok(());
+        }
+        let duration = call.duration_ms(now_ms());
+        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+        let kind = if call.phase != CallPhase::Active {
+            "missed"
+        } else {
+            "completed"
+        };
+        let remote = call.remote_device.clone();
+        let call_id_owned = call.call_id.clone();
+        self.append_call_event_message(&remote, kind, duration, &call_id_owned);
+        let envelope = ControlEnvelope::CallEnd {
+            session_id: self.session_id.clone(),
+            participant_id: self.participant_id.clone(),
+            call_id: call_id.to_string(),
+            reason: reason.to_string(),
+        };
+        publish_json(&self.node, &self.control_channel, &envelope)
+    }
+
+    fn call_send_frame(
+        &mut self,
+        call_id: &str,
+        frame: Vec<u8>,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call) = self.call.as_ref() else {
+            return Ok(());
+        };
+        if call.call_id != call_id || call.phase != CallPhase::Active {
+            return Ok(());
+        }
+        self.node
+            .publish(&voice_call_channel(call_id), &frame)
+            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
+    }
+
+    fn call_drain_frames(&mut self, call_id: &str) -> Vec<Vec<u8>> {
+        let Some(call) = self.call.as_mut() else {
+            return Vec::new();
+        };
+        if call.call_id != call_id {
+            return Vec::new();
+        }
+        call.drain_frames()
     }
 }
 
