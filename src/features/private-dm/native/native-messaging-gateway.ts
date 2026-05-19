@@ -106,6 +106,12 @@ export type AttachmentState =
   | "failed"
   | "cancelled";
 
+export interface VoiceMeta {
+  readonly duration_ms: number;
+  /** 64 amplitude buckets (one byte each, 0-255), base64-encoded. */
+  readonly peaks_b64: string;
+}
+
 export interface AttachmentDescriptor {
   readonly attachment_id: string;
   readonly content_hash: string;
@@ -113,6 +119,7 @@ export interface AttachmentDescriptor {
   readonly mime: string;
   readonly total_size: number;
   readonly thumbnail_b64?: string;
+  readonly voice?: VoiceMeta;
 }
 
 export interface AttachmentView {
@@ -325,6 +332,7 @@ export interface NativeMessagingGateway {
     mime: string,
     dataBase64: string,
     thumbnailBase64?: string,
+    voice?: VoiceMeta,
   ): Promise<AttachmentSendResult>;
   downloadPrivateAttachment(sessionId: string, attachmentId: string): Promise<void>;
   cancelPrivateAttachment(sessionId: string, attachmentId: string): Promise<void>;
@@ -334,6 +342,7 @@ export interface NativeMessagingGateway {
     mime: string,
     dataBase64: string,
     thumbnailBase64?: string,
+    voice?: VoiceMeta,
   ): Promise<AttachmentSendResult>;
   downloadGroupAttachment(groupId: string, attachmentId: string): Promise<void>;
   cancelGroupAttachment(groupId: string, attachmentId: string): Promise<void>;
@@ -343,6 +352,7 @@ export interface NativeMessagingGateway {
     mime: string,
     dataBase64: string,
     thumbnailBase64?: string,
+    voice?: VoiceMeta,
   ): Promise<AttachmentSendResult>;
   downloadChannelAttachment(name: string, attachmentId: string): Promise<void>;
   cancelChannelAttachment(name: string, attachmentId: string): Promise<void>;
@@ -446,6 +456,7 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     mime: string,
     dataBase64: string,
     thumbnailBase64?: string,
+    voice?: VoiceMeta,
   ): Promise<AttachmentSendResult> {
     return invoke<AttachmentSendResult>(PRIVATE_DM_SEND_ATTACHMENT_COMMAND, {
       sessionId,
@@ -453,6 +464,7 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
       mime,
       dataBase64,
       thumbnailBase64: thumbnailBase64 ?? null,
+      voice: voice ?? null,
     });
   }
 
@@ -470,6 +482,7 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     mime: string,
     dataBase64: string,
     thumbnailBase64?: string,
+    voice?: VoiceMeta,
   ): Promise<AttachmentSendResult> {
     return invoke<AttachmentSendResult>(PRIVATE_GROUP_SEND_ATTACHMENT_COMMAND, {
       groupId,
@@ -477,6 +490,7 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
       mime,
       dataBase64,
       thumbnailBase64: thumbnailBase64 ?? null,
+      voice: voice ?? null,
     });
   }
 
@@ -494,6 +508,7 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     mime: string,
     dataBase64: string,
     thumbnailBase64?: string,
+    voice?: VoiceMeta,
   ): Promise<AttachmentSendResult> {
     return invoke<AttachmentSendResult>(CHANNEL_SEND_ATTACHMENT_COMMAND, {
       name,
@@ -501,6 +516,7 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
       mime,
       dataBase64,
       thumbnailBase64: thumbnailBase64 ?? null,
+      voice: voice ?? null,
     });
   }
 
