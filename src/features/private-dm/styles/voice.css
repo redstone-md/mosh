@@ -86,18 +86,25 @@
   opacity: 0.75;
 }
 
+.rail-item {
+  position: relative;
+}
+
 .unread-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  margin-left: auto;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
   border-radius: 9px;
   background: #4f8cff;
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--surface, #1a1a1a);
 }

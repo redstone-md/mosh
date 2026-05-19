@@ -32,6 +32,13 @@ import {
   useRef,
   useState,
 } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
+import { diffConversations, type ConversationCount } from "./notifications/unread";
 import {
   chatText,
   cryptoNotice,
@@ -104,6 +111,22 @@ type ActiveItem =
   | { readonly type: "channel"; readonly name: string }
   | { readonly type: "group"; readonly id: string };
 
+/** Stable per-conversation key used for unread tracking and notifications. */
+function conversationKey(item: ActiveItem): string {
+  return item.type === "channel"
+    ? `channel:${item.name}`
+    : `${item.type}:${item.id}`;
+}
+
+/** Window focus check that degrades to "focused" when the Tauri API is absent. */
+async function windowFocused(): Promise<boolean> {
+  try {
+    return await getCurrentWindow().isFocused();
+  } catch {
+    return true;
+  }
+}
+
 interface GroupCreateState {
   readonly inviteUri?: string;
   readonly copied: boolean;
@@ -148,6 +171,9 @@ export function PrivateDmScreen({
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
+  const [unread, setUnread] = useState<ReadonlyMap<string, number>>(new Map());
+  const lastSeenRef = useRef<Map<string, number>>(new Map());
+  const notifyReadyRef = useRef(false);
 
   const requestBase = useMemo(
     () => ({
@@ -231,6 +257,96 @@ export function PrivateDmScreen({
     const intervalId = window.setInterval(() => void refresh(true), AUTO_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [refresh]);
+
+  // Ask for OS notification permission once on mount.
+  useEffect(() => {
+    void (async () => {
+      try {
+        let granted = await isPermissionGranted();
+        if (!granted) {
+          granted = (await requestPermission()) === "granted";
+        }
+        notifyReadyRef.current = granted;
+      } catch {
+        // No Tauri host (e.g. browser dev / tests): toasts stay disabled.
+        notifyReadyRef.current = false;
+      }
+    })();
+  }, []);
+
+  // Diff each poll's per-conversation message counts to drive unread badges
+  // and OS toasts. A first-seen conversation sets a baseline and never
+  // notifies. While the window is focused, the active conversation is kept
+  // clear; while unfocused, every new message raises a toast.
+  useEffect(() => {
+    const counts: ConversationCount[] = [
+      ...sessions.map((s) => ({
+        id: `dm:${s.session_id}`,
+        messageCount: s.messages.length,
+      })),
+      ...groups.map((g) => ({
+        id: `group:${g.group_id}`,
+        messageCount: g.messages.length,
+      })),
+      ...channels.map((c) => ({
+        id: `channel:${c.name}`,
+        messageCount: c.messages.length,
+      })),
+    ];
+    const activeKey = active ? conversationKey(active) : null;
+    let cancelled = false;
+    void (async () => {
+      const focused = await windowFocused();
+      if (cancelled) {
+        return;
+      }
+      const diff = diffConversations(
+        counts,
+        lastSeenRef.current,
+        activeKey,
+        !focused,
+      );
+      lastSeenRef.current = diff.nextLastSeen;
+      if (focused && activeKey) {
+        setUnread((current) => {
+          if (!current.has(activeKey)) {
+            return current;
+          }
+          const next = new Map(current);
+          next.delete(activeKey);
+          return next;
+        });
+      }
+      if (diff.newMessages.length === 0) {
+        return;
+      }
+      setUnread((current) => {
+        const next = new Map(current);
+        for (const { id, delta } of diff.newMessages) {
+          if (id === activeKey && focused) {
+            continue;
+          }
+          next.set(id, (next.get(id) ?? 0) + delta);
+        }
+        return next;
+      });
+      if (!focused && notifyReadyRef.current) {
+        try {
+          for (const { id } of diff.newMessages) {
+            const label = id.startsWith("channel:")
+              ? `#${id.slice("channel:".length)}`
+              : "New message";
+            sendNotification({ title: "Mosh", body: `${label} — new message` });
+          }
+        } catch {
+          // Notification host unavailable — unread badges still update.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessions, channels, groups, active]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -671,9 +787,19 @@ export function PrivateDmScreen({
           groups={groups}
           offers={pendingOffers}
           active={active}
+          unread={unread}
           onSelect={(item) => {
             setActive(item);
             setShowSetup(false);
+            const key = conversationKey(item);
+            setUnread((current) => {
+              if (!current.has(key)) {
+                return current;
+              }
+              const next = new Map(current);
+              next.delete(key);
+              return next;
+            });
           }}
           onAcceptOffer={acceptDmOffer}
           onDismissOffer={dismissDmOffer}
@@ -811,6 +937,7 @@ function SessionRail({
   groups,
   offers,
   active,
+  unread,
   onSelect,
   onAcceptOffer,
   onDismissOffer,
@@ -821,6 +948,7 @@ function SessionRail({
   groups: readonly GroupSnapshot[];
   offers: readonly PendingDmOffer[];
   active: ActiveItem | null;
+  unread: ReadonlyMap<string, number>;
   onSelect: (item: ActiveItem) => void;
   onAcceptOffer: (offer: PendingDmOffer) => void;
   onDismissOffer: (offer: PendingDmOffer) => void;
@@ -847,6 +975,7 @@ function SessionRail({
             key={`dm-${session.session_id}`}
             session={session}
             active={active?.type === "dm" && active.id === session.session_id}
+            unreadCount={unread.get(`dm:${session.session_id}`) ?? 0}
             onClick={() => onSelect({ type: "dm", id: session.session_id })}
           />
         ))}
@@ -856,6 +985,7 @@ function SessionRail({
             key={`gr-${group.group_id}`}
             group={group}
             active={active?.type === "group" && active.id === group.group_id}
+            unreadCount={unread.get(`group:${group.group_id}`) ?? 0}
             onClick={() => onSelect({ type: "group", id: group.group_id })}
           />
         ))}
@@ -867,6 +997,7 @@ function SessionRail({
             key={`ch-${channel.name}`}
             channel={channel}
             active={active?.type === "channel" && active.name === channel.name}
+            unreadCount={unread.get(`channel:${channel.name}`) ?? 0}
             onClick={() => onSelect({ type: "channel", name: channel.name })}
           />
         ))}
@@ -911,13 +1042,27 @@ function OfferRailItem({
   );
 }
 
+/** Small overlay badge showing a conversation's unread message count. */
+function UnreadBadge({ count }: { count: number }) {
+  if (count <= 0) {
+    return null;
+  }
+  return (
+    <span className="unread-badge" aria-label={`${count} unread`}>
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
 function SessionRailItem({
   session,
   active,
+  unreadCount,
   onClick,
 }: {
   session: SessionSnapshot;
   active: boolean;
+  unreadCount: number;
   onClick: () => void;
 }) {
   const label = peerLabel(session);
@@ -931,6 +1076,7 @@ function SessionRailItem({
     >
       <Avatar name={label} />
       <span className={`rail-dot rail-dot-${session.state}`} />
+      <UnreadBadge count={unreadCount} />
     </button>
   );
 }
@@ -938,10 +1084,12 @@ function SessionRailItem({
 function ChannelRailItem({
   channel,
   active,
+  unreadCount,
   onClick,
 }: {
   channel: ChannelSnapshot;
   active: boolean;
+  unreadCount: number;
   onClick: () => void;
 }) {
   return (
@@ -954,6 +1102,7 @@ function ChannelRailItem({
     >
       <IconHash size={18} />
       <span className="rail-channel-label">{channel.name}</span>
+      <UnreadBadge count={unreadCount} />
     </button>
   );
 }
@@ -961,10 +1110,12 @@ function ChannelRailItem({
 function GroupRailItem({
   group,
   active,
+  unreadCount,
   onClick,
 }: {
   group: GroupSnapshot;
   active: boolean;
+  unreadCount: number;
   onClick: () => void;
 }) {
   const label = group.label ?? shorten(group.group_id, 6);
@@ -984,6 +1135,7 @@ function GroupRailItem({
       ) : null}
       <span className="rail-channel-label">{label}</span>
       <span className={`rail-dot rail-dot-${group.state}`} />
+      <UnreadBadge count={unreadCount} />
     </button>
   );
 }
