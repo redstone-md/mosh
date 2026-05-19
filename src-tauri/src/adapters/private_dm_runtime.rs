@@ -956,6 +956,7 @@ mod tests {
                 "application/octet-stream".to_string(),
                 payload.clone(),
                 None,
+                None,
             )
             .expect("Alice should send attachment");
 

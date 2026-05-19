@@ -625,6 +625,7 @@ mod tests {
                 "AABB".to_string(),
                 bytes.clone(),
                 None,
+                None,
             )
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
@@ -671,6 +672,7 @@ mod tests {
                 "x".to_string(),
                 huge,
                 None,
+                None,
             ),
             Err(AttachmentRuntimeError::TooLarge { .. })
         ));
@@ -686,6 +688,7 @@ mod tests {
                 "x".to_string(),
                 "x".to_string(),
                 Vec::new(),
+                None,
                 None,
             ),
             Err(AttachmentRuntimeError::Empty)
@@ -703,6 +706,7 @@ mod tests {
                 "m".to_string(),
                 "fp".to_string(),
                 payload(2048),
+                None,
                 None,
             )
             .unwrap();
@@ -732,6 +736,7 @@ mod tests {
                 "fp".to_string(),
                 payload(512),
                 None,
+                None,
             )
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
@@ -754,6 +759,7 @@ mod tests {
                 "m".to_string(),
                 "fp".to_string(),
                 payload(4096),
+                None,
                 None,
             )
             .unwrap();
@@ -779,6 +785,7 @@ mod tests {
                 "fp".to_string(),
                 payload(4096),
                 None,
+                None,
             )
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
@@ -798,6 +805,7 @@ mod tests {
                 "m".to_string(),
                 "fp".to_string(),
                 payload((CHUNK_SIZE as usize) * 3),
+                None,
                 None,
             )
             .unwrap();
@@ -830,6 +838,7 @@ mod tests {
                 "video/mp4".to_string(),
                 "fp".to_string(),
                 bytes.clone(),
+                None,
                 None,
             )
             .unwrap();

@@ -296,12 +296,20 @@ fn private_dm_send_attachment(
     mime: String,
     data_base64: String,
     thumbnail_base64: Option<String>,
+    voice: Option<adapters::attachment_runtime::VoiceMeta>,
 ) -> Result<AttachmentSendResult, String> {
     let bytes = decode_base64(&data_base64)?;
     let mime = resolve_mime(mime, &file_name);
     state.with_runtime(|runtime| {
         runtime
-            .send_attachment(&session_id, file_name, mime, bytes, thumbnail_base64.clone())
+            .send_attachment(
+                &session_id,
+                file_name,
+                mime,
+                bytes,
+                thumbnail_base64.clone(),
+                voice.clone(),
+            )
             .map_err(|error| error.to_string())
     })
 }
@@ -533,12 +541,20 @@ fn channel_send_attachment(
     mime: String,
     data_base64: String,
     thumbnail_base64: Option<String>,
+    voice: Option<adapters::attachment_runtime::VoiceMeta>,
 ) -> Result<AttachmentSendResult, String> {
     let bytes = decode_base64(&data_base64)?;
     let mime = resolve_mime(mime, &file_name);
     state.with_runtime(|runtime| {
         runtime
-            .send_attachment(&name, file_name, mime, bytes, thumbnail_base64.clone())
+            .send_attachment(
+                &name,
+                file_name,
+                mime,
+                bytes,
+                thumbnail_base64.clone(),
+                voice.clone(),
+            )
             .map_err(|error| error.to_string())
     })
 }
@@ -668,12 +684,20 @@ fn private_group_send_attachment(
     mime: String,
     data_base64: String,
     thumbnail_base64: Option<String>,
+    voice: Option<adapters::attachment_runtime::VoiceMeta>,
 ) -> Result<AttachmentSendResult, String> {
     let bytes = decode_base64(&data_base64)?;
     let mime = resolve_mime(mime, &file_name);
     state.with_runtime(|runtime| {
         runtime
-            .send_attachment(&group_id, file_name, mime, bytes, thumbnail_base64.clone())
+            .send_attachment(
+                &group_id,
+                file_name,
+                mime,
+                bytes,
+                thumbnail_base64.clone(),
+                voice.clone(),
+            )
             .map_err(|error| error.to_string())
     })
 }
