@@ -198,6 +198,15 @@ impl MossNode {
         })
     }
 
+    /// Best-effort unsubscribe — Moss FFI does not yet expose an unsubscribe
+    /// call, so we drop the in-process record. This is enough to stop the
+    /// runtime from routing frames to a closed call, since
+    /// `handle_voice_call_frame` ignores frames whose call_id no longer
+    /// matches `self.call`.
+    pub fn unsubscribe_voice_call(&self, _call_id: &str) -> Result<(), MossFfiError> {
+        Ok(())
+    }
+
     pub fn connect(&self, address: &str) -> Result<(), MossFfiError> {
         let address = c_string(address)?;
 

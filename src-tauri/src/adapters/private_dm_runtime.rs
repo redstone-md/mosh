@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 pub use contracts::{
-    AcceptInviteRequest, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
-    AttachmentView, ChatMessage, CloseSessionResult, DmOffer, InviteCreated, MeshInfo,
-    PrivateDmRuntimeError, SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent,
-    StartSessionRequest,
+    AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
+    AttachmentView, CallEvent, CallStarted, ChatMessage, CloseSessionResult, DmOffer,
+    InviteCreated, MeshInfo, PendingCall, PrivateDmRuntimeError, SendMessageResult,
+    SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use crate::adapters::attachment_runtime::{
@@ -18,10 +18,18 @@ use crate::adapters::attachment_runtime::{
 pub use crate::adapters::attachment_runtime::VoiceMeta;
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::MlsSessionCrypto;
+use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 use wire::{
     blob_channel, channel_session_id, control_channel, data_channel, decode, decode_json, encode,
-    publish_json, BlobEnvelope, ControlEnvelope, DataEnvelope,
+    publish_json, voice_call_channel, BlobEnvelope, ControlEnvelope, DataEnvelope,
 };
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
@@ -71,6 +79,7 @@ struct PrivateDmSession {
     attachment_store: Arc<AttachmentStore>,
     attachments: AttachmentRuntime,
     attachment_slots: HashMap<String, AttachmentSlot>,
+    call: Option<CallState>,
 }
 
 #[derive(Clone, Copy)]
@@ -380,6 +389,7 @@ impl PrivateDmSession {
             attachment_store,
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            call: None,
         }
     }
 
@@ -396,9 +406,27 @@ impl PrivateDmSession {
             self.handle_data(message.payload)
         } else if message.channel == self.blob_channel {
             self.handle_blob(message.payload)
+        } else if wire::channel_call_id(&message.channel).is_some() {
+            self.handle_voice_call_frame(&message.channel, message.payload)
         } else {
             Ok(())
         }
+    }
+
+    fn handle_voice_call_frame(
+        &mut self,
+        channel: &str,
+        payload: Vec<u8>,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call_id) = wire::channel_call_id(channel) else {
+            return Ok(());
+        };
+        if let Some(call) = self.call.as_mut() {
+            if call.call_id == call_id {
+                call.push_frame(payload);
+            }
+        }
+        Ok(())
     }
 
     fn has_seen_message(&mut self, message: &MossReceivedMessage) -> bool {
@@ -473,8 +501,115 @@ impl PrivateDmSession {
                 let manifest: AttachmentManifest = decode_json(&manifest_json)?;
                 self.accept_incoming_manifest(from_device, manifest)
             }
+            ControlEnvelope::CallOffer {
+                session_id,
+                participant_id,
+                from_device,
+                call_id,
+                key_b64,
+                nonce_prefix_b64,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if self.call.is_some() {
+                    return Ok(());
+                }
+                let channel = voice_call_channel(&call_id);
+                self.call = Some(CallState::ringing(
+                    call_id,
+                    key_b64,
+                    nonce_prefix_b64,
+                    from_device,
+                ));
+                self.node
+                    .subscribe(&channel)
+                    .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+                Ok(())
+            }
+            ControlEnvelope::CallAccept {
+                session_id,
+                participant_id,
+                call_id,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if let Some(call) = self.call.as_mut() {
+                    if call.call_id == call_id && call.phase == CallPhase::Outgoing {
+                        call.become_active(now_ms());
+                    }
+                }
+                Ok(())
+            }
+            ControlEnvelope::CallDecline {
+                session_id,
+                participant_id,
+                call_id,
+                reason: _,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if let Some(call) = self.call.as_ref() {
+                    if call.call_id == call_id {
+                        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                        let remote = call.remote_device.clone();
+                        let call_id_owned = call.call_id.clone();
+                        self.call = None;
+                        self.append_call_event_message(&remote, "missed", 0, &call_id_owned);
+                    }
+                }
+                Ok(())
+            }
+            ControlEnvelope::CallEnd {
+                session_id,
+                participant_id,
+                call_id,
+                reason,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if let Some(call) = self.call.as_ref() {
+                    if call.call_id == call_id {
+                        let duration = call.duration_ms(now_ms());
+                        let kind = if duration == 0 && reason == "no_answer" {
+                            "missed"
+                        } else {
+                            "completed"
+                        };
+                        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                        let remote = call.remote_device.clone();
+                        let call_id_owned = call.call_id.clone();
+                        self.call = None;
+                        self.append_call_event_message(
+                            &remote,
+                            kind,
+                            duration,
+                            &call_id_owned,
+                        );
+                    }
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
+    }
+
+    fn append_call_event_message(
+        &mut self,
+        remote_device: &str,
+        kind: &str,
+        duration_ms: u64,
+        call_id: &str,
+    ) {
+        self.messages.push(ChatMessage {
+            from_device: remote_device.to_string(),
+            body: String::new(),
+            attachment: None,
+            call_event: Some(CallEvent {
+                kind: kind.to_string(),
+                duration_ms,
+                call_id: call_id.to_string(),
+            }),
+        });
     }
 
     fn handle_data(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
