@@ -195,10 +195,7 @@ enum ControlEnvelope {
         manifest_ciphertext_b64: String,
     },
     /// A private-DM invitation aimed at one group member.
-    DmOffer {
-        group_id: String,
-        offer: DmOffer,
-    },
+    DmOffer { group_id: String, offer: DmOffer },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -277,10 +274,7 @@ impl PrivateGroupRuntime {
         Self::from_shared(Arc::new(moss), attachment_store)
     }
 
-    pub fn from_shared(
-        moss: Arc<MossFfiRuntime>,
-        attachment_store: Arc<AttachmentStore>,
-    ) -> Self {
+    pub fn from_shared(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
         Self {
             moss,
             attachment_store,
@@ -566,11 +560,8 @@ impl PrivateGroupRuntime {
 
     pub fn list(&mut self) -> Result<GroupListSnapshot, PrivateGroupError> {
         self.drain_inbound()?;
-        let mut groups: Vec<GroupSnapshot> = self
-            .groups
-            .values()
-            .map(GroupSession::snapshot)
-            .collect();
+        let mut groups: Vec<GroupSnapshot> =
+            self.groups.values().map(GroupSession::snapshot).collect();
         groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
         Ok(GroupListSnapshot { groups })
     }
@@ -789,10 +780,7 @@ impl GroupSession {
                 group_id,
                 from_fingerprint,
                 proposal_b64,
-            } if self.is_admin
-                && self.group_id == group_id
-                && from_fingerprint != own_fp =>
-            {
+            } if self.is_admin && self.group_id == group_id && from_fingerprint != own_fp => {
                 let proposal = decode(&proposal_b64)?;
                 self.crypto.queue_remote_proposal(&proposal)?;
                 let commit_bytes = self.crypto.commit_pending()?;
@@ -813,8 +801,7 @@ impl GroupSession {
                 && self.group_id == group_id
                 && participant_id != self.participant_id =>
             {
-                let manifest_json =
-                    self.crypto.decrypt(&decode(&manifest_ciphertext_b64)?)?;
+                let manifest_json = self.crypto.decrypt(&decode(&manifest_ciphertext_b64)?)?;
                 let manifest: AttachmentManifest = decode_json(&manifest_json)?;
                 self.accept_incoming_manifest(from_device, from_fingerprint, manifest)
             }
@@ -838,9 +825,7 @@ impl GroupSession {
 
     fn handle_data(&mut self, payload: Vec<u8>) -> Result<(), PrivateGroupError> {
         let envelope: DataEnvelope = decode_json(&payload)?;
-        if envelope.group_id != self.group_id
-            || envelope.participant_id == self.participant_id
-        {
+        if envelope.group_id != self.group_id || envelope.participant_id == self.participant_id {
             return Ok(());
         }
         let plaintext = self.crypto.decrypt(&decode(&envelope.ciphertext_b64)?)?;
@@ -887,11 +872,13 @@ impl GroupSession {
                     .unwrap_or_else(|| "file".to_string());
                 match self.attachments.ingest_chunk(&frame) {
                     Ok(ChunkOutcome::Complete {
-                        content_hash, bytes, ..
+                        content_hash,
+                        bytes,
+                        ..
                     }) => {
-                        let path = self
-                            .attachment_store
-                            .write_blob(&content_hash, &file_name, &bytes)?;
+                        let path =
+                            self.attachment_store
+                                .write_blob(&content_hash, &file_name, &bytes)?;
                         if let Some(slot) = self.attachment_slots.get_mut(&attachment_id) {
                             slot.local_path = Some(path.to_string_lossy().into_owned());
                             slot.failed = false;
@@ -962,9 +949,11 @@ impl GroupSession {
             bytes.clone(),
             thumbnail,
         )?;
-        let stored = self
-            .attachment_store
-            .write_blob(&manifest.content_hash, &manifest.file_name, &bytes)?;
+        let stored = self.attachment_store.write_blob(
+            &manifest.content_hash,
+            &manifest.file_name,
+            &bytes,
+        )?;
         let manifest_json = serde_json::to_vec(&manifest)
             .map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
         let ciphertext = self.crypto.encrypt(&manifest_json)?;
@@ -1002,16 +991,11 @@ impl GroupSession {
         })
     }
 
-    fn start_attachment_download(
-        &mut self,
-        attachment_id: &str,
-    ) -> Result<(), PrivateGroupError> {
+    fn start_attachment_download(&mut self, attachment_id: &str) -> Result<(), PrivateGroupError> {
         let slot = self
             .attachment_slots
             .get_mut(attachment_id)
-            .ok_or_else(|| {
-                PrivateGroupError::MissingAttachment(attachment_id.to_string())
-            })?;
+            .ok_or_else(|| PrivateGroupError::MissingAttachment(attachment_id.to_string()))?;
         if slot.direction != AttachmentDirection::Incoming {
             return Err(PrivateGroupError::Attachment(
                 "cannot download an outgoing attachment".to_string(),
@@ -1024,16 +1008,11 @@ impl GroupSession {
         Ok(())
     }
 
-    fn cancel_attachment(
-        &mut self,
-        attachment_id: &str,
-    ) -> Result<(), PrivateGroupError> {
+    fn cancel_attachment(&mut self, attachment_id: &str) -> Result<(), PrivateGroupError> {
         let slot = self
             .attachment_slots
             .get_mut(attachment_id)
-            .ok_or_else(|| {
-                PrivateGroupError::MissingAttachment(attachment_id.to_string())
-            })?;
+            .ok_or_else(|| PrivateGroupError::MissingAttachment(attachment_id.to_string()))?;
         slot.cancelled = true;
         slot.download_requested = false;
         self.attachments.cancel(attachment_id);
@@ -1293,8 +1272,8 @@ fn publish_json<T: Serialize>(
     channel: &str,
     value: &T,
 ) -> Result<(), PrivateGroupError> {
-    let payload = serde_json::to_vec(value)
-        .map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
+    let payload =
+        serde_json::to_vec(value).map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
     node.publish(channel, &payload)
         .map_err(|error| PrivateGroupError::Moss(error.to_string()))
 }
@@ -1360,9 +1339,7 @@ mod tests {
             ParsedGroupInvite::parse(&short),
             Err(PrivateGroupError::InvalidInvite(_))
         ));
-        let non_hex = format!(
-            "{INVITE_PREFIX}?mesh=m&group=g#fp=ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
-        );
+        let non_hex = format!("{INVITE_PREFIX}?mesh=m&group=g#fp=ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ");
         assert!(matches!(
             ParsedGroupInvite::parse(&non_hex),
             Err(PrivateGroupError::InvalidInvite(_))
@@ -1371,10 +1348,7 @@ mod tests {
 
     #[test]
     fn channel_group_id_strips_prefix() {
-        assert_eq!(
-            channel_group_id("group-control/g-1"),
-            Some("g-1")
-        );
+        assert_eq!(channel_group_id("group-control/g-1"), Some("g-1"));
         assert_eq!(channel_group_id("group-data/g-1"), Some("g-1"));
         assert_eq!(channel_group_id("public-channel/x"), None);
     }

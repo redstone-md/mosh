@@ -3,12 +3,12 @@ pub mod adapters;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use adapters::attachment_runtime::StreamRange;
+use adapters::attachment_store::AttachmentStore;
 use adapters::channel_runtime::{
     ChannelLeaveResult, ChannelListSnapshot, ChannelRuntime, ChannelSendResult, ChannelSnapshot,
     JoinChannelRequest,
 };
-use adapters::attachment_runtime::StreamRange;
-use adapters::attachment_store::AttachmentStore;
 use adapters::moss_ffi::MossFfiRuntime;
 use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
 use adapters::openmls_crypto::{
@@ -16,9 +16,8 @@ use adapters::openmls_crypto::{
     OpenMlsSmokeStatus,
 };
 use adapters::private_dm_runtime::{
-    AcceptInviteRequest, AttachmentSendResult, CloseSessionResult, InviteCreated,
-    PrivateDmRuntime, SendMessageResult, SessionListSnapshot, SessionSnapshot,
-    StartSessionRequest,
+    AcceptInviteRequest, AttachmentSendResult, CloseSessionResult, InviteCreated, PrivateDmRuntime,
+    SendMessageResult, SessionListSnapshot, SessionSnapshot, StartSessionRequest,
 };
 use adapters::private_group_runtime::{
     CreateGroupRequest, GroupCreated, GroupLeaveResult, GroupListSnapshot, GroupSendResult,
@@ -301,7 +300,13 @@ fn private_dm_send_attachment(
     let mime = resolve_mime(mime, &file_name);
     state.with_runtime(|runtime| {
         runtime
-            .send_attachment(&session_id, file_name, mime, bytes, thumbnail_base64.clone())
+            .send_attachment(
+                &session_id,
+                file_name,
+                mime,
+                bytes,
+                thumbnail_base64.clone(),
+            )
             .map_err(|error| error.to_string())
     })
 }
@@ -394,27 +399,21 @@ fn stream_range_once(
     end: u64,
 ) -> Result<StreamRange, String> {
     match kind {
-        "dm" => app
-            .state::<PrivateDmState>()
-            .with_runtime(|runtime| {
-                runtime
-                    .stream_attachment_range(host, attachment, start, end)
-                    .map_err(|error| error.to_string())
-            }),
-        "group" => app
-            .state::<PrivateGroupState>()
-            .with_runtime(|runtime| {
-                runtime
-                    .stream_attachment_range(host, attachment, start, end)
-                    .map_err(|error| error.to_string())
-            }),
-        "channel" => app
-            .state::<ChannelState>()
-            .with_runtime(|runtime| {
-                runtime
-                    .stream_attachment_range(host, attachment, start, end)
-                    .map_err(|error| error.to_string())
-            }),
+        "dm" => app.state::<PrivateDmState>().with_runtime(|runtime| {
+            runtime
+                .stream_attachment_range(host, attachment, start, end)
+                .map_err(|error| error.to_string())
+        }),
+        "group" => app.state::<PrivateGroupState>().with_runtime(|runtime| {
+            runtime
+                .stream_attachment_range(host, attachment, start, end)
+                .map_err(|error| error.to_string())
+        }),
+        "channel" => app.state::<ChannelState>().with_runtime(|runtime| {
+            runtime
+                .stream_attachment_range(host, attachment, start, end)
+                .map_err(|error| error.to_string())
+        }),
         _ => Err("unknown stream kind".to_string()),
     }
 }
@@ -454,7 +453,11 @@ fn serve_media_stream(
                 mime,
             }) => {
                 let length = bytes.len() as u64;
-                let last = if length == 0 { start } else { start + length - 1 };
+                let last = if length == 0 {
+                    start
+                } else {
+                    start + length - 1
+                };
                 return tauri::http::Response::builder()
                     .status(206)
                     .header(tauri::http::header::CONTENT_TYPE, mime)
@@ -503,11 +506,7 @@ fn channel_send(
     name: String,
     body: String,
 ) -> Result<ChannelSendResult, String> {
-    state.with_runtime(|runtime| {
-        runtime
-            .send(&name, body)
-            .map_err(|error| error.to_string())
-    })
+    state.with_runtime(|runtime| runtime.send(&name, body).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
@@ -519,9 +518,7 @@ fn channel_poll(
 }
 
 #[tauri::command]
-fn channel_list(
-    state: tauri::State<'_, ChannelState>,
-) -> Result<ChannelListSnapshot, String> {
+fn channel_list(state: tauri::State<'_, ChannelState>) -> Result<ChannelListSnapshot, String> {
     state.with_runtime(|runtime| runtime.list().map_err(|error| error.to_string()))
 }
 
@@ -653,11 +650,7 @@ fn private_group_close(
     state: tauri::State<'_, PrivateGroupState>,
     group_id: String,
 ) -> Result<GroupLeaveResult, String> {
-    state.with_runtime(|runtime| {
-        runtime
-            .close(&group_id)
-            .map_err(|error| error.to_string())
-    })
+    state.with_runtime(|runtime| runtime.close(&group_id).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]

@@ -225,9 +225,7 @@ impl From<MlsCryptoError> for PrivateDmRuntimeError {
     }
 }
 
-impl From<crate::adapters::attachment_runtime::AttachmentRuntimeError>
-    for PrivateDmRuntimeError
-{
+impl From<crate::adapters::attachment_runtime::AttachmentRuntimeError> for PrivateDmRuntimeError {
     fn from(error: crate::adapters::attachment_runtime::AttachmentRuntimeError) -> Self {
         Self::Attachment(error.to_string())
     }

@@ -152,7 +152,9 @@ pub enum StreamRange {
     },
     /// Some covering chunk is still missing; the download was nudged
     /// toward it.
-    Pending { total_size: u64 },
+    Pending {
+        total_size: u64,
+    },
     Unknown,
 }
 
@@ -241,8 +243,7 @@ impl AttachmentRuntime {
             let Some(slice) = chunk_slice(&transfer.plaintext, index) else {
                 continue;
             };
-            let ciphertext =
-                encrypt_chunk(&transfer.key, &transfer.nonce_prefix, index, slice)?;
+            let ciphertext = encrypt_chunk(&transfer.key, &transfer.nonce_prefix, index, slice)?;
             transfer.served_chunks.insert(index, ());
             frames.push(ChunkFrame {
                 attachment_id: request.attachment_id.clone(),
@@ -268,11 +269,8 @@ impl AttachmentRuntime {
         }
         let key = decode_fixed::<ATTACHMENT_KEY_LEN>(&manifest.key_b64)
             .ok_or_else(|| AttachmentRuntimeError::ManifestMismatch("key".to_string()))?;
-        let nonce_prefix =
-            decode_fixed::<ATTACHMENT_NONCE_PREFIX_LEN>(&manifest.nonce_prefix_b64)
-                .ok_or_else(|| {
-                    AttachmentRuntimeError::ManifestMismatch("nonce prefix".to_string())
-                })?;
+        let nonce_prefix = decode_fixed::<ATTACHMENT_NONCE_PREFIX_LEN>(&manifest.nonce_prefix_b64)
+            .ok_or_else(|| AttachmentRuntimeError::ManifestMismatch("nonce prefix".to_string()))?;
         if manifest.chunk_size == 0 || manifest.total_size > MAX_ATTACHMENT_SIZE {
             return Err(AttachmentRuntimeError::ManifestMismatch(
                 "size or chunk_size".to_string(),
@@ -303,12 +301,7 @@ impl AttachmentRuntime {
     /// Returns decrypted bytes for [start, end) when every covering chunk is
     /// in. Otherwise records a priority so the missing region is fetched
     /// ahead of the sequential cursor and reports Pending.
-    pub fn stream_range(
-        &mut self,
-        attachment_id: &str,
-        start: u64,
-        end: u64,
-    ) -> StreamRange {
+    pub fn stream_range(&mut self, attachment_id: &str, start: u64, end: u64) -> StreamRange {
         let Some(transfer) = self.incoming.get_mut(attachment_id) else {
             return StreamRange::Unknown;
         };
@@ -325,7 +318,11 @@ impl AttachmentRuntime {
         let end = end.min(total).max(start);
         let chunk = u64::from(transfer.manifest.chunk_size);
         let first = start / chunk;
-        let last = if end > start { (end - 1) / chunk } else { first };
+        let last = if end > start {
+            (end - 1) / chunk
+        } else {
+            first
+        };
 
         let mut missing = None;
         for index in first..=last {
@@ -472,9 +469,7 @@ impl AttachmentRuntime {
             frame.chunk_index,
             &ciphertext,
         )?;
-        transfer
-            .chunks
-            .insert(frame.chunk_index, plaintext);
+        transfer.chunks.insert(frame.chunk_index, plaintext);
 
         if transfer.chunks.len() as u64 != transfer.manifest.chunk_count {
             return Ok(ChunkOutcome::Progress(progress_of(
