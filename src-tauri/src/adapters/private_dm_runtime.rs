@@ -15,6 +15,7 @@ use invite::{build_invite_uri, listen_address, ParsedInvite};
 use crate::adapters::attachment_runtime::{
     AttachmentManifest, AttachmentRuntime, ChunkOutcome, StreamRange, CHUNK_SIZE,
 };
+pub use crate::adapters::attachment_runtime::VoiceMeta;
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::MlsSessionCrypto;
 use wire::{
@@ -220,10 +221,11 @@ impl PrivateDmRuntime {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
         let session = self.session_mut(session_id)?;
-        session.send_attachment(file_name, mime, bytes, thumbnail)
+        session.send_attachment(file_name, mime, bytes, thumbnail, voice)
     }
 
     /// Begins (or retries) downloading a peer's attachment.
@@ -582,6 +584,7 @@ impl PrivateDmSession {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         if !self.peer_joined || !self.crypto.is_ready() {
             return Err(PrivateDmRuntimeError::NotReady);
@@ -594,6 +597,7 @@ impl PrivateDmSession {
             self.fingerprint.clone(),
             bytes.clone(),
             thumbnail,
+            voice,
         )?;
         let stored = self
             .attachment_store
@@ -820,6 +824,7 @@ fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
         mime: manifest.mime.clone(),
         total_size: manifest.total_size,
         thumbnail_b64: manifest.thumbnail_b64.clone(),
+        voice: manifest.voice.clone(),
     }
 }
 
