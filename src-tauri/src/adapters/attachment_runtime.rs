@@ -193,6 +193,7 @@ impl AttachmentRuntime {
         from_fingerprint: String,
         bytes: Vec<u8>,
         thumbnail_b64: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentManifest, AttachmentRuntimeError> {
         if bytes.is_empty() {
             return Err(AttachmentRuntimeError::Empty);
@@ -218,6 +219,7 @@ impl AttachmentRuntime {
             key_b64: encode(&key),
             nonce_prefix_b64: encode(&nonce_prefix),
             thumbnail_b64,
+            voice,
             from_fingerprint,
         };
         self.outgoing.insert(
@@ -887,6 +889,28 @@ mod tests {
             runtime.register_incoming(manifest),
             Err(AttachmentRuntimeError::ManifestMismatch(_))
         ));
+    }
+
+    #[test]
+    fn prepare_outgoing_stamps_voice_onto_the_manifest() {
+        let mut runtime = AttachmentRuntime::new();
+        let voice = VoiceMeta {
+            duration_ms: 1000,
+            peaks_b64: "AAA=".to_string(),
+        };
+        let manifest = runtime
+            .prepare_outgoing(
+                "att-1".into(),
+                "voice-message.webm".into(),
+                "audio/webm".into(),
+                "fp".into(),
+                vec![1, 2, 3, 4],
+                None,
+                Some(voice),
+            )
+            .expect("prepare");
+        let stamped = manifest.voice.expect("voice present");
+        assert_eq!(stamped.duration_ms, 1000);
     }
 
     #[test]
