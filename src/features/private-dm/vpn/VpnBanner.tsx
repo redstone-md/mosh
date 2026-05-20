@@ -46,7 +46,7 @@ export function VpnBanner({ gateway }: Props) {
   const physicalInterfaces = useMemo(
     () =>
       interfaces.filter(
-        (iface) => !iface.is_loopback && !iface.is_virtual_guess,
+        (iface) => !iface.is_loopback && !iface.is_virtual,
       ),
     [interfaces],
   );
@@ -168,7 +168,7 @@ export function VpnBanner({ gateway }: Props) {
 
 function defaultPick(list: readonly NetworkInterfaceInfo[]): string {
   const candidate = list.find(
-    (iface) => !iface.is_loopback && !iface.is_virtual_guess && !!iface.ipv4,
+    (iface) => !iface.is_loopback && !iface.is_virtual && !!iface.ipv4,
   );
   return candidate?.name ?? "";
 }
