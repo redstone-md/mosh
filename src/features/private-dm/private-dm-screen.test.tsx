@@ -322,6 +322,51 @@ describe("PrivateDmScreen", () => {
     expect(gateway.sendPrivateMessage).toHaveBeenCalledWith(SESSION_ID, "hello");
   });
 
+  it("downloads voice attachments before playback", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway([
+      snapshot({
+        messages: [
+          {
+            from_device: "Alice",
+            body: "",
+            attachment: {
+              attachment_id: "voice-test",
+              content_hash: "1".repeat(64),
+              file_name: "voice-message.webm",
+              mime: "audio/webm",
+              total_size: 4096,
+              voice: { duration_ms: 1200, peaks_b64: "" },
+            },
+          },
+        ],
+        attachments: [
+          {
+            attachment_id: "voice-test",
+            direction: "incoming",
+            state: "offered",
+            completed_chunks: 0,
+            chunk_count: 1,
+          },
+        ],
+      }),
+    ]);
+    const { container } = render(<PrivateDmScreen gateway={gateway} />);
+
+    await screen.findByRole("button", { name: "Play voice message" });
+    const audio = container.querySelector("audio");
+    expect(audio?.getAttribute("src")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Play voice message" }));
+
+    await waitFor(() =>
+      expect(gateway.downloadPrivateAttachment).toHaveBeenCalledWith(
+        SESSION_ID,
+        "voice-test",
+      ),
+    );
+  });
+
   it("does not overclaim tracker privacy", async () => {
     const user = userEvent.setup();
     render(<PrivateDmScreen gateway={createGateway()} />);

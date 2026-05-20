@@ -1,6 +1,6 @@
 import { IconPlayerPauseFilled, IconPlayerPlayFilled } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
-import { localFileSrc, streamingMediaSrc } from "../attachments";
+import { localFileSrc } from "../attachments";
 import type {
   AttachmentDescriptor,
   AttachmentView,
@@ -43,32 +43,33 @@ function drawWaveform(
 
 /**
  * Inline voice-message player. Shows the waveform immediately from the
- * descriptor's peaks; plays the audio over the streaming protocol while
- * the transfer is still in progress, or from the local file once complete.
+ * descriptor's peaks; downloads incoming clips before playback so browser
+ * audio does not depend on the range-streaming attachment protocol.
  */
 export function VoiceMessage({
   descriptor,
   view,
-  surface,
-  host,
+  busy,
+  onDownload,
 }: {
   descriptor: AttachmentDescriptor;
   view: AttachmentView | undefined;
-  surface: "dm" | "group" | "channel";
-  host: string;
+  busy: boolean;
+  onDownload: (attachmentId: string) => void;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [positionMs, setPositionMs] = useState(0);
+  const [playWhenReady, setPlayWhenReady] = useState(false);
 
   const durationMs = descriptor.voice?.duration_ms ?? 0;
   const peaks = peaksFromBase64(descriptor.voice?.peaks_b64 ?? "");
   const progress = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
 
-  const src = view?.local_path
-    ? localFileSrc(view.local_path)
-    : streamingMediaSrc(surface, host, descriptor.attachment_id);
+  const src = view?.local_path ? localFileSrc(view.local_path) : undefined;
+  const downloading = view?.state === "downloading";
+  const canPlay = Boolean(src);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -77,15 +78,28 @@ export function VoiceMessage({
     }
   }, [peaks, progress]);
 
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !src || !playWhenReady) {
+      return;
+    }
+    setPlayWhenReady(false);
+    void audio.play();
+  }, [playWhenReady, src]);
+
   const toggle = () => {
     const audio = audioRef.current;
-    if (!audio) {
+    if (!canPlay) {
+      setPlayWhenReady(true);
+      if (!downloading) {
+        onDownload(descriptor.attachment_id);
+      }
       return;
     }
     if (playing) {
-      audio.pause();
+      audio?.pause();
     } else {
-      void audio.play();
+      void audio?.play();
     }
   };
 
@@ -123,6 +137,8 @@ export function VoiceMessage({
         type="button"
         className="voice-message-play"
         aria-label={playing ? "Pause voice message" : "Play voice message"}
+        title={downloading ? "Downloading" : undefined}
+        disabled={busy && !canPlay}
         onClick={toggle}
       >
         {playing ? (

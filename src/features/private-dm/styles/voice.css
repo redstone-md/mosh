@@ -75,6 +75,11 @@
   flex-shrink: 0;
 }
 
+.voice-message-play:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .voice-message-wave {
   cursor: pointer;
   flex: 1;

@@ -228,8 +228,6 @@ export function AttachmentCard({
   descriptor,
   view,
   busy,
-  surface,
-  host,
   onDownload,
   onCancel,
   onOpen,
@@ -237,8 +235,6 @@ export function AttachmentCard({
   descriptor: AttachmentDescriptor;
   view: AttachmentView | undefined;
   busy: boolean;
-  surface: "dm" | "group" | "channel";
-  host: string;
   onDownload: (attachmentId: string) => void;
   onCancel: (attachmentId: string) => void;
   onOpen: (descriptor: AttachmentDescriptor) => void;
@@ -248,8 +244,8 @@ export function AttachmentCard({
       <VoiceMessage
         descriptor={descriptor}
         view={view}
-        surface={surface}
-        host={host}
+        busy={busy}
+        onDownload={onDownload}
       />
     );
   }

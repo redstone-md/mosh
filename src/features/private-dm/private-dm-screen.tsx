@@ -105,8 +105,6 @@ import {
 interface AttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
   readonly busy: boolean;
-  readonly surface: "dm" | "group" | "channel";
-  readonly host: string;
   readonly onSend: (file: File) => void;
   readonly onSendVoice: (voice: VoiceSend) => void;
   readonly onVoiceError: (message: string) => void;
@@ -954,18 +952,9 @@ export function PrivateDmScreen({
     }
   }, [activeAttachments, pendingOpen]);
 
-  const mediaSurface: "dm" | "group" | "channel" = active?.type ?? "dm";
-  const mediaHost = active
-    ? active.type === "channel"
-      ? active.name
-      : active.id
-    : "";
-
   const attachmentApi: AttachmentApi = {
     views: attachmentViews,
     busy,
-    surface: mediaSurface,
-    host: mediaHost,
     onSend: sendAttachment,
     onSendVoice: sendVoice,
     onVoiceError: setError,
@@ -2220,8 +2209,6 @@ function GroupMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
-            surface={attachments.surface}
-            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
@@ -2357,8 +2344,6 @@ function DmMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
-            surface={attachments.surface}
-            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
@@ -2439,8 +2424,6 @@ function ChannelMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
-            surface={attachments.surface}
-            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
