@@ -1,0 +1,80 @@
+.call-modal,
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+}
+
+.call-modal-card,
+.call-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 32px 36px;
+  border-radius: 14px;
+  background: #1d1f24;
+  color: #fff;
+  min-width: 280px;
+}
+
+.call-modal-peer,
+.call-overlay-peer {
+  font-size: 18px;
+}
+
+.call-modal-status,
+.call-overlay-timer {
+  font-size: 14px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.call-modal-actions,
+.call-overlay-actions {
+  display: flex;
+  gap: 16px;
+}
+
+.call-btn {
+  width: 48px;
+  height: 48px;
+  border: none;
+  border-radius: 50%;
+  background: #2a2d33;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.call-btn-accept {
+  background: #2ea043;
+}
+
+.call-btn-decline {
+  background: #e5484d;
+}
+
+.call-btn-muted {
+  background: #4f8cff;
+}
+
+.call-log-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.15);
+  font-size: 12px;
+}
+
+.call-log-missed {
+  color: #e5484d;
+}
