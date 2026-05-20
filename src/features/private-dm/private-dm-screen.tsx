@@ -78,6 +78,7 @@ import {
 import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
 import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
 import { CallLogEntry } from "./voice-call/CallLogEntry";
+import { VpnBanner } from "./vpn/VpnBanner";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
 import {
@@ -1098,7 +1099,7 @@ export function PrivateDmScreen({
               onClose={closeActive}
             />
           ) : (
-            <EmptyState onNew={() => setShowSetup(true)} />
+            <EmptyState onNew={() => setShowSetup(true)} gateway={gateway} />
           )}
         </section>
 
@@ -2248,12 +2249,19 @@ function GroupDiagnostics({ group }: { group: GroupSnapshot }) {
   );
 }
 
-function EmptyState({ onNew }: { onNew: () => void }) {
+function EmptyState({
+  onNew,
+  gateway,
+}: {
+  onNew: () => void;
+  gateway: NativeMessagingGateway;
+}) {
   return (
     <div className="chat-empty welcome-empty">
       <IconMessageCircle size={28} />
       <strong>{chatText.noSessionTitle}</strong>
       <p>{chatText.noSessionBody}</p>
+      <VpnBanner gateway={gateway} />
       <button className="btn btn-primary" type="button" onClick={onNew}>
         <IconPlus size={14} />
         {chatText.startCta}

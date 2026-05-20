@@ -754,6 +754,7 @@ fn start_channel_node(
             &MossNodeConfig {
                 listen_port,
                 static_peer,
+                bind_interface: None,
             },
         )
         .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;

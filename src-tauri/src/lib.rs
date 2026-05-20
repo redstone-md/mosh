@@ -827,6 +827,103 @@ fn private_group_dismiss_dm_offer(
     })
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetworkInterfaceInfo {
+    pub name: String,
+    pub index: u32,
+    pub ipv4: Option<String>,
+    pub is_loopback: bool,
+    pub is_virtual_guess: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VpnDetection {
+    pub vpn_likely: bool,
+    pub suspect_interfaces: Vec<String>,
+}
+
+fn looks_virtual(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    // Patterns that commonly tag TUN/TAP/VPN/virtual adapters across the
+    // VPN ecosystem. Conservative on purpose — false positives are
+    // recoverable by the user (they pick a different interface); false
+    // negatives leave them stuck behind the VPN with no warning.
+    const NEEDLES: &[&str] = &[
+        "tun", "tap", "wintun", "wireguard", "wg",
+        "openvpn", "anyconnect", "globalprotect",
+        "nordlynx", "mullvad", "proton", "zerotier",
+        "vethernet", "hyper-v", "virtual", "vmware",
+        "vbox", "loopback", "pseudo",
+    ];
+    NEEDLES.iter().any(|needle| lower.contains(needle))
+}
+
+#[tauri::command]
+fn list_network_interfaces() -> Result<Vec<NetworkInterfaceInfo>, String> {
+    use std::collections::BTreeMap;
+    let raw = if_addrs::get_if_addrs().map_err(|e| e.to_string())?;
+    let mut by_name: BTreeMap<String, NetworkInterfaceInfo> = BTreeMap::new();
+    for iface in raw {
+        let entry = by_name
+            .entry(iface.name.clone())
+            .or_insert_with(|| NetworkInterfaceInfo {
+                name: iface.name.clone(),
+                index: iface.index.unwrap_or(0),
+                ipv4: None,
+                is_loopback: iface.is_loopback(),
+                is_virtual_guess: looks_virtual(&iface.name),
+            });
+        if entry.ipv4.is_none() {
+            if let std::net::IpAddr::V4(v4) = iface.ip() {
+                entry.ipv4 = Some(v4.to_string());
+            }
+        }
+        // Coalesce: an interface may appear once per address family.
+        if let Some(idx) = iface.index {
+            if entry.index == 0 {
+                entry.index = idx;
+            }
+        }
+    }
+    Ok(by_name.into_values().collect())
+}
+
+#[tauri::command]
+fn detect_vpn() -> Result<VpnDetection, String> {
+    let interfaces = list_network_interfaces()?;
+    let suspect: Vec<String> = interfaces
+        .iter()
+        .filter(|iface| !iface.is_loopback && iface.is_virtual_guess)
+        .map(|iface| iface.name.clone())
+        .collect();
+    Ok(VpnDetection {
+        vpn_likely: !suspect.is_empty(),
+        suspect_interfaces: suspect,
+    })
+}
+
+#[tauri::command]
+fn set_bind_interface(value: Option<String>) -> Result<(), String> {
+    // Reject names that look like virtual / VPN adapters when something
+    // non-empty was passed — turning the override on but pointing it at
+    // the very tunnel we are trying to bypass would silently defeat the
+    // feature.
+    if let Some(name) = value.as_ref() {
+        if !name.is_empty() && looks_virtual(name) {
+            return Err(format!(
+                "interface {name:?} looks virtual / VPN — pick a physical NIC"
+            ));
+        }
+    }
+    adapters::moss_ffi::set_bind_interface(value);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_bind_interface() -> Option<String> {
+    adapters::moss_ffi::current_bind_interface()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -866,6 +963,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_diagnostics,
             native_runtime_status,
+            list_network_interfaces,
+            detect_vpn,
+            set_bind_interface,
+            get_bind_interface,
             private_dm_create_invite,
             private_dm_accept_invite,
             private_dm_send_message,

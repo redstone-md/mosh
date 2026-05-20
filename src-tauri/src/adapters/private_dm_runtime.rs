@@ -1179,6 +1179,7 @@ fn start_node(
             &MossNodeConfig {
                 listen_port,
                 static_peer,
+                bind_interface: None,
             },
         )
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
