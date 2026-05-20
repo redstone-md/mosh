@@ -77,9 +77,7 @@ enum ChannelBlobEnvelope {
         frame: ChunkFrame,
     },
     /// A private-DM invitation aimed at one channel member.
-    DmOffer {
-        offer: DmOffer,
-    },
+    DmOffer { offer: DmOffer },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -183,10 +181,7 @@ impl ChannelRuntime {
         Self::from_shared(Arc::new(moss), attachment_store)
     }
 
-    pub fn from_shared(
-        moss: Arc<MossFfiRuntime>,
-        attachment_store: Arc<AttachmentStore>,
-    ) -> Self {
+    pub fn from_shared(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
         Self {
             moss,
             attachment_store,
@@ -442,10 +437,7 @@ impl ChannelRuntime {
 }
 
 impl ChannelSession {
-    fn handle_message(
-        &mut self,
-        message: MossReceivedMessage,
-    ) -> Result<(), ChannelRuntimeError> {
+    fn handle_message(&mut self, message: MossReceivedMessage) -> Result<(), ChannelRuntimeError> {
         if self.has_seen(&message) {
             return Ok(());
         }
@@ -517,11 +509,13 @@ impl ChannelSession {
                     .unwrap_or_else(|| "file".to_string());
                 match self.attachments.ingest_chunk(&frame) {
                     Ok(ChunkOutcome::Complete {
-                        content_hash, bytes, ..
+                        content_hash,
+                        bytes,
+                        ..
                     }) => {
-                        let path = self
-                            .attachment_store
-                            .write_blob(&content_hash, &file_name, &bytes)?;
+                        let path =
+                            self.attachment_store
+                                .write_blob(&content_hash, &file_name, &bytes)?;
                         if let Some(slot) = self.attachment_slots.get_mut(&attachment_id) {
                             slot.local_path = Some(path.to_string_lossy().into_owned());
                             slot.failed = false;
@@ -596,9 +590,11 @@ impl ChannelSession {
             thumbnail,
             voice,
         )?;
-        let stored = self
-            .attachment_store
-            .write_blob(&manifest.content_hash, &manifest.file_name, &bytes)?;
+        let stored = self.attachment_store.write_blob(
+            &manifest.content_hash,
+            &manifest.file_name,
+            &bytes,
+        )?;
         let envelope = ChannelBlobEnvelope::Manifest {
             from_device: self.display_name.clone(),
             from_fingerprint: self.device_fingerprint.clone(),
@@ -638,9 +634,7 @@ impl ChannelSession {
         let slot = self
             .attachment_slots
             .get_mut(attachment_id)
-            .ok_or_else(|| {
-                ChannelRuntimeError::MissingAttachment(attachment_id.to_string())
-            })?;
+            .ok_or_else(|| ChannelRuntimeError::MissingAttachment(attachment_id.to_string()))?;
         if slot.direction != AttachmentDirection::Incoming {
             return Err(ChannelRuntimeError::Attachment(
                 "cannot download an outgoing attachment".to_string(),
@@ -653,16 +647,11 @@ impl ChannelSession {
         Ok(())
     }
 
-    fn cancel_attachment(
-        &mut self,
-        attachment_id: &str,
-    ) -> Result<(), ChannelRuntimeError> {
+    fn cancel_attachment(&mut self, attachment_id: &str) -> Result<(), ChannelRuntimeError> {
         let slot = self
             .attachment_slots
             .get_mut(attachment_id)
-            .ok_or_else(|| {
-                ChannelRuntimeError::MissingAttachment(attachment_id.to_string())
-            })?;
+            .ok_or_else(|| ChannelRuntimeError::MissingAttachment(attachment_id.to_string()))?;
         slot.cancelled = true;
         slot.download_requested = false;
         self.attachments.cancel(attachment_id);
@@ -787,10 +776,7 @@ pub fn normalize_name(raw: &str) -> Result<String, ChannelRuntimeError> {
     if trimmed.is_empty() || trimmed.len() > MAX_NAME_LEN {
         return Err(ChannelRuntimeError::InvalidName(raw.to_string()));
     }
-    let normalized: String = trimmed
-        .chars()
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
+    let normalized: String = trimmed.chars().map(|c| c.to_ascii_lowercase()).collect();
     if !normalized
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -813,8 +799,8 @@ fn publish_json<T: Serialize>(
     topic: &str,
     value: &T,
 ) -> Result<(), ChannelRuntimeError> {
-    let payload = serde_json::to_vec(value)
-        .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
+    let payload =
+        serde_json::to_vec(value).map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
     node.publish(topic, &payload)
         .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))
 }

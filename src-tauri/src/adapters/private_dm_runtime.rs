@@ -5,6 +5,13 @@ mod wire;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
+pub use crate::adapters::attachment_runtime::VoiceMeta;
+use crate::adapters::attachment_runtime::{
+    AttachmentManifest, AttachmentRuntime, ChunkOutcome, StreamRange, CHUNK_SIZE,
+};
+use crate::adapters::attachment_store::AttachmentStore;
+use crate::adapters::mls_crypto::MlsSessionCrypto;
+use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 pub use contracts::{
     AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
     AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
@@ -12,13 +19,6 @@ pub use contracts::{
     SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
-use crate::adapters::attachment_runtime::{
-    AttachmentManifest, AttachmentRuntime, ChunkOutcome, StreamRange, CHUNK_SIZE,
-};
-pub use crate::adapters::attachment_runtime::VoiceMeta;
-use crate::adapters::attachment_store::AttachmentStore;
-use crate::adapters::mls_crypto::MlsSessionCrypto;
-use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 use wire::{
     blob_channel, channel_session_id, control_channel, data_channel, decode, decode_json, encode,
     publish_json, voice_call_channel, BlobEnvelope, ControlEnvelope, DataEnvelope,
@@ -100,10 +100,7 @@ impl PrivateDmRuntime {
         Self::from_shared(Arc::new(moss), attachment_store)
     }
 
-    pub fn from_shared(
-        moss: Arc<MossFfiRuntime>,
-        attachment_store: Arc<AttachmentStore>,
-    ) -> Self {
+    pub fn from_shared(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
         Self {
             moss,
             attachment_store,
@@ -305,7 +302,9 @@ impl PrivateDmRuntime {
             .map(PrivateDmSession::snapshot)
             .collect();
         snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-        Ok(SessionListSnapshot { sessions: snapshots })
+        Ok(SessionListSnapshot {
+            sessions: snapshots,
+        })
     }
 
     pub fn close_session(
@@ -349,19 +348,13 @@ impl PrivateDmRuntime {
             .ok_or(PrivateDmRuntimeError::MissingSession)
     }
 
-    fn session_ref(
-        &self,
-        session_id: &str,
-    ) -> Result<&PrivateDmSession, PrivateDmRuntimeError> {
+    fn session_ref(&self, session_id: &str) -> Result<&PrivateDmSession, PrivateDmRuntimeError> {
         self.sessions
             .get(session_id)
             .ok_or(PrivateDmRuntimeError::MissingSession)
     }
 
-    pub fn call_start(
-        &mut self,
-        session_id: &str,
-    ) -> Result<CallStarted, PrivateDmRuntimeError> {
+    pub fn call_start(&mut self, session_id: &str) -> Result<CallStarted, PrivateDmRuntimeError> {
         self.drain_inbound()?;
         let session = self.session_mut(session_id)?;
         session.call_start()
@@ -561,11 +554,8 @@ impl PrivateDmSession {
                 participant_id,
                 from_device,
                 manifest_ciphertext_b64,
-            } if session_id == self.session_id
-                && participant_id != self.participant_id =>
-            {
-                let manifest_json =
-                    self.crypto.decrypt(&decode(&manifest_ciphertext_b64)?)?;
+            } if session_id == self.session_id && participant_id != self.participant_id => {
+                let manifest_json = self.crypto.decrypt(&decode(&manifest_ciphertext_b64)?)?;
                 let manifest: AttachmentManifest = decode_json(&manifest_json)?;
                 self.accept_incoming_manifest(from_device, manifest)
             }
@@ -575,9 +565,7 @@ impl PrivateDmSession {
                 from_device,
                 call_id,
                 offer_ciphertext_b64,
-            } if session_id == self.session_id
-                && participant_id != self.participant_id =>
-            {
+            } if session_id == self.session_id && participant_id != self.participant_id => {
                 if self.call.is_some() {
                     return Ok(());
                 }
@@ -599,9 +587,7 @@ impl PrivateDmSession {
                 session_id,
                 participant_id,
                 call_id,
-            } if session_id == self.session_id
-                && participant_id != self.participant_id =>
-            {
+            } if session_id == self.session_id && participant_id != self.participant_id => {
                 if let Some(call) = self.call.as_mut() {
                     if call.call_id == call_id && call.phase == CallPhase::Outgoing {
                         call.become_active(now_ms());
@@ -614,9 +600,7 @@ impl PrivateDmSession {
                 participant_id,
                 call_id,
                 reason: _,
-            } if session_id == self.session_id
-                && participant_id != self.participant_id =>
-            {
+            } if session_id == self.session_id && participant_id != self.participant_id => {
                 if let Some(call) = self.call.as_ref() {
                     if call.call_id == call_id {
                         let _ = self.node.unsubscribe_voice_call(&call.call_id);
@@ -633,9 +617,7 @@ impl PrivateDmSession {
                 participant_id,
                 call_id,
                 reason,
-            } if session_id == self.session_id
-                && participant_id != self.participant_id =>
-            {
+            } if session_id == self.session_id && participant_id != self.participant_id => {
                 if let Some(call) = self.call.as_ref() {
                     if call.call_id == call_id {
                         let duration = call.duration_ms(now_ms());
@@ -648,12 +630,7 @@ impl PrivateDmSession {
                         let remote = call.remote_device.clone();
                         let call_id_owned = call.call_id.clone();
                         self.call = None;
-                        self.append_call_event_message(
-                            &remote,
-                            kind,
-                            duration,
-                            &call_id_owned,
-                        );
+                        self.append_call_event_message(&remote, kind, duration, &call_id_owned);
                     }
                 }
                 Ok(())
@@ -684,8 +661,7 @@ impl PrivateDmSession {
     fn handle_data(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
         let envelope: DataEnvelope = decode_json(&payload)?;
 
-        if envelope.session_id != self.session_id
-            || envelope.participant_id == self.participant_id
+        if envelope.session_id != self.session_id || envelope.participant_id == self.participant_id
         {
             return Ok(());
         }
@@ -730,11 +706,13 @@ impl PrivateDmSession {
                     .unwrap_or_else(|| "file".to_string());
                 match self.attachments.ingest_chunk(&frame) {
                     Ok(ChunkOutcome::Complete {
-                        content_hash, bytes, ..
+                        content_hash,
+                        bytes,
+                        ..
                     }) => {
-                        let path = self
-                            .attachment_store
-                            .write_blob(&content_hash, &file_name, &bytes)?;
+                        let path =
+                            self.attachment_store
+                                .write_blob(&content_hash, &file_name, &bytes)?;
                         if let Some(slot) = self.attachment_slots.get_mut(&attachment_id) {
                             slot.local_path = Some(path.to_string_lossy().into_owned());
                             slot.failed = false;
@@ -806,9 +784,11 @@ impl PrivateDmSession {
             thumbnail,
             voice,
         )?;
-        let stored = self
-            .attachment_store
-            .write_blob(&manifest.content_hash, &manifest.file_name, &bytes)?;
+        let stored = self.attachment_store.write_blob(
+            &manifest.content_hash,
+            &manifest.file_name,
+            &bytes,
+        )?;
         let manifest_json = serde_json::to_vec(&manifest)
             .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
         let ciphertext = self.crypto.encrypt(&manifest_json)?;
@@ -852,9 +832,7 @@ impl PrivateDmSession {
         let slot = self
             .attachment_slots
             .get_mut(attachment_id)
-            .ok_or_else(|| {
-                PrivateDmRuntimeError::MissingAttachment(attachment_id.to_string())
-            })?;
+            .ok_or_else(|| PrivateDmRuntimeError::MissingAttachment(attachment_id.to_string()))?;
         if slot.direction != AttachmentDirection::Incoming {
             return Err(PrivateDmRuntimeError::Attachment(
                 "cannot download an outgoing attachment".to_string(),
@@ -867,16 +845,11 @@ impl PrivateDmSession {
         Ok(())
     }
 
-    fn cancel_attachment(
-        &mut self,
-        attachment_id: &str,
-    ) -> Result<(), PrivateDmRuntimeError> {
+    fn cancel_attachment(&mut self, attachment_id: &str) -> Result<(), PrivateDmRuntimeError> {
         let slot = self
             .attachment_slots
             .get_mut(attachment_id)
-            .ok_or_else(|| {
-                PrivateDmRuntimeError::MissingAttachment(attachment_id.to_string())
-            })?;
+            .ok_or_else(|| PrivateDmRuntimeError::MissingAttachment(attachment_id.to_string()))?;
         slot.cancelled = true;
         slot.download_requested = false;
         self.attachments.cancel(attachment_id);
@@ -1365,8 +1338,7 @@ mod tests {
             let _ = alice.poll_session(session_id);
             let snapshot = bob.poll_session(session_id).expect("poll should pass");
             if snapshot.attachments.iter().any(|view| {
-                view.attachment_id == attachment_id
-                    && view.state == AttachmentState::Available
+                view.attachment_id == attachment_id && view.state == AttachmentState::Available
             }) {
                 return;
             }

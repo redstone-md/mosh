@@ -311,6 +311,9 @@ mod tests {
         // the attachment's own <root>/<hash>/ directory.
         let path = store.path_for(&hash, "../../evil.exe").unwrap();
         assert_eq!(path.parent().unwrap(), store.root().join(&hash));
-        assert_eq!(path.components().count(), store.root().join(&hash).components().count() + 1);
+        assert_eq!(
+            path.components().count(),
+            store.root().join(&hash).components().count() + 1
+        );
     }
 }
