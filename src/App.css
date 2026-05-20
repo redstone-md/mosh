@@ -4,3 +4,4 @@
 @import "./features/private-dm/styles/chat-pane.css";
 @import "./features/private-dm/styles/voice.css";
 @import "./features/private-dm/styles/call.css";
+@import "./features/private-dm/styles/vpn-banner.css";

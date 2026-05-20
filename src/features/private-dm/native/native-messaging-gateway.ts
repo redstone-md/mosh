@@ -28,6 +28,10 @@ const PRIVATE_DM_CALL_DECLINE_COMMAND = "private_dm_call_decline";
 const PRIVATE_DM_CALL_END_COMMAND = "private_dm_call_end";
 const PRIVATE_DM_CALL_SEND_FRAME_COMMAND = "private_dm_call_send_frame";
 const PRIVATE_DM_CALL_DRAIN_FRAMES_COMMAND = "private_dm_call_drain_frames";
+const LIST_NETWORK_INTERFACES_COMMAND = "list_network_interfaces";
+const DETECT_VPN_COMMAND = "detect_vpn";
+const SET_BIND_INTERFACE_COMMAND = "set_bind_interface";
+const GET_BIND_INTERFACE_COMMAND = "get_bind_interface";
 const PRIVATE_GROUP_SEND_ATTACHMENT_COMMAND = "private_group_send_attachment";
 const PRIVATE_GROUP_DOWNLOAD_ATTACHMENT_COMMAND = "private_group_download_attachment";
 const PRIVATE_GROUP_CANCEL_ATTACHMENT_COMMAND = "private_group_cancel_attachment";
@@ -409,6 +413,23 @@ export interface NativeMessagingGateway {
   callEnd(sessionId: string, callId: string, reason: string): Promise<void>;
   callSendFrame(sessionId: string, callId: string, frameBase64: string): Promise<void>;
   callDrainFrames(sessionId: string, callId: string): Promise<readonly string[]>;
+  listNetworkInterfaces(): Promise<readonly NetworkInterfaceInfo[]>;
+  detectVpn(): Promise<VpnDetection>;
+  setBindInterface(value: string | null): Promise<void>;
+  getBindInterface(): Promise<string | null>;
+}
+
+export interface NetworkInterfaceInfo {
+  readonly name: string;
+  readonly index: number;
+  readonly ipv4: string | null;
+  readonly is_loopback: boolean;
+  readonly is_virtual_guess: boolean;
+}
+
+export interface VpnDetection {
+  readonly vpn_likely: boolean;
+  readonly suspect_interfaces: readonly string[];
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {
@@ -637,6 +658,22 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
       sessionId,
       callId,
     });
+  }
+
+  async listNetworkInterfaces(): Promise<readonly NetworkInterfaceInfo[]> {
+    return invoke<readonly NetworkInterfaceInfo[]>(LIST_NETWORK_INTERFACES_COMMAND);
+  }
+
+  async detectVpn(): Promise<VpnDetection> {
+    return invoke<VpnDetection>(DETECT_VPN_COMMAND);
+  }
+
+  async setBindInterface(value: string | null): Promise<void> {
+    await invoke(SET_BIND_INTERFACE_COMMAND, { value });
+  }
+
+  async getBindInterface(): Promise<string | null> {
+    return invoke<string | null>(GET_BIND_INTERFACE_COMMAND);
   }
 }
 

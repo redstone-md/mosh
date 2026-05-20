@@ -1,0 +1,71 @@
+.vpn-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(229, 72, 77, 0.08);
+  border: 1px solid rgba(229, 72, 77, 0.35);
+  text-align: left;
+  max-width: 520px;
+}
+
+.vpn-banner-icon {
+  color: #e5484d;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.vpn-banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.vpn-banner-body strong {
+  font-size: 14px;
+}
+
+.vpn-banner-detail {
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0.85;
+  margin: 0;
+}
+
+.vpn-banner-warning {
+  color: #e5b04d;
+}
+
+.vpn-banner-active {
+  color: #2ea043;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vpn-banner-error {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.vpn-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.vpn-banner-select {
+  background: #1a1c20;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  min-width: 180px;
+}

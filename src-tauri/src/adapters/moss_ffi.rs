@@ -2,11 +2,37 @@ use std::{
     ffi::{c_void, CStr, CString},
     mem::ManuallyDrop,
     os::raw::c_char,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
 use libloading::{Library, Symbol};
+
+/// App-wide network override. When set to a non-empty interface name or
+/// numeric index, every Moss node started after the value changes will be
+/// configured to bypass the routing table via IP_UNICAST_IF (or platform
+/// equivalent). Empty string / None leaves the OS default in place.
+///
+/// Read by `node_config_json` so all three runtimes (private DM, group,
+/// channel) pick it up automatically without each call site threading the
+/// setting through their request structs.
+static BIND_INTERFACE: RwLock<Option<String>> = RwLock::new(None);
+
+/// Set the app-wide bind interface. Pass `None` (or empty string) to clear.
+/// Future Moss nodes inherit the new value; nodes already started keep the
+/// value they were created with — restart the session to apply a change.
+pub fn set_bind_interface(value: Option<String>) {
+    let mut guard = BIND_INTERFACE.write().expect("bind interface lock poisoned");
+    *guard = value.filter(|s| !s.is_empty());
+}
+
+/// Read the current app-wide bind interface for diagnostics or UI display.
+pub fn current_bind_interface() -> Option<String> {
+    BIND_INTERFACE
+        .read()
+        .expect("bind interface lock poisoned")
+        .clone()
+}
 
 use crate::adapters::moss_runtime::{MossDynamicRuntime, MossRuntimeError};
 
@@ -106,10 +132,14 @@ pub struct MossNode {
     handle: MossHandle,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MossNodeConfig {
     pub listen_port: u16,
     pub static_peer: Option<String>,
+    /// Forces outbound UDP through the named NIC (name or numeric index),
+    /// bypassing the OS routing table — used to escape an active VPN
+    /// tunnel. Empty / None disables the feature.
+    pub bind_interface: Option<String>,
 }
 
 impl MossFfiRuntime {
@@ -362,11 +392,39 @@ pub fn node_config_json(config: &MossNodeConfig) -> String {
         Some(peer) => format!("[\"{peer}\"]"),
         None => "[]".to_string(),
     };
+    // Per-call override wins; otherwise fall back to the app-wide setting
+    // (driven by the UI toggle in onboarding). This keeps existing call
+    // sites untouched when the user has not opted in.
+    let bind_value = config
+        .bind_interface
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(current_bind_interface);
+    let bind = match bind_value {
+        Some(name) if !name.is_empty() => format!(",\"bind_interface\":\"{}\"", escape_json(&name)),
+        _ => String::new(),
+    };
 
     format!(
-        r#"{{"listen_port":{},"static_peers":{},"announce_interval_sec":15,"bootstrap_timeout_sec":12,"lan_discovery_enabled":true,"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":true,"natpmp_enabled":true,"pcp_enabled":true,"hole_punch_attempts":8,"port_prediction_enabled":true}}}}"#,
-        config.listen_port, peers
+        r#"{{"listen_port":{},"static_peers":{}{},"announce_interval_sec":15,"bootstrap_timeout_sec":12,"lan_discovery_enabled":true,"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":true,"natpmp_enabled":true,"pcp_enabled":true,"hole_punch_attempts":8,"port_prediction_enabled":true}}}}"#,
+        config.listen_port, peers, bind
     )
+}
+
+fn escape_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn load_symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T, MossFfiError> {
