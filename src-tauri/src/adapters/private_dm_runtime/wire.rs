@@ -60,15 +60,16 @@ pub enum ControlEnvelope {
         from_device: String,
         manifest_ciphertext_b64: String,
     },
-    /// Initiates a 1:1 voice call. The per-call AES-GCM key and the 4-byte
-    /// nonce prefix are delivered inside this envelope.
+    /// Initiates a 1:1 voice call. The body — a JSON object carrying the
+    /// per-call AES-GCM key and the 4-byte nonce prefix — is encrypted as an
+    /// MLS application message so the key never crosses the wire in the
+    /// clear.
     CallOffer {
         session_id: String,
         participant_id: String,
         from_device: String,
         call_id: String,
-        key_b64: String,
-        nonce_prefix_b64: String,
+        offer_ciphertext_b64: String,
     },
     CallAccept {
         session_id: String,
@@ -149,21 +150,18 @@ mod tests {
             participant_id: "p".into(),
             from_device: "d".into(),
             call_id: "c".into(),
-            key_b64: "k".into(),
-            nonce_prefix_b64: "n".into(),
+            offer_ciphertext_b64: "Y2lwaGVy".into(),
         };
         let json = serde_json::to_string(&envelope).expect("ser");
         let back: ControlEnvelope = serde_json::from_str(&json).expect("de");
         match back {
             ControlEnvelope::CallOffer {
                 call_id,
-                key_b64,
-                nonce_prefix_b64,
+                offer_ciphertext_b64,
                 ..
             } => {
                 assert_eq!(call_id, "c");
-                assert_eq!(key_b64, "k");
-                assert_eq!(nonce_prefix_b64, "n");
+                assert_eq!(offer_ciphertext_b64, "Y2lwaGVy");
             }
             _ => panic!("expected CallOffer"),
         }

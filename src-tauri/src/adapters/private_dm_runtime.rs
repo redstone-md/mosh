@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 pub use contracts::{
     AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
-    AttachmentView, CallEvent, CallStarted, ChatMessage, CloseSessionResult, DmOffer,
-    InviteCreated, MeshInfo, PendingCall, PrivateDmRuntimeError, SendMessageResult,
+    AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
+    DmOffer, InviteCreated, MeshInfo, PendingCall, PrivateDmRuntimeError, SendMessageResult,
     SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
@@ -574,19 +574,20 @@ impl PrivateDmSession {
                 participant_id,
                 from_device,
                 call_id,
-                key_b64,
-                nonce_prefix_b64,
+                offer_ciphertext_b64,
             } if session_id == self.session_id
                 && participant_id != self.participant_id =>
             {
                 if self.call.is_some() {
                     return Ok(());
                 }
+                let plaintext = self.crypto.decrypt(&decode(&offer_ciphertext_b64)?)?;
+                let body: CallOfferBody = decode_json(&plaintext)?;
                 let channel = voice_call_channel(&call_id);
                 self.call = Some(CallState::ringing(
                     call_id,
-                    key_b64,
-                    nonce_prefix_b64,
+                    body.key_b64,
+                    body.nonce_prefix_b64,
                     from_device,
                 ));
                 self.node
@@ -1014,13 +1015,19 @@ impl PrivateDmSession {
         self.node
             .subscribe(&voice_call_channel(&call_id))
             .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+        let body = CallOfferBody {
+            key_b64: key_b64.clone(),
+            nonce_prefix_b64: nonce_prefix_b64.clone(),
+        };
+        let body_json = serde_json::to_vec(&body)
+            .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
+        let ciphertext = self.crypto.encrypt(&body_json)?;
         let envelope = ControlEnvelope::CallOffer {
             session_id: self.session_id.clone(),
             participant_id: self.participant_id.clone(),
             from_device: self.device_id.clone(),
             call_id: call_id.clone(),
-            key_b64: key_b64.clone(),
-            nonce_prefix_b64: nonce_prefix_b64.clone(),
+            offer_ciphertext_b64: encode(&ciphertext),
         };
         publish_json(&self.node, &self.control_channel, &envelope)?;
         Ok(CallStarted {

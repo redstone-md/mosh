@@ -156,6 +156,16 @@ pub struct CallStarted {
     pub nonce_prefix_b64: String,
 }
 
+/// Body of an MLS-encrypted CallOffer. Never crosses the wire in the clear:
+/// the runtime serialises it to JSON, encrypts via the session's MLS
+/// application-message key, and ships the ciphertext in
+/// `ControlEnvelope::CallOffer::offer_ciphertext_b64`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallOfferBody {
+    pub key_b64: String,
+    pub nonce_prefix_b64: String,
+}
+
 /// Immutable attachment metadata stamped onto the message log. Mutable
 /// transfer state is reported separately through AttachmentView.
 #[derive(Debug, Clone, Serialize, Deserialize)]
