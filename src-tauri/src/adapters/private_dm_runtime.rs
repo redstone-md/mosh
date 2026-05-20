@@ -321,15 +321,18 @@ impl PrivateDmRuntime {
     }
 
     fn drain_inbound(&mut self) -> Result<(), PrivateDmRuntimeError> {
-        let inbound =
-            drain_messages_where(|message| channel_session_id(&message.channel).is_some());
+        let inbound = drain_messages_where(|message| is_private_dm_inbound(&message.channel));
         for message in inbound {
-            let session_id = match channel_session_id(&message.channel) {
-                Some(sid) => sid.to_string(),
-                None => continue,
-            };
-            if let Some(session) = self.sessions.get_mut(&session_id) {
-                session.handle_moss_message(message)?;
+            if let Some(session_id) = channel_session_id(&message.channel) {
+                if let Some(session) = self.sessions.get_mut(session_id) {
+                    session.handle_moss_message(message)?;
+                }
+                continue;
+            }
+            if wire::channel_call_id(&message.channel).is_some() {
+                for session in self.sessions.values_mut() {
+                    session.handle_moss_message(message.clone())?;
+                }
             }
         }
         // Keep every active download fed without waiting on a user action.
@@ -411,6 +414,10 @@ impl PrivateDmRuntime {
         let session = self.session_mut(session_id)?;
         Ok(session.call_drain_frames(call_id))
     }
+}
+
+fn is_private_dm_inbound(channel: &str) -> bool {
+    channel_session_id(channel).is_some() || wire::channel_call_id(channel).is_some()
 }
 
 impl PrivateDmSession {
@@ -1253,6 +1260,77 @@ mod tests {
         assert_eq!(snapshot.state, "ready");
     }
 
+    #[test]
+    fn private_dm_inbound_filter_includes_voice_call_channels() {
+        assert!(is_private_dm_inbound("mls-control/session-one"));
+        assert!(is_private_dm_inbound("mls-data/session-one"));
+        assert!(is_private_dm_inbound("mls-blob/session-one"));
+        assert!(is_private_dm_inbound("voice-call/call-one"));
+        assert!(!is_private_dm_inbound("public-channel/general"));
+    }
+
+    // Real Moss call E2E. This exercises the voice-call subscription and
+    // frame routing path, but local peer handshakes are timing-sensitive in
+    // the full suite, so run it explicitly when touching call transport.
+    #[test]
+    #[ignore]
+    fn private_dm_runtime_routes_voice_call_frames_over_moss() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store());
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42134,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let mut bob = PrivateDmRuntime::from_shared(runtime, temp_store());
+        bob.accept_invite(AcceptInviteRequest {
+            invite_uri: invite.invite_uri.clone(),
+            display_name: "Bob".to_string(),
+            listen_port: 42135,
+            static_peer: Some("127.0.0.1:42134".to_string()),
+        })
+        .expect("Bob should accept invite");
+
+        wait_until_ready(&mut alice, &mut bob, &invite.session_id);
+        let call = alice
+            .call_start(&invite.session_id)
+            .expect("Alice should start a call");
+        wait_for_pending_call(&mut bob, &invite.session_id, &call.call_id);
+        bob.call_accept(&invite.session_id, &call.call_id)
+            .expect("Bob should accept the call");
+        wait_for_active_call(&mut alice, &mut bob, &invite.session_id, &call.call_id);
+
+        alice
+            .call_send_frame(
+                &invite.session_id,
+                &call.call_id,
+                test_call_frame(0, &[1, 2, 3]),
+            )
+            .expect("Alice should send a voice frame");
+        assert_eq!(
+            wait_for_call_frame(&mut bob, &invite.session_id, &call.call_id),
+            test_call_frame(0, &[1, 2, 3])
+        );
+
+        bob.call_send_frame(
+            &invite.session_id,
+            &call.call_id,
+            test_call_frame(1 << 63, &[4, 5, 6]),
+        )
+        .expect("Bob should send a voice frame");
+        assert_eq!(
+            wait_for_call_frame(&mut alice, &invite.session_id, &call.call_id),
+            test_call_frame(1 << 63, &[4, 5, 6])
+        );
+    }
+
     // Heavy end-to-end transfer over real Moss. Loading the Moss Go runtime
     // a third time in one process makes the handshake flaky under suite
     // load, so this runs on demand via `cargo test -- --ignored`.
@@ -1373,6 +1451,71 @@ mod tests {
         }
 
         panic!("sessions did not become ready");
+    }
+
+    fn wait_for_pending_call(runtime: &mut PrivateDmRuntime, session_id: &str, call_id: &str) {
+        for _ in 0..60 {
+            let snapshot = runtime.poll_session(session_id).expect("poll should pass");
+            if snapshot
+                .pending_call
+                .as_ref()
+                .is_some_and(|call| call.call_id == call_id)
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("pending call did not arrive");
+    }
+
+    fn wait_for_active_call(
+        alice: &mut PrivateDmRuntime,
+        bob: &mut PrivateDmRuntime,
+        session_id: &str,
+        call_id: &str,
+    ) {
+        for _ in 0..60 {
+            let alice_active = alice
+                .poll_session(session_id)
+                .expect("Alice poll should pass")
+                .active_call
+                .as_ref()
+                .is_some_and(|call| call.call_id == call_id);
+            let bob_active = bob
+                .poll_session(session_id)
+                .expect("Bob poll should pass")
+                .active_call
+                .as_ref()
+                .is_some_and(|call| call.call_id == call_id);
+            if alice_active && bob_active {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("call did not become active");
+    }
+
+    fn wait_for_call_frame(
+        runtime: &mut PrivateDmRuntime,
+        session_id: &str,
+        call_id: &str,
+    ) -> Vec<u8> {
+        for _ in 0..60 {
+            let frames = runtime
+                .call_drain_frames(session_id, call_id)
+                .expect("frame drain should pass");
+            if let Some(frame) = frames.into_iter().next() {
+                return frame;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("voice frame did not arrive");
+    }
+
+    fn test_call_frame(seq: u64, payload: &[u8]) -> Vec<u8> {
+        let mut frame = seq.to_be_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        frame
     }
 
     fn wait_for_message(

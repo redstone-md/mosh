@@ -17,6 +17,13 @@ impl CallDirection {
             CallDirection::Callee => "callee",
         }
     }
+
+    fn seq_direction_bit(self) -> u64 {
+        match self {
+            CallDirection::Caller => 0,
+            CallDirection::Callee => 1 << 63,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +90,9 @@ impl CallState {
     }
 
     pub fn push_frame(&mut self, bytes: Vec<u8>) {
+        if frame_direction_bit(&bytes) == Some(self.direction.seq_direction_bit()) {
+            return;
+        }
         self.inbound_frames.push_back(bytes);
     }
 
@@ -101,6 +111,11 @@ impl CallState {
     }
 }
 
+fn frame_direction_bit(bytes: &[u8]) -> Option<u64> {
+    let header: [u8; 8] = bytes.get(..8)?.try_into().ok()?;
+    Some(u64::from_be_bytes(header) & (1 << 63))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,11 +132,30 @@ mod tests {
     #[test]
     fn drain_frames_returns_in_order_and_clears() {
         let mut call = CallState::ringing("c".into(), "k".into(), "n".into(), "peer".into());
-        call.push_frame(vec![1]);
-        call.push_frame(vec![2]);
+        let first = test_frame(0, &[1]);
+        let second = test_frame(1, &[2]);
+        call.push_frame(first.clone());
+        call.push_frame(second.clone());
         let drained = call.drain_frames();
-        assert_eq!(drained, vec![vec![1], vec![2]]);
+        assert_eq!(drained, vec![first, second]);
         assert!(call.drain_frames().is_empty());
+    }
+
+    #[test]
+    fn drain_frames_keeps_remote_direction_and_drops_self_echo() {
+        let mut caller = CallState::outgoing("c".into(), "k".into(), "n".into(), "peer".into());
+        let caller_frame = test_frame(0, &[1]);
+        let callee_frame = test_frame(1 << 63, &[2]);
+        caller.push_frame(caller_frame);
+        caller.push_frame(callee_frame.clone());
+        assert_eq!(caller.drain_frames(), vec![callee_frame]);
+
+        let mut callee = CallState::ringing("c".into(), "k".into(), "n".into(), "peer".into());
+        let caller_frame = test_frame(0, &[3]);
+        let callee_frame = test_frame(1 << 63, &[4]);
+        callee.push_frame(callee_frame);
+        callee.push_frame(caller_frame.clone());
+        assert_eq!(callee.drain_frames(), vec![caller_frame]);
     }
 
     #[test]
@@ -130,5 +164,11 @@ mod tests {
         assert_eq!(call.duration_ms(5_000), 0);
         call.become_active(2_000);
         assert_eq!(call.duration_ms(5_000), 3_000);
+    }
+
+    fn test_frame(seq: u64, payload: &[u8]) -> Vec<u8> {
+        let mut frame = seq.to_be_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        frame
     }
 }
