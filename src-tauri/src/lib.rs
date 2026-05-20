@@ -340,6 +340,93 @@ fn private_dm_cancel_attachment(
     })
 }
 
+#[tauri::command]
+fn private_dm_call_start(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+) -> Result<adapters::private_dm_runtime::CallStarted, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_start(&session_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_accept(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_accept(&session_id, &call_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_decline(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+    reason: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_decline(&session_id, &call_id, &reason)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_end(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+    reason: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_end(&session_id, &call_id, &reason)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_send_frame(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+    frame_b64: String,
+) -> Result<(), String> {
+    let bytes = decode_base64(&frame_b64)?;
+    state.with_runtime(|runtime| {
+        runtime
+            .call_send_frame(&session_id, &call_id, bytes)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_drain_frames(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+) -> Result<Vec<String>, String> {
+    state.with_runtime(|runtime| {
+        let frames = runtime
+            .call_drain_frames(&session_id, &call_id)
+            .map_err(|error| error.to_string())?;
+        Ok(frames
+            .into_iter()
+            .map(|bytes| {
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+            })
+            .collect())
+    })
+}
+
 fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
     base64::Engine::decode(&base64::engine::general_purpose::STANDARD, value)
         .map_err(|error| format!("invalid attachment payload: {error}"))
@@ -803,6 +890,12 @@ pub fn run() {
             private_dm_send_attachment,
             private_dm_download_attachment,
             private_dm_cancel_attachment,
+            private_dm_call_start,
+            private_dm_call_accept,
+            private_dm_call_decline,
+            private_dm_call_end,
+            private_dm_call_send_frame,
+            private_dm_call_drain_frames,
             channel_join,
             channel_leave,
             channel_send,
