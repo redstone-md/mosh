@@ -3,7 +3,7 @@
  * shared AudioContext. Pairs with the JitterBuffer used by the call view.
  */
 
-const SAMPLE_RATE = 16_000;
+const TARGET_SAMPLE_RATE = 48_000;
 
 export interface VoicePlaybackHandle {
   pushFrame(frame: Uint8Array): void;
@@ -11,7 +11,7 @@ export interface VoicePlaybackHandle {
 }
 
 export async function startVoicePlayback(): Promise<VoicePlaybackHandle> {
-  const context = new AudioContext({ sampleRate: SAMPLE_RATE });
+  const context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
   await context.resume();
   let nextStart = context.currentTime;
 
@@ -32,7 +32,8 @@ export async function startVoicePlayback(): Promise<VoicePlaybackHandle> {
     output: (data) => {
       const channels = data.numberOfChannels;
       const length = data.numberOfFrames;
-      const buffer = context.createBuffer(channels, length, SAMPLE_RATE);
+      const sampleRate = data.sampleRate || context.sampleRate;
+      const buffer = context.createBuffer(channels, length, sampleRate);
       for (let channel = 0; channel < channels; channel += 1) {
         const target = buffer.getChannelData(channel);
         data.copyTo(target, { planeIndex: channel });
@@ -51,7 +52,7 @@ export async function startVoicePlayback(): Promise<VoicePlaybackHandle> {
   });
   decoder.configure({
     codec: "opus",
-    sampleRate: SAMPLE_RATE,
+    sampleRate: context.sampleRate,
     numberOfChannels: 1,
   });
 

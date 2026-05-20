@@ -1,14 +1,14 @@
 /**
  * Microphone capture for a voice call. Uses an AudioWorklet to pull raw PCM
- * frames at 16 kHz mono, then encodes each 20 ms frame to Opus with
- * WebCodecs. Emits each encoded frame to the supplied callback.
+ * frames at the AudioContext's real sample rate, then encodes each 20 ms
+ * frame to Opus with WebCodecs. Emits each encoded frame to the supplied
+ * callback.
  */
 
 export type EncodedFrame = Uint8Array;
 
-const SAMPLE_RATE = 16_000;
+const TARGET_SAMPLE_RATE = 48_000;
 const FRAME_DURATION_MS = 20;
-const SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_DURATION_MS) / 1000;
 
 export function isCallAudioSupported(): boolean {
   return (
@@ -24,7 +24,7 @@ const WORKLET_SOURCE = `
 class CallCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.buffer = new Float32Array(${SAMPLES_PER_FRAME});
+    this.buffer = new Float32Array(Math.round(sampleRate * ${FRAME_DURATION_MS} / 1000));
     this.fill = 0;
   }
   process(inputs) {
@@ -61,11 +61,12 @@ export async function startVoiceCapture(
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
-      sampleRate: SAMPLE_RATE,
+      sampleRate: TARGET_SAMPLE_RATE,
       channelCount: 1,
     },
   });
-  const context = new AudioContext({ sampleRate: SAMPLE_RATE });
+  const context = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
+  const sampleRate = context.sampleRate;
   const blob = new Blob([WORKLET_SOURCE], { type: "application/javascript" });
   const workletUrl = URL.createObjectURL(blob);
   try {
@@ -105,7 +106,7 @@ export async function startVoiceCapture(
   });
   encoder.configure({
     codec: "opus",
-    sampleRate: SAMPLE_RATE,
+    sampleRate,
     numberOfChannels: 1,
     bitrate: 24_000,
   });
@@ -125,13 +126,13 @@ export async function startVoiceCapture(
       }
     ).AudioData({
       format: "f32-planar",
-      sampleRate: SAMPLE_RATE,
+      sampleRate,
       numberOfChannels: 1,
       numberOfFrames: event.data.length,
       timestamp,
       data: event.data,
     });
-    timestamp += (event.data.length * 1_000_000) / SAMPLE_RATE;
+    timestamp += (event.data.length * 1_000_000) / sampleRate;
     encoder.encode(data);
     data.close();
   };
