@@ -31,5 +31,6 @@ Thumbs.db
 # Agent scratch space
 .codex/*
 !.codex/.gitkeep
+.continuum/
 
 

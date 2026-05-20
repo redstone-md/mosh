@@ -13,6 +13,7 @@ import {
   IconLogout,
   IconMessageCircle,
   IconPencil,
+  IconPhone,
   IconPlugConnected,
   IconPlus,
   IconRefresh,
@@ -32,6 +33,13 @@ import {
   useRef,
   useState,
 } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
+import { diffConversations, type ConversationCount } from "./notifications/unread";
 import {
   chatText,
   cryptoNotice,
@@ -68,11 +76,38 @@ import {
   streamingMediaSrc,
 } from "./attachments";
 import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
+import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
+import { CallLogEntry } from "./voice-call/CallLogEntry";
+import { CallOverlay } from "./voice-call/CallOverlay";
+import { IncomingCallModal } from "./voice-call/IncomingCallModal";
+import {
+  CALLEE_DIRECTION_BIT,
+  CALLER_DIRECTION_BIT,
+  bytesFromBase64,
+  bytesToBase64,
+  importCallKey,
+  openFrame,
+  sealFrame,
+} from "./voice-call/frame-crypto";
+import { JitterBuffer } from "./voice-call/jitter-buffer";
+import {
+  isCallAudioSupported,
+  startVoiceCapture,
+  type VoiceCaptureHandle,
+} from "./voice-call/audio-capture";
+import {
+  startVoicePlayback,
+  type VoicePlaybackHandle,
+} from "./voice-call/audio-playback";
 
 interface AttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
   readonly busy: boolean;
+  readonly surface: "dm" | "group" | "channel";
+  readonly host: string;
   readonly onSend: (file: File) => void;
+  readonly onSendVoice: (voice: VoiceSend) => void;
+  readonly onVoiceError: (message: string) => void;
   readonly onDownload: (attachmentId: string) => void;
   readonly onCancel: (attachmentId: string) => void;
   readonly onOpen: (descriptor: AttachmentDescriptor) => void;
@@ -98,6 +133,22 @@ type ActiveItem =
   | { readonly type: "dm"; readonly id: string }
   | { readonly type: "channel"; readonly name: string }
   | { readonly type: "group"; readonly id: string };
+
+/** Stable per-conversation key used for unread tracking and notifications. */
+function conversationKey(item: ActiveItem): string {
+  return item.type === "channel"
+    ? `channel:${item.name}`
+    : `${item.type}:${item.id}`;
+}
+
+/** Window focus check that degrades to "focused" when the Tauri API is absent. */
+async function windowFocused(): Promise<boolean> {
+  try {
+    return await getCurrentWindow().isFocused();
+  } catch {
+    return true;
+  }
+}
 
 interface GroupCreateState {
   readonly inviteUri?: string;
@@ -143,6 +194,17 @@ export function PrivateDmScreen({
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
+  const [unread, setUnread] = useState<ReadonlyMap<string, number>>(new Map());
+  const lastSeenRef = useRef<Map<string, number>>(new Map());
+  const notifyReadyRef = useRef(false);
+  const callCaptureRef = useRef<VoiceCaptureHandle | null>(null);
+  const callPlaybackRef = useRef<VoicePlaybackHandle | null>(null);
+  const callKeyRef = useRef<CryptoKey | null>(null);
+  const callSeqRef = useRef<bigint>(0n);
+  const callJitterRef = useRef<JitterBuffer | null>(null);
+  const callPollRef = useRef<number | undefined>(undefined);
+  const callMutedRef = useRef(false);
+  const [callMuted, setCallMuted] = useState(false);
 
   const requestBase = useMemo(
     () => ({
@@ -226,6 +288,96 @@ export function PrivateDmScreen({
     const intervalId = window.setInterval(() => void refresh(true), AUTO_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [refresh]);
+
+  // Ask for OS notification permission once on mount.
+  useEffect(() => {
+    void (async () => {
+      try {
+        let granted = await isPermissionGranted();
+        if (!granted) {
+          granted = (await requestPermission()) === "granted";
+        }
+        notifyReadyRef.current = granted;
+      } catch {
+        // No Tauri host (e.g. browser dev / tests): toasts stay disabled.
+        notifyReadyRef.current = false;
+      }
+    })();
+  }, []);
+
+  // Diff each poll's per-conversation message counts to drive unread badges
+  // and OS toasts. A first-seen conversation sets a baseline and never
+  // notifies. While the window is focused, the active conversation is kept
+  // clear; while unfocused, every new message raises a toast.
+  useEffect(() => {
+    const counts: ConversationCount[] = [
+      ...sessions.map((s) => ({
+        id: `dm:${s.session_id}`,
+        messageCount: s.messages.length,
+      })),
+      ...groups.map((g) => ({
+        id: `group:${g.group_id}`,
+        messageCount: g.messages.length,
+      })),
+      ...channels.map((c) => ({
+        id: `channel:${c.name}`,
+        messageCount: c.messages.length,
+      })),
+    ];
+    const activeKey = active ? conversationKey(active) : null;
+    let cancelled = false;
+    void (async () => {
+      const focused = await windowFocused();
+      if (cancelled) {
+        return;
+      }
+      const diff = diffConversations(
+        counts,
+        lastSeenRef.current,
+        activeKey,
+        !focused,
+      );
+      lastSeenRef.current = diff.nextLastSeen;
+      if (focused && activeKey) {
+        setUnread((current) => {
+          if (!current.has(activeKey)) {
+            return current;
+          }
+          const next = new Map(current);
+          next.delete(activeKey);
+          return next;
+        });
+      }
+      if (diff.newMessages.length === 0) {
+        return;
+      }
+      setUnread((current) => {
+        const next = new Map(current);
+        for (const { id, delta } of diff.newMessages) {
+          if (id === activeKey && focused) {
+            continue;
+          }
+          next.set(id, (next.get(id) ?? 0) + delta);
+        }
+        return next;
+      });
+      if (!focused && notifyReadyRef.current) {
+        try {
+          for (const { id } of diff.newMessages) {
+            const label = id.startsWith("channel:")
+              ? `#${id.slice("channel:".length)}`
+              : "New message";
+            sendNotification({ title: "Mosh", body: `${label} — new message` });
+          }
+        } catch {
+          // Notification host unavailable — unread badges still update.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessions, channels, groups, active]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -411,6 +563,51 @@ export function PrivateDmScreen({
     });
   };
 
+  const sendVoice = (voice: VoiceSend) => {
+    if (!active) {
+      return;
+    }
+    const target = active;
+    const fileName = voice.mime.includes("ogg")
+      ? "voice-message.ogg"
+      : "voice-message.webm";
+    const meta = { duration_ms: voice.durationMs, peaks_b64: voice.peaksB64 };
+    void run(async () => {
+      const dataBase64 = await readFileAsBase64(
+        new File([voice.blob], fileName, { type: voice.mime }),
+      );
+      if (target.type === "dm") {
+        await gateway.sendPrivateAttachment(
+          target.id,
+          fileName,
+          voice.mime,
+          dataBase64,
+          undefined,
+          meta,
+        );
+      } else if (target.type === "channel") {
+        await gateway.sendChannelAttachment(
+          target.name,
+          fileName,
+          voice.mime,
+          dataBase64,
+          undefined,
+          meta,
+        );
+      } else {
+        await gateway.sendGroupAttachment(
+          target.id,
+          fileName,
+          voice.mime,
+          dataBase64,
+          undefined,
+          meta,
+        );
+      }
+      await refresh(true);
+    });
+  };
+
   const downloadAttachment = (attachmentId: string) => {
     if (!active) {
       return;
@@ -444,6 +641,47 @@ export function PrivateDmScreen({
       await refresh(true);
     });
   };
+
+  const startCall = useCallback(
+    (sessionId: string) => {
+      void (async () => {
+        try {
+          await gateway.callStart(sessionId);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Could not start call");
+        }
+      })();
+    },
+    [gateway],
+  );
+  const acceptCall = useCallback(
+    (sessionId: string, callId: string) => {
+      void (async () => {
+        try {
+          await gateway.callAccept(sessionId, callId);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Could not accept call");
+        }
+      })();
+    },
+    [gateway],
+  );
+  const declineCall = useCallback(
+    (sessionId: string, callId: string, reason: string) => {
+      void gateway.callDecline(sessionId, callId, reason).catch((err) => {
+        setError(err instanceof Error ? err.message : "Could not decline call");
+      });
+    },
+    [gateway],
+  );
+  const endCall = useCallback(
+    (sessionId: string, callId: string, reason: string) => {
+      void gateway.callEnd(sessionId, callId, reason).catch((err) => {
+        setError(err instanceof Error ? err.message : "Could not end call");
+      });
+    },
+    [gateway],
+  );
 
   // Initiate a private DM with a member seen in a channel or group: mint an
   // invite and publish it as an offer the targeted peer can accept.
@@ -519,6 +757,152 @@ export function PrivateDmScreen({
     active?.type === "group" ? groups.find((g) => g.group_id === active.id) ?? null : null;
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
 
+  const pendingCallSession = sessions.find((session) => session.pending_call);
+  const activeDmSession = activeSession;
+  const activeCall = activeDmSession?.active_call ?? null;
+  const activeCallSessionId = activeDmSession?.session_id ?? null;
+  const callSupported = isCallAudioSupported();
+  const activeCallId = activeCall?.call_id ?? null;
+  const activeCallKey = activeCall?.key_b64 ?? null;
+  const activeCallNoncePrefix = activeCall?.nonce_prefix_b64 ?? null;
+  const activeCallDirection = activeCall?.direction ?? null;
+
+  useEffect(() => {
+    if (
+      !activeCallSessionId ||
+      !activeCallId ||
+      !activeCallKey ||
+      !activeCallNoncePrefix ||
+      !activeCallDirection
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const direction =
+      activeCallDirection === "caller"
+        ? CALLER_DIRECTION_BIT
+        : CALLEE_DIRECTION_BIT;
+    const sessionId = activeCallSessionId;
+    const callId = activeCallId;
+    const noncePrefix = activeCallNoncePrefix;
+    void (async () => {
+      try {
+        callKeyRef.current = await importCallKey(activeCallKey);
+        callSeqRef.current = 0n;
+        callJitterRef.current = new JitterBuffer();
+        callPlaybackRef.current = await startVoicePlayback();
+        callCaptureRef.current = await startVoiceCapture((frame) => {
+          if (cancelled || !callKeyRef.current || callMutedRef.current) {
+            return;
+          }
+          void (async () => {
+            const seal = await sealFrame(
+              callKeyRef.current!,
+              noncePrefix,
+              callSeqRef.current,
+              direction,
+              frame,
+            );
+            callSeqRef.current += 1n;
+            try {
+              await gateway.callSendFrame(
+                sessionId,
+                callId,
+                bytesToBase64(seal),
+              );
+            } catch (err) {
+              console.warn("[voice-call] send failed", err);
+            }
+          })();
+        });
+        callPollRef.current = window.setInterval(() => {
+          void (async () => {
+            try {
+              const frames = await gateway.callDrainFrames(sessionId, callId);
+              if (frames.length === 0 || !callKeyRef.current) {
+                return;
+              }
+              for (const frameB64 of frames) {
+                const opened = await openFrame(
+                  callKeyRef.current,
+                  noncePrefix,
+                  bytesFromBase64(frameB64),
+                );
+                if (opened) {
+                  callJitterRef.current?.push({
+                    seq: opened.seq,
+                    payload: opened.payload,
+                  });
+                }
+              }
+              const ready = callJitterRef.current?.drainReady() ?? [];
+              for (const buffered of ready) {
+                callPlaybackRef.current?.pushFrame(buffered.payload);
+              }
+            } catch (err) {
+              console.warn("[voice-call] poll failed", err);
+            }
+          })();
+        }, 20);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Voice call setup failed");
+        endCall(sessionId, callId, "setup_failed");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (callPollRef.current !== undefined) {
+        window.clearInterval(callPollRef.current);
+        callPollRef.current = undefined;
+      }
+      void callCaptureRef.current?.stop();
+      void callPlaybackRef.current?.stop();
+      callCaptureRef.current = null;
+      callPlaybackRef.current = null;
+      callKeyRef.current = null;
+      callJitterRef.current = null;
+      setCallMuted(false);
+      callMutedRef.current = false;
+    };
+  }, [
+    activeCallSessionId,
+    activeCallId,
+    activeCallKey,
+    activeCallNoncePrefix,
+    activeCallDirection,
+    endCall,
+    gateway,
+  ]);
+
+  useEffect(() => {
+    if (!pendingCallSession?.pending_call) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const focused = await getCurrentWindow().isFocused();
+        if (cancelled || focused || !notifyReadyRef.current) {
+          return;
+        }
+        sendNotification({
+          title: "Mosh",
+          body: `Incoming call from ${pendingCallSession.display_name}`,
+        });
+      } catch {
+        // Notification host unavailable; the in-app modal is the user's signal.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    pendingCallSession?.session_id,
+    pendingCallSession?.pending_call?.call_id,
+    pendingCallSession?.display_name,
+  ]);
+
   const activeAttachments =
     activeSession?.attachments ??
     activeChannel?.attachments ??
@@ -568,10 +952,21 @@ export function PrivateDmScreen({
     }
   }, [activeAttachments, pendingOpen]);
 
+  const mediaSurface: "dm" | "group" | "channel" = active?.type ?? "dm";
+  const mediaHost = active
+    ? active.type === "channel"
+      ? active.name
+      : active.id
+    : "";
+
   const attachmentApi: AttachmentApi = {
     views: attachmentViews,
     busy,
+    surface: mediaSurface,
+    host: mediaHost,
     onSend: sendAttachment,
+    onSendVoice: sendVoice,
+    onVoiceError: setError,
     onDownload: downloadAttachment,
     onCancel: cancelAttachment,
     onOpen: openAttachment,
@@ -610,9 +1005,19 @@ export function PrivateDmScreen({
           groups={groups}
           offers={pendingOffers}
           active={active}
+          unread={unread}
           onSelect={(item) => {
             setActive(item);
             setShowSetup(false);
+            const key = conversationKey(item);
+            setUnread((current) => {
+              if (!current.has(key)) {
+                return current;
+              }
+              const next = new Map(current);
+              next.delete(key);
+              return next;
+            });
           }}
           onAcceptOffer={acceptDmOffer}
           onDismissOffer={dismissDmOffer}
@@ -656,6 +1061,9 @@ export function PrivateDmScreen({
               onSend={sendMessage}
               onConfirm={() => confirmFingerprint(activeSession.session_id)}
               onClose={closeActive}
+              callSupported={callSupported}
+              callBusy={!!activeSession.active_call}
+              onStartCall={() => startCall(activeSession.session_id)}
             />
           ) : activeChannel ? (
             <ActiveChannelChat
@@ -740,6 +1148,41 @@ export function PrivateDmScreen({
           onClose={() => setViewer(null)}
         />
       ) : null}
+
+      {pendingCallSession?.pending_call ? (
+        <IncomingCallModal
+          pending={pendingCallSession.pending_call}
+          peerLabel={pendingCallSession.display_name}
+          onAccept={() =>
+            acceptCall(
+              pendingCallSession.session_id,
+              pendingCallSession.pending_call!.call_id,
+            )
+          }
+          onDecline={(reason) =>
+            declineCall(
+              pendingCallSession.session_id,
+              pendingCallSession.pending_call!.call_id,
+              reason,
+            )
+          }
+        />
+      ) : null}
+      {activeCall && activeCallSessionId && activeDmSession ? (
+        <CallOverlay
+          active={activeCall}
+          peerLabel={activeDmSession.display_name}
+          muted={callMuted}
+          onToggleMute={() => {
+            const next = !callMuted;
+            setCallMuted(next);
+            callMutedRef.current = next;
+          }}
+          onHangUp={() =>
+            endCall(activeCallSessionId, activeCall.call_id, "hangup")
+          }
+        />
+      ) : null}
     </main>
   );
 }
@@ -750,6 +1193,7 @@ function SessionRail({
   groups,
   offers,
   active,
+  unread,
   onSelect,
   onAcceptOffer,
   onDismissOffer,
@@ -760,6 +1204,7 @@ function SessionRail({
   groups: readonly GroupSnapshot[];
   offers: readonly PendingDmOffer[];
   active: ActiveItem | null;
+  unread: ReadonlyMap<string, number>;
   onSelect: (item: ActiveItem) => void;
   onAcceptOffer: (offer: PendingDmOffer) => void;
   onDismissOffer: (offer: PendingDmOffer) => void;
@@ -786,6 +1231,7 @@ function SessionRail({
             key={`dm-${session.session_id}`}
             session={session}
             active={active?.type === "dm" && active.id === session.session_id}
+            unreadCount={unread.get(`dm:${session.session_id}`) ?? 0}
             onClick={() => onSelect({ type: "dm", id: session.session_id })}
           />
         ))}
@@ -795,6 +1241,7 @@ function SessionRail({
             key={`gr-${group.group_id}`}
             group={group}
             active={active?.type === "group" && active.id === group.group_id}
+            unreadCount={unread.get(`group:${group.group_id}`) ?? 0}
             onClick={() => onSelect({ type: "group", id: group.group_id })}
           />
         ))}
@@ -806,6 +1253,7 @@ function SessionRail({
             key={`ch-${channel.name}`}
             channel={channel}
             active={active?.type === "channel" && active.name === channel.name}
+            unreadCount={unread.get(`channel:${channel.name}`) ?? 0}
             onClick={() => onSelect({ type: "channel", name: channel.name })}
           />
         ))}
@@ -850,13 +1298,27 @@ function OfferRailItem({
   );
 }
 
+/** Small overlay badge showing a conversation's unread message count. */
+function UnreadBadge({ count }: { count: number }) {
+  if (count <= 0) {
+    return null;
+  }
+  return (
+    <span className="unread-badge" aria-label={`${count} unread`}>
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
 function SessionRailItem({
   session,
   active,
+  unreadCount,
   onClick,
 }: {
   session: SessionSnapshot;
   active: boolean;
+  unreadCount: number;
   onClick: () => void;
 }) {
   const label = peerLabel(session);
@@ -870,6 +1332,7 @@ function SessionRailItem({
     >
       <Avatar name={label} />
       <span className={`rail-dot rail-dot-${session.state}`} />
+      <UnreadBadge count={unreadCount} />
     </button>
   );
 }
@@ -877,10 +1340,12 @@ function SessionRailItem({
 function ChannelRailItem({
   channel,
   active,
+  unreadCount,
   onClick,
 }: {
   channel: ChannelSnapshot;
   active: boolean;
+  unreadCount: number;
   onClick: () => void;
 }) {
   return (
@@ -893,6 +1358,7 @@ function ChannelRailItem({
     >
       <IconHash size={18} />
       <span className="rail-channel-label">{channel.name}</span>
+      <UnreadBadge count={unreadCount} />
     </button>
   );
 }
@@ -900,10 +1366,12 @@ function ChannelRailItem({
 function GroupRailItem({
   group,
   active,
+  unreadCount,
   onClick,
 }: {
   group: GroupSnapshot;
   active: boolean;
+  unreadCount: number;
   onClick: () => void;
 }) {
   const label = group.label ?? shorten(group.group_id, 6);
@@ -923,6 +1391,7 @@ function GroupRailItem({
       ) : null}
       <span className="rail-channel-label">{label}</span>
       <span className={`rail-dot rail-dot-${group.state}`} />
+      <UnreadBadge count={unreadCount} />
     </button>
   );
 }
@@ -1369,6 +1838,9 @@ function ActiveDmChat(props: {
   onSend: (event: FormEvent) => void;
   onConfirm: () => void;
   onClose: () => void;
+  callSupported: boolean;
+  callBusy: boolean;
+  onStartCall: () => void;
 }) {
   const ready = props.session.state === READY_STATE;
   const peerName = peerLabel(props.session);
@@ -1392,6 +1864,22 @@ function ActiveDmChat(props: {
         <button
           className="btn btn-ghost btn-icon"
           type="button"
+          aria-label="Start voice call"
+          title={
+            props.callSupported
+              ? "Start voice call"
+              : "Voice calls require a newer WebView"
+          }
+          disabled={
+            !props.callSupported || props.callBusy || props.busy || !ready
+          }
+          onClick={props.onStartCall}
+        >
+          <IconPhone size={16} />
+        </button>
+        <button
+          className="btn btn-ghost btn-icon"
+          type="button"
           onClick={props.onClose}
           aria-label={shellText.closeSession}
           title={shellText.closeSession}
@@ -1411,6 +1899,8 @@ function ActiveDmChat(props: {
         onChange={props.onComposer}
         onSend={props.onSend}
         onAttach={props.attachments.onSend}
+        onSendVoice={props.attachments.onSendVoice}
+        onVoiceError={props.attachments.onVoiceError}
         disabled={!ready || props.busy}
       />
     </>
@@ -1463,6 +1953,8 @@ function ActiveChannelChat(props: {
         onChange={props.onComposer}
         onSend={props.onSend}
         onAttach={props.attachments.onSend}
+        onSendVoice={props.attachments.onSendVoice}
+        onVoiceError={props.attachments.onVoiceError}
         disabled={props.busy}
       />
     </>
@@ -1540,6 +2032,8 @@ function ActiveGroupChat(props: {
         onChange={props.onComposer}
         onSend={props.onSend}
         onAttach={props.attachments.onSend}
+        onSendVoice={props.attachments.onSendVoice}
+        onVoiceError={props.attachments.onVoiceError}
         disabled={!ready || props.busy}
       />
     </>
@@ -1718,6 +2212,8 @@ function GroupMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
+            surface={attachments.surface}
+            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
@@ -1849,11 +2345,14 @@ function DmMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
+            surface={attachments.surface}
+            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
           />
         ) : null}
+        {message.call_event ? <CallLogEntry event={message.call_event} /> : null}
         <div className="message-seal">
           <IconLock size={10} />
           <span>OpenMLS · sealed</span>
@@ -1928,6 +2427,8 @@ function ChannelMessageRow({
             descriptor={message.attachment}
             view={attachments.views.get(message.attachment.attachment_id)}
             busy={attachments.busy}
+            surface={attachments.surface}
+            host={attachments.host}
             onDownload={attachments.onDownload}
             onCancel={attachments.onCancel}
             onOpen={attachments.onOpen}
@@ -1943,6 +2444,8 @@ function Composer({
   onChange,
   onSend,
   onAttach,
+  onSendVoice,
+  onVoiceError,
   disabled,
 }: {
   value: string;
@@ -1950,6 +2453,8 @@ function Composer({
   onChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onAttach?: (file: File) => void;
+  onSendVoice?: (voice: VoiceSend) => void;
+  onVoiceError?: (message: string) => void;
 }) {
   const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
     if (disabled || !onAttach) {
@@ -1971,6 +2476,13 @@ function Composer({
             disabled={disabled}
             onPick={onAttach}
             ariaLabel={chatText.attachLabel}
+          />
+        ) : null}
+        {onSendVoice ? (
+          <VoiceComposer
+            disabled={disabled}
+            onSend={onSendVoice}
+            onError={onVoiceError ?? (() => {})}
           />
         ) : null}
         <input

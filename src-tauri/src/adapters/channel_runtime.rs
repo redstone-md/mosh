@@ -15,7 +15,7 @@ use crate::adapters::moss_ffi::{
 };
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
-    SnapshotEvent,
+    SnapshotEvent, VoiceMeta,
 };
 
 const TOPIC_PREFIX: &str = "public-channel/";
@@ -333,6 +333,7 @@ impl ChannelRuntime {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, ChannelRuntimeError> {
         self.drain_inbound()?;
         let normalized = normalize_name(name)?;
@@ -340,7 +341,7 @@ impl ChannelRuntime {
             .channels
             .get_mut(&normalized)
             .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-        session.send_attachment(file_name, mime, bytes, thumbnail)
+        session.send_attachment(file_name, mime, bytes, thumbnail, voice)
     }
 
     pub fn download_attachment(
@@ -578,6 +579,7 @@ impl ChannelSession {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, ChannelRuntimeError> {
         let attachment_id = format!("attachment-{}", &sha256_hex(&bytes)[..16]);
         if self.attachment_slots.contains_key(&attachment_id) {
@@ -592,6 +594,7 @@ impl ChannelSession {
             self.device_fingerprint.clone(),
             bytes.clone(),
             thumbnail,
+            voice,
         )?;
         let stored = self
             .attachment_store
@@ -824,6 +827,7 @@ fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
         mime: manifest.mime.clone(),
         total_size: manifest.total_size,
         thumbnail_b64: manifest.thumbnail_b64.clone(),
+        voice: manifest.voice.clone(),
     }
 }
 

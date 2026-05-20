@@ -296,12 +296,20 @@ fn private_dm_send_attachment(
     mime: String,
     data_base64: String,
     thumbnail_base64: Option<String>,
+    voice: Option<adapters::attachment_runtime::VoiceMeta>,
 ) -> Result<AttachmentSendResult, String> {
     let bytes = decode_base64(&data_base64)?;
     let mime = resolve_mime(mime, &file_name);
     state.with_runtime(|runtime| {
         runtime
-            .send_attachment(&session_id, file_name, mime, bytes, thumbnail_base64.clone())
+            .send_attachment(
+                &session_id,
+                file_name,
+                mime,
+                bytes,
+                thumbnail_base64.clone(),
+                voice.clone(),
+            )
             .map_err(|error| error.to_string())
     })
 }
@@ -329,6 +337,93 @@ fn private_dm_cancel_attachment(
         runtime
             .cancel_attachment(&session_id, &attachment_id)
             .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_start(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+) -> Result<adapters::private_dm_runtime::CallStarted, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_start(&session_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_accept(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_accept(&session_id, &call_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_decline(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+    reason: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_decline(&session_id, &call_id, &reason)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_end(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+    reason: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .call_end(&session_id, &call_id, &reason)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_send_frame(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+    frame_b64: String,
+) -> Result<(), String> {
+    let bytes = decode_base64(&frame_b64)?;
+    state.with_runtime(|runtime| {
+        runtime
+            .call_send_frame(&session_id, &call_id, bytes)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_dm_call_drain_frames(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    call_id: String,
+) -> Result<Vec<String>, String> {
+    state.with_runtime(|runtime| {
+        let frames = runtime
+            .call_drain_frames(&session_id, &call_id)
+            .map_err(|error| error.to_string())?;
+        Ok(frames
+            .into_iter()
+            .map(|bytes| {
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+            })
+            .collect())
     })
 }
 
@@ -533,12 +628,20 @@ fn channel_send_attachment(
     mime: String,
     data_base64: String,
     thumbnail_base64: Option<String>,
+    voice: Option<adapters::attachment_runtime::VoiceMeta>,
 ) -> Result<AttachmentSendResult, String> {
     let bytes = decode_base64(&data_base64)?;
     let mime = resolve_mime(mime, &file_name);
     state.with_runtime(|runtime| {
         runtime
-            .send_attachment(&name, file_name, mime, bytes, thumbnail_base64.clone())
+            .send_attachment(
+                &name,
+                file_name,
+                mime,
+                bytes,
+                thumbnail_base64.clone(),
+                voice.clone(),
+            )
             .map_err(|error| error.to_string())
     })
 }
@@ -668,12 +771,20 @@ fn private_group_send_attachment(
     mime: String,
     data_base64: String,
     thumbnail_base64: Option<String>,
+    voice: Option<adapters::attachment_runtime::VoiceMeta>,
 ) -> Result<AttachmentSendResult, String> {
     let bytes = decode_base64(&data_base64)?;
     let mime = resolve_mime(mime, &file_name);
     state.with_runtime(|runtime| {
         runtime
-            .send_attachment(&group_id, file_name, mime, bytes, thumbnail_base64.clone())
+            .send_attachment(
+                &group_id,
+                file_name,
+                mime,
+                bytes,
+                thumbnail_base64.clone(),
+                voice.clone(),
+            )
             .map_err(|error| error.to_string())
     })
 }
@@ -735,6 +846,7 @@ fn private_group_dismiss_dm_offer(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .register_asynchronous_uri_scheme_protocol("moshmedia", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             std::thread::spawn(move || {
@@ -778,6 +890,12 @@ pub fn run() {
             private_dm_send_attachment,
             private_dm_download_attachment,
             private_dm_cancel_attachment,
+            private_dm_call_start,
+            private_dm_call_accept,
+            private_dm_call_decline,
+            private_dm_call_end,
+            private_dm_call_send_frame,
+            private_dm_call_drain_frames,
             channel_join,
             channel_leave,
             channel_send,

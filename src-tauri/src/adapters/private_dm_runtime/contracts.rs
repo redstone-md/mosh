@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::attachment_runtime::VoiceMeta;
 use crate::adapters::mls_crypto::MlsCryptoError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +40,10 @@ pub struct SessionSnapshot {
     pub attachments: Vec<AttachmentView>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_call: Option<PendingCall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_call: Option<ActiveCall>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,6 +118,52 @@ pub struct ChatMessage {
     pub body: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_event: Option<CallEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingCall {
+    pub call_id: String,
+    pub from_device: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveCall {
+    pub call_id: String,
+    /// "caller" or "callee" — drives the nonce direction bit on the frontend.
+    pub direction: String,
+    pub key_b64: String,
+    pub nonce_prefix_b64: String,
+    /// Unix millis when the call became Active. The frontend renders the
+    /// running timer from this anchor.
+    pub started_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallEvent {
+    /// "completed" or "missed".
+    pub kind: String,
+    pub duration_ms: u64,
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallStarted {
+    pub session_id: String,
+    pub call_id: String,
+    pub key_b64: String,
+    pub nonce_prefix_b64: String,
+}
+
+/// Body of an MLS-encrypted CallOffer. Never crosses the wire in the clear:
+/// the runtime serialises it to JSON, encrypts via the session's MLS
+/// application-message key, and ships the ciphertext in
+/// `ControlEnvelope::CallOffer::offer_ciphertext_b64`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallOfferBody {
+    pub key_b64: String,
+    pub nonce_prefix_b64: String,
 }
 
 /// Immutable attachment metadata stamped onto the message log. Mutable
@@ -126,6 +177,8 @@ pub struct AttachmentDescriptor {
     pub total_size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail_b64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<VoiceMeta>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

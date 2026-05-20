@@ -15,7 +15,7 @@ use crate::adapters::moss_ffi::{
 };
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
-    SnapshotEvent,
+    SnapshotEvent, VoiceMeta,
 };
 
 const CONTROL_CHANNEL_PREFIX: &str = "group-control/";
@@ -415,13 +415,14 @@ impl PrivateGroupRuntime {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateGroupError> {
         self.drain_inbound()?;
         let session = self
             .groups
             .get_mut(group_id)
             .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
-        session.send_attachment(file_name, mime, bytes, thumbnail)
+        session.send_attachment(file_name, mime, bytes, thumbnail, voice)
     }
 
     pub fn download_attachment(
@@ -949,6 +950,7 @@ impl GroupSession {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateGroupError> {
         if !self.joined || !self.crypto.is_ready() {
             return Err(PrivateGroupError::NotReady);
@@ -961,6 +963,7 @@ impl GroupSession {
             self.device_fingerprint.clone(),
             bytes.clone(),
             thumbnail,
+            voice,
         )?;
         let stored = self
             .attachment_store
@@ -1172,6 +1175,7 @@ fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
         mime: manifest.mime.clone(),
         total_size: manifest.total_size,
         thumbnail_b64: manifest.thumbnail_b64.clone(),
+        voice: manifest.voice.clone(),
     }
 }
 

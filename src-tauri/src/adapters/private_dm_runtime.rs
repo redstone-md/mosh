@@ -6,21 +6,37 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 pub use contracts::{
-    AcceptInviteRequest, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
-    AttachmentView, ChatMessage, CloseSessionResult, DmOffer, InviteCreated, MeshInfo,
-    PrivateDmRuntimeError, SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent,
-    StartSessionRequest,
+    AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
+    AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
+    DmOffer, InviteCreated, MeshInfo, PendingCall, PrivateDmRuntimeError, SendMessageResult,
+    SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use crate::adapters::attachment_runtime::{
     AttachmentManifest, AttachmentRuntime, ChunkOutcome, StreamRange, CHUNK_SIZE,
 };
+pub use crate::adapters::attachment_runtime::VoiceMeta;
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::MlsSessionCrypto;
+use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 use wire::{
     blob_channel, channel_session_id, control_channel, data_channel, decode, decode_json, encode,
-    publish_json, BlobEnvelope, ControlEnvelope, DataEnvelope,
+    publish_json, voice_call_channel, BlobEnvelope, ControlEnvelope, DataEnvelope,
 };
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn random_b64(bytes: usize) -> String {
+    use rand::RngCore;
+    let mut buf = vec![0u8; bytes];
+    rand::thread_rng().fill_bytes(&mut buf);
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf)
+}
 
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
@@ -70,6 +86,7 @@ struct PrivateDmSession {
     attachment_store: Arc<AttachmentStore>,
     attachments: AttachmentRuntime,
     attachment_slots: HashMap<String, AttachmentSlot>,
+    call: Option<CallState>,
 }
 
 #[derive(Clone, Copy)]
@@ -202,6 +219,7 @@ impl PrivateDmRuntime {
             from_device: session.device_id.clone(),
             body,
             attachment: None,
+            call_event: None,
         });
 
         Ok(SendMessageResult {
@@ -220,10 +238,11 @@ impl PrivateDmRuntime {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
         let session = self.session_mut(session_id)?;
-        session.send_attachment(file_name, mime, bytes, thumbnail)
+        session.send_attachment(file_name, mime, bytes, thumbnail, voice)
     }
 
     /// Begins (or retries) downloading a peer's attachment.
@@ -338,6 +357,67 @@ impl PrivateDmRuntime {
             .get(session_id)
             .ok_or(PrivateDmRuntimeError::MissingSession)
     }
+
+    pub fn call_start(
+        &mut self,
+        session_id: &str,
+    ) -> Result<CallStarted, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_start()
+    }
+
+    pub fn call_accept(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_accept(call_id)
+    }
+
+    pub fn call_decline(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+        reason: &str,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_decline(call_id, reason)
+    }
+
+    pub fn call_end(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+        reason: &str,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        session.call_end(call_id, reason)
+    }
+
+    pub fn call_send_frame(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+        frame: Vec<u8>,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let session = self.session_mut(session_id)?;
+        session.call_send_frame(call_id, frame)
+    }
+
+    pub fn call_drain_frames(
+        &mut self,
+        session_id: &str,
+        call_id: &str,
+    ) -> Result<Vec<Vec<u8>>, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let session = self.session_mut(session_id)?;
+        Ok(session.call_drain_frames(call_id))
+    }
 }
 
 impl PrivateDmSession {
@@ -377,6 +457,7 @@ impl PrivateDmSession {
             attachment_store,
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            call: None,
         }
     }
 
@@ -393,9 +474,27 @@ impl PrivateDmSession {
             self.handle_data(message.payload)
         } else if message.channel == self.blob_channel {
             self.handle_blob(message.payload)
+        } else if wire::channel_call_id(&message.channel).is_some() {
+            self.handle_voice_call_frame(&message.channel, message.payload)
         } else {
             Ok(())
         }
+    }
+
+    fn handle_voice_call_frame(
+        &mut self,
+        channel: &str,
+        payload: Vec<u8>,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call_id) = wire::channel_call_id(channel) else {
+            return Ok(());
+        };
+        if let Some(call) = self.call.as_mut() {
+            if call.call_id == call_id {
+                call.push_frame(payload);
+            }
+        }
+        Ok(())
     }
 
     fn has_seen_message(&mut self, message: &MossReceivedMessage) -> bool {
@@ -470,8 +569,116 @@ impl PrivateDmSession {
                 let manifest: AttachmentManifest = decode_json(&manifest_json)?;
                 self.accept_incoming_manifest(from_device, manifest)
             }
+            ControlEnvelope::CallOffer {
+                session_id,
+                participant_id,
+                from_device,
+                call_id,
+                offer_ciphertext_b64,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if self.call.is_some() {
+                    return Ok(());
+                }
+                let plaintext = self.crypto.decrypt(&decode(&offer_ciphertext_b64)?)?;
+                let body: CallOfferBody = decode_json(&plaintext)?;
+                let channel = voice_call_channel(&call_id);
+                self.call = Some(CallState::ringing(
+                    call_id,
+                    body.key_b64,
+                    body.nonce_prefix_b64,
+                    from_device,
+                ));
+                self.node
+                    .subscribe(&channel)
+                    .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+                Ok(())
+            }
+            ControlEnvelope::CallAccept {
+                session_id,
+                participant_id,
+                call_id,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if let Some(call) = self.call.as_mut() {
+                    if call.call_id == call_id && call.phase == CallPhase::Outgoing {
+                        call.become_active(now_ms());
+                    }
+                }
+                Ok(())
+            }
+            ControlEnvelope::CallDecline {
+                session_id,
+                participant_id,
+                call_id,
+                reason: _,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if let Some(call) = self.call.as_ref() {
+                    if call.call_id == call_id {
+                        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                        let remote = call.remote_device.clone();
+                        let call_id_owned = call.call_id.clone();
+                        self.call = None;
+                        self.append_call_event_message(&remote, "missed", 0, &call_id_owned);
+                    }
+                }
+                Ok(())
+            }
+            ControlEnvelope::CallEnd {
+                session_id,
+                participant_id,
+                call_id,
+                reason,
+            } if session_id == self.session_id
+                && participant_id != self.participant_id =>
+            {
+                if let Some(call) = self.call.as_ref() {
+                    if call.call_id == call_id {
+                        let duration = call.duration_ms(now_ms());
+                        let kind = if duration == 0 && reason == "no_answer" {
+                            "missed"
+                        } else {
+                            "completed"
+                        };
+                        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                        let remote = call.remote_device.clone();
+                        let call_id_owned = call.call_id.clone();
+                        self.call = None;
+                        self.append_call_event_message(
+                            &remote,
+                            kind,
+                            duration,
+                            &call_id_owned,
+                        );
+                    }
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
+    }
+
+    fn append_call_event_message(
+        &mut self,
+        remote_device: &str,
+        kind: &str,
+        duration_ms: u64,
+        call_id: &str,
+    ) {
+        self.messages.push(ChatMessage {
+            from_device: remote_device.to_string(),
+            body: String::new(),
+            attachment: None,
+            call_event: Some(CallEvent {
+                kind: kind.to_string(),
+                duration_ms,
+                call_id: call_id.to_string(),
+            }),
+        });
     }
 
     fn handle_data(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
@@ -488,6 +695,7 @@ impl PrivateDmSession {
             from_device: envelope.from_device,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
             attachment: None,
+            call_event: None,
         });
 
         Ok(())
@@ -572,6 +780,7 @@ impl PrivateDmSession {
             from_device,
             body: String::new(),
             attachment: Some(descriptor),
+            call_event: None,
         });
         Ok(())
     }
@@ -582,6 +791,7 @@ impl PrivateDmSession {
         mime: String,
         bytes: Vec<u8>,
         thumbnail: Option<String>,
+        voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         if !self.peer_joined || !self.crypto.is_ready() {
             return Err(PrivateDmRuntimeError::NotReady);
@@ -594,6 +804,7 @@ impl PrivateDmSession {
             self.fingerprint.clone(),
             bytes.clone(),
             thumbnail,
+            voice,
         )?;
         let stored = self
             .attachment_store
@@ -625,6 +836,7 @@ impl PrivateDmSession {
             from_device: self.device_id.clone(),
             body: String::new(),
             attachment: Some(descriptor),
+            call_event: None,
         });
         Ok(AttachmentSendResult {
             session_id: self.session_id.clone(),
@@ -737,6 +949,29 @@ impl PrivateDmSession {
                     epoch_millis: event.epoch_millis,
                 })
                 .collect(),
+            pending_call: self.call.as_ref().and_then(|call| {
+                if call.phase == CallPhase::Ringing {
+                    Some(PendingCall {
+                        call_id: call.call_id.clone(),
+                        from_device: call.remote_device.clone(),
+                    })
+                } else {
+                    None
+                }
+            }),
+            active_call: self.call.as_ref().and_then(|call| {
+                if call.phase == CallPhase::Active {
+                    Some(ActiveCall {
+                        call_id: call.call_id.clone(),
+                        direction: call.direction.as_str().to_string(),
+                        key_b64: call.key_b64.clone(),
+                        nonce_prefix_b64: call.nonce_prefix_b64.clone(),
+                        started_at_ms: call.started_at_ms,
+                    })
+                } else {
+                    None
+                }
+            }),
         }
     }
 
@@ -757,6 +992,140 @@ impl PrivateDmSession {
         } else {
             "waiting".to_string()
         }
+    }
+
+    fn call_start(&mut self) -> Result<CallStarted, PrivateDmRuntimeError> {
+        if !self.peer_joined || !self.crypto.is_ready() {
+            return Err(PrivateDmRuntimeError::NotReady);
+        }
+        if self.call.is_some() {
+            return Err(PrivateDmRuntimeError::Attachment(
+                "another call is already in flight".to_string(),
+            ));
+        }
+        let call_id = self.crypto.random_token("call")?;
+        let key_b64 = random_b64(32);
+        let nonce_prefix_b64 = random_b64(4);
+        self.call = Some(CallState::outgoing(
+            call_id.clone(),
+            key_b64.clone(),
+            nonce_prefix_b64.clone(),
+            String::new(),
+        ));
+        self.node
+            .subscribe(&voice_call_channel(&call_id))
+            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+        let body = CallOfferBody {
+            key_b64: key_b64.clone(),
+            nonce_prefix_b64: nonce_prefix_b64.clone(),
+        };
+        let body_json = serde_json::to_vec(&body)
+            .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
+        let ciphertext = self.crypto.encrypt(&body_json)?;
+        let envelope = ControlEnvelope::CallOffer {
+            session_id: self.session_id.clone(),
+            participant_id: self.participant_id.clone(),
+            from_device: self.device_id.clone(),
+            call_id: call_id.clone(),
+            offer_ciphertext_b64: encode(&ciphertext),
+        };
+        publish_json(&self.node, &self.control_channel, &envelope)?;
+        Ok(CallStarted {
+            session_id: self.session_id.clone(),
+            call_id,
+            key_b64,
+            nonce_prefix_b64,
+        })
+    }
+
+    fn call_accept(&mut self, call_id: &str) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call) = self.call.as_mut() else {
+            return Err(PrivateDmRuntimeError::MissingSession);
+        };
+        if call.call_id != call_id || call.phase != CallPhase::Ringing {
+            return Err(PrivateDmRuntimeError::MissingSession);
+        }
+        call.become_active(now_ms());
+        let envelope = ControlEnvelope::CallAccept {
+            session_id: self.session_id.clone(),
+            participant_id: self.participant_id.clone(),
+            call_id: call_id.to_string(),
+        };
+        publish_json(&self.node, &self.control_channel, &envelope)
+    }
+
+    fn call_decline(&mut self, call_id: &str, reason: &str) -> Result<(), PrivateDmRuntimeError> {
+        if let Some(call) = self.call.take() {
+            if call.call_id == call_id {
+                let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                let remote = call.remote_device.clone();
+                let call_id_owned = call.call_id.clone();
+                self.append_call_event_message(&remote, "missed", 0, &call_id_owned);
+                let envelope = ControlEnvelope::CallDecline {
+                    session_id: self.session_id.clone(),
+                    participant_id: self.participant_id.clone(),
+                    call_id: call_id.to_string(),
+                    reason: reason.to_string(),
+                };
+                publish_json(&self.node, &self.control_channel, &envelope)?;
+            } else {
+                self.call = Some(call);
+            }
+        }
+        Ok(())
+    }
+
+    fn call_end(&mut self, call_id: &str, reason: &str) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call) = self.call.take() else {
+            return Ok(());
+        };
+        if call.call_id != call_id {
+            self.call = Some(call);
+            return Ok(());
+        }
+        let duration = call.duration_ms(now_ms());
+        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+        let kind = if call.phase != CallPhase::Active {
+            "missed"
+        } else {
+            "completed"
+        };
+        let remote = call.remote_device.clone();
+        let call_id_owned = call.call_id.clone();
+        self.append_call_event_message(&remote, kind, duration, &call_id_owned);
+        let envelope = ControlEnvelope::CallEnd {
+            session_id: self.session_id.clone(),
+            participant_id: self.participant_id.clone(),
+            call_id: call_id.to_string(),
+            reason: reason.to_string(),
+        };
+        publish_json(&self.node, &self.control_channel, &envelope)
+    }
+
+    fn call_send_frame(
+        &mut self,
+        call_id: &str,
+        frame: Vec<u8>,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let Some(call) = self.call.as_ref() else {
+            return Ok(());
+        };
+        if call.call_id != call_id || call.phase != CallPhase::Active {
+            return Ok(());
+        }
+        self.node
+            .publish(&voice_call_channel(call_id), &frame)
+            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
+    }
+
+    fn call_drain_frames(&mut self, call_id: &str) -> Vec<Vec<u8>> {
+        let Some(call) = self.call.as_mut() else {
+            return Vec::new();
+        };
+        if call.call_id != call_id {
+            return Vec::new();
+        }
+        call.drain_frames()
     }
 }
 
@@ -820,6 +1189,7 @@ fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
         mime: manifest.mime.clone(),
         total_size: manifest.total_size,
         thumbnail_b64: manifest.thumbnail_b64.clone(),
+        voice: manifest.voice.clone(),
     }
 }
 
@@ -950,6 +1320,7 @@ mod tests {
                 "photo.bin".to_string(),
                 "application/octet-stream".to_string(),
                 payload.clone(),
+                None,
                 None,
             )
             .expect("Alice should send attachment");
