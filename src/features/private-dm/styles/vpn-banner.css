@@ -2,17 +2,17 @@
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  margin: 12px 0;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(229, 72, 77, 0.08);
-  border: 1px solid rgba(229, 72, 77, 0.35);
+  margin: 0;
+  padding: 13px 14px;
+  border-radius: 12px;
+  background: rgba(232, 106, 90, 0.09);
+  border: 1px solid rgba(232, 106, 90, 0.3);
   text-align: left;
-  max-width: 520px;
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.18);
 }
 
 .vpn-banner-icon {
-  color: #e5484d;
+  color: var(--danger);
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -26,28 +26,29 @@
 
 .vpn-banner-body strong {
   font-size: 14px;
+  color: var(--fg-1);
 }
 
 .vpn-banner-detail {
   font-size: 12px;
   line-height: 1.4;
-  opacity: 0.85;
+  color: var(--fg-2);
   margin: 0;
 }
 
 .vpn-banner-warning {
-  color: #e5b04d;
+  color: var(--warn);
 }
 
 .vpn-banner-active {
-  color: #2ea043;
+  color: var(--moss);
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
 .vpn-banner-error {
-  color: #e5484d;
+  color: var(--danger);
   font-size: 12px;
   margin: 4px 0 0;
 }
@@ -61,54 +62,116 @@
 }
 
 .vpn-banner-select {
-  background: #1a1c20;
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 6px;
-  padding: 4px 8px;
+  height: 32px;
+  background: var(--bg-1);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 34px 0 10px;
   font-size: 12px;
-  min-width: 180px;
+  min-width: 220px;
+  max-width: 100%;
 }
 
 .bind-interface-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-1);
 }
 
-.bind-interface-toggle {
-  display: inline-flex;
+.bind-interface-on {
+  border-color: rgba(183, 216, 74, 0.3);
+  background: var(--moss-glow);
+}
+
+.bind-interface-head {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  font-size: 13px;
+  gap: 10px;
 }
 
-.bind-interface-toggle input[type="checkbox"] {
+.bind-interface-icon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--moss);
+  background: rgba(183, 216, 74, 0.12);
+  flex: 0 0 auto;
+}
+
+.bind-interface-head strong {
+  display: block;
   margin: 0;
+  color: var(--fg-1);
+  font-size: 12.5px;
+}
+
+.bind-interface-head p {
+  margin: 2px 0 0;
+  color: var(--fg-3);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.bind-interface-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .bind-interface-hint {
   font-size: 11px;
-  opacity: 0.7;
+  color: var(--fg-3);
   margin: 0;
   line-height: 1.4;
 }
 
 .bind-interface-select {
-  background: #1a1c20;
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 6px;
-  padding: 4px 8px;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  background: var(--bg-0);
+  color: var(--fg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 32px 0 10px;
   font-size: 12px;
-  min-width: 200px;
-  max-width: 320px;
+}
+
+.bind-interface-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--moss);
+  font-size: 11px;
 }
 
 .bind-interface-error {
-  color: #e5484d;
+  color: var(--danger);
   font-size: 12px;
   margin: 0;
+}
+
+@media (max-width: 560px) {
+  .vpn-banner-actions,
+  .bind-interface-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .vpn-banner-actions {
+    display: grid;
+  }
+
+  .vpn-banner-select,
+  .vpn-banner-actions .btn {
+    width: 100%;
+  }
 }

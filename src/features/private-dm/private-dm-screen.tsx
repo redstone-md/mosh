@@ -1101,7 +1101,7 @@ export function PrivateDmScreen({
               onClose={closeActive}
             />
           ) : (
-            <EmptyState onNew={() => setShowSetup(true)} gateway={gateway} />
+            <EmptyState onNew={() => setShowSetup(true)} />
           )}
         </section>
 
@@ -1443,6 +1443,7 @@ function NewSessionPanel(props: {
   return (
     <div className="onboard scroll">
       <div className="onboard-shell">
+        <VpnBanner gateway={props.gateway} />
         {step === "menu" ? (
           <OnboardMenu
             displayName={props.displayName}
@@ -2257,17 +2258,14 @@ function GroupDiagnostics({ group }: { group: GroupSnapshot }) {
 
 function EmptyState({
   onNew,
-  gateway,
 }: {
   onNew: () => void;
-  gateway: NativeMessagingGateway;
 }) {
   return (
     <div className="chat-empty welcome-empty">
       <IconMessageCircle size={28} />
       <strong>{chatText.noSessionTitle}</strong>
       <p>{chatText.noSessionBody}</p>
-      <VpnBanner gateway={gateway} />
       <button className="btn btn-primary" type="button" onClick={onNew}>
         <IconPlus size={14} />
         {chatText.startCta}

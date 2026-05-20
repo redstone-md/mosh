@@ -838,7 +838,8 @@ pub struct VpnDetection {
 }
 
 #[tauri::command]
-fn list_network_interfaces() -> Result<Vec<adapters::network_inventory::NetworkInterfaceInfo>, String> {
+fn list_network_interfaces(
+) -> Result<Vec<adapters::network_inventory::NetworkInterfaceInfo>, String> {
     adapters::network_inventory::list_interfaces()
 }
 
@@ -851,7 +852,7 @@ fn detect_vpn() -> Result<VpnDetection, String> {
         if iface.is_loopback {
             continue;
         }
-        if iface.is_virtual {
+        if iface.is_vpn {
             suspect.push(iface.name.clone());
             if iface.is_default_route {
                 owns_default = true;

@@ -46,7 +46,7 @@ export function VpnBanner({ gateway }: Props) {
   const physicalInterfaces = useMemo(
     () =>
       interfaces.filter(
-        (iface) => !iface.is_loopback && !iface.is_virtual,
+        (iface) => iface.is_up && !iface.is_loopback && !iface.is_virtual,
       ),
     [interfaces],
   );
@@ -85,24 +85,23 @@ export function VpnBanner({ gateway }: Props) {
         <strong>
           {current
             ? "Direct interface bypass active"
-            : "VPN tunnel may interfere with peer discovery"}
+            : detection?.vpn_owns_default_route
+              ? "VPN tunnel owns your default route"
+              : "VPN tunnel detected"}
         </strong>
         {detection?.vpn_likely ? (
           <p className="vpn-banner-detail">
-            Detected virtual adapter(s): {detection.suspect_interfaces.join(", ") || "—"}.
-            Outgoing peer traffic might be tunneled and broken at NAT.
+            Active VPN adapter: {detection.suspect_interfaces.join(", ") || "unknown"}.
+            Peer discovery may fail if Moss traffic stays inside the tunnel.
           </p>
         ) : null}
         {current ? (
           <p className="vpn-banner-detail vpn-banner-warning">
-            ⚠ Real LAN IP is now exposed to peers, trackers, and STUN. Turn this
-            off if you rely on the VPN for anonymity.
+            Real LAN IP is exposed to peers, trackers, and STUN while this is on.
           </p>
         ) : (
           <p className="vpn-banner-detail vpn-banner-warning">
-            Bypassing the VPN exposes your real IP to peers, trackers, and
-            STUN — choose this only if the VPN is corporate / split-tunnel,
-            not a privacy VPN.
+            Bypass only when you want Moss to use your physical network adapter.
           </p>
         )}
 
@@ -116,8 +115,7 @@ export function VpnBanner({ gateway }: Props) {
             >
               {physicalInterfaces.map((iface) => (
                 <option key={iface.name} value={iface.name}>
-                  {iface.name}
-                  {iface.ipv4 ? ` (${iface.ipv4})` : ""}
+                  {adapterLabel(iface)}
                 </option>
               ))}
             </select>
@@ -142,7 +140,7 @@ export function VpnBanner({ gateway }: Props) {
               onClick={() => void apply(picked || null)}
               disabled={phase === "applying" || !picked}
             >
-              {phase === "applying" ? "Applying…" : "Bypass VPN"}
+              {phase === "applying" ? "Applying..." : "Use selected adapter"}
             </button>
           )}
           <button
@@ -168,7 +166,12 @@ export function VpnBanner({ gateway }: Props) {
 
 function defaultPick(list: readonly NetworkInterfaceInfo[]): string {
   const candidate = list.find(
-    (iface) => !iface.is_loopback && !iface.is_virtual && !!iface.ipv4,
+    (iface) => iface.is_up && !iface.is_loopback && !iface.is_virtual && !!iface.ipv4,
   );
   return candidate?.name ?? "";
+}
+
+function adapterLabel(iface: NetworkInterfaceInfo): string {
+  const address = iface.ipv4 ? ` - ${iface.ipv4}` : "";
+  return `${iface.name}${address}`;
 }

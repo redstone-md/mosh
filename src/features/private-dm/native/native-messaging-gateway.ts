@@ -421,10 +421,13 @@ export interface NativeMessagingGateway {
 
 export interface NetworkInterfaceInfo {
   readonly name: string;
+  readonly description: string;
   readonly index: number;
   readonly ipv4: string | null;
   readonly is_loopback: boolean;
+  readonly is_up: boolean;
   readonly is_virtual: boolean;
+  readonly is_vpn: boolean;
   readonly is_default_route: boolean;
 }
 

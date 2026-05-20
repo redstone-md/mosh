@@ -1,3 +1,4 @@
+import { IconCheck, IconPlugConnected, IconShieldLock } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   NativeMessagingGateway,
@@ -41,7 +42,7 @@ export function BindInterfaceField({ gateway }: Props) {
   const physicalInterfaces = useMemo(
     () =>
       interfaces.filter(
-        (iface) => !iface.is_loopback && !iface.is_virtual,
+        (iface) => iface.is_up && !iface.is_loopback && !iface.is_virtual,
       ),
     [interfaces],
   );
@@ -63,50 +64,61 @@ export function BindInterfaceField({ gateway }: Props) {
   };
 
   return (
-    <div className="bind-interface-field">
-      <label className="bind-interface-toggle">
-        <input
-          type="checkbox"
-          checked={enabled}
-          disabled={busy || physicalInterfaces.length === 0}
-          onChange={(event) => {
-            if (event.target.checked) {
-              void apply(picked || null);
-            } else {
-              void apply(null);
-            }
-          }}
-        />
-        <span>Bypass VPN — bind outbound to a specific NIC</span>
-      </label>
-      <p className="bind-interface-hint">
-        Forces Moss UDP traffic through the selected adapter. ⚠ Your real IP
-        becomes visible to peers, trackers, and STUN — only enable if the
-        VPN is corporate / split-tunnel, not a privacy VPN.
-      </p>
+    <div className={`bind-interface-field${enabled ? " bind-interface-on" : ""}`}>
+      <div className="bind-interface-head">
+        <span className="bind-interface-icon" aria-hidden="true">
+          {enabled ? <IconShieldLock size={15} /> : <IconPlugConnected size={15} />}
+        </span>
+        <div>
+          <strong>Network adapter</strong>
+          <p>
+            {enabled
+              ? `Moss is bound to ${current}.`
+              : "Use a physical NIC when a VPN blocks peer discovery."}
+          </p>
+        </div>
+      </div>
       {physicalInterfaces.length === 0 ? (
-        <p className="bind-interface-hint">No physical NIC detected.</p>
+        <p className="bind-interface-hint">No connected physical NIC detected.</p>
       ) : (
-        <select
-          className="bind-interface-select"
-          value={picked}
-          disabled={busy}
-          onChange={(event) => {
-            const next = event.target.value;
-            setPicked(next);
-            if (enabled) {
-              void apply(next);
-            }
-          }}
-        >
-          {physicalInterfaces.map((iface) => (
-            <option key={iface.name} value={iface.name}>
-              {iface.name}
-              {iface.ipv4 ? ` (${iface.ipv4})` : ""}
-            </option>
-          ))}
-        </select>
+        <div className="bind-interface-controls">
+          <select
+            className="bind-interface-select"
+            aria-label="Physical network adapter"
+            value={picked}
+            disabled={busy}
+            onChange={(event) => {
+              const next = event.target.value;
+              setPicked(next);
+              if (enabled) {
+                void apply(next);
+              }
+            }}
+          >
+            {physicalInterfaces.map((iface) => (
+              <option key={iface.name} value={iface.name}>
+                {adapterLabel(iface)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={enabled ? "btn btn-ghost" : "btn btn-primary"}
+            disabled={busy || (!enabled && !picked)}
+            onClick={() => void apply(enabled ? null : picked || null)}
+          >
+            {enabled ? "Release" : "Bind"}
+          </button>
+        </div>
       )}
+      {enabled ? (
+        <p className="bind-interface-active">
+          <IconCheck size={13} /> New sessions use the selected adapter.
+        </p>
+      ) : null}
+      <p className="bind-interface-hint">
+        Binding can expose your LAN IP to peers, trackers, and STUN.
+      </p>
       {error ? <p className="bind-interface-error">{error}</p> : null}
     </div>
   );
@@ -114,7 +126,12 @@ export function BindInterfaceField({ gateway }: Props) {
 
 function defaultPick(list: readonly NetworkInterfaceInfo[]): string {
   const candidate = list.find(
-    (iface) => !iface.is_loopback && !iface.is_virtual && !!iface.ipv4,
+    (iface) => iface.is_up && !iface.is_loopback && !iface.is_virtual && !!iface.ipv4,
   );
   return candidate?.name ?? "";
+}
+
+function adapterLabel(iface: NetworkInterfaceInfo): string {
+  const address = iface.ipv4 ? ` - ${iface.ipv4}` : "";
+  return `${iface.name}${address}`;
 }
