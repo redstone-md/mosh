@@ -76,6 +76,7 @@ import {
 } from "./attachments";
 import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
 import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
+import { CallLogEntry } from "./voice-call/CallLogEntry";
 
 interface AttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
@@ -2077,6 +2078,7 @@ function DmMessageRow({
             onOpen={attachments.onOpen}
           />
         ) : null}
+        {message.call_event ? <CallLogEntry event={message.call_event} /> : null}
         <div className="message-seal">
           <IconLock size={10} />
           <span>OpenMLS · sealed</span>
