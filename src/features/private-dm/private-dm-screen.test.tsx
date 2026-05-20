@@ -205,6 +205,17 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
     dismissChannelDmOffer: vi.fn(async () => {}),
     sendGroupDmOffer: vi.fn(async () => {}),
     dismissGroupDmOffer: vi.fn(async () => {}),
+    callStart: vi.fn(async (sessionId: string) => ({
+      session_id: sessionId,
+      call_id: "call-test",
+      key_b64: "",
+      nonce_prefix_b64: "",
+    })),
+    callAccept: vi.fn(async () => {}),
+    callDecline: vi.fn(async () => {}),
+    callEnd: vi.fn(async () => {}),
+    callSendFrame: vi.fn(async () => {}),
+    callDrainFrames: vi.fn(async () => [] as readonly string[]),
   };
 }
 

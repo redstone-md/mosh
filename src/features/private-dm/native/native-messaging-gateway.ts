@@ -22,6 +22,12 @@ const PRIVATE_GROUP_CLOSE_COMMAND = "private_group_close";
 const PRIVATE_DM_SEND_ATTACHMENT_COMMAND = "private_dm_send_attachment";
 const PRIVATE_DM_DOWNLOAD_ATTACHMENT_COMMAND = "private_dm_download_attachment";
 const PRIVATE_DM_CANCEL_ATTACHMENT_COMMAND = "private_dm_cancel_attachment";
+const PRIVATE_DM_CALL_START_COMMAND = "private_dm_call_start";
+const PRIVATE_DM_CALL_ACCEPT_COMMAND = "private_dm_call_accept";
+const PRIVATE_DM_CALL_DECLINE_COMMAND = "private_dm_call_decline";
+const PRIVATE_DM_CALL_END_COMMAND = "private_dm_call_end";
+const PRIVATE_DM_CALL_SEND_FRAME_COMMAND = "private_dm_call_send_frame";
+const PRIVATE_DM_CALL_DRAIN_FRAMES_COMMAND = "private_dm_call_drain_frames";
 const PRIVATE_GROUP_SEND_ATTACHMENT_COMMAND = "private_group_send_attachment";
 const PRIVATE_GROUP_DOWNLOAD_ATTACHMENT_COMMAND = "private_group_download_attachment";
 const PRIVATE_GROUP_CANCEL_ATTACHMENT_COMMAND = "private_group_cancel_attachment";
@@ -149,6 +155,33 @@ export interface ChatMessage {
   readonly from_device: string;
   readonly body: string;
   readonly attachment?: AttachmentDescriptor;
+  readonly call_event?: CallEvent;
+}
+
+export interface PendingCall {
+  readonly call_id: string;
+  readonly from_device: string;
+}
+
+export interface ActiveCall {
+  readonly call_id: string;
+  readonly direction: "caller" | "callee";
+  readonly key_b64: string;
+  readonly nonce_prefix_b64: string;
+  readonly started_at_ms: number;
+}
+
+export interface CallEvent {
+  readonly kind: "completed" | "missed";
+  readonly duration_ms: number;
+  readonly call_id: string;
+}
+
+export interface CallStarted {
+  readonly session_id: string;
+  readonly call_id: string;
+  readonly key_b64: string;
+  readonly nonce_prefix_b64: string;
 }
 
 export interface MeshInfo {
@@ -180,6 +213,8 @@ export interface SessionSnapshot {
   readonly attachments: readonly AttachmentView[];
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
+  readonly pending_call?: PendingCall;
+  readonly active_call?: ActiveCall;
 }
 
 export interface SnapshotEvent {
@@ -368,6 +403,12 @@ export interface NativeMessagingGateway {
     inviteUri: string,
   ): Promise<void>;
   dismissGroupDmOffer(groupId: string, offerId: string): Promise<void>;
+  callStart(sessionId: string): Promise<CallStarted>;
+  callAccept(sessionId: string, callId: string): Promise<void>;
+  callDecline(sessionId: string, callId: string, reason: string): Promise<void>;
+  callEnd(sessionId: string, callId: string, reason: string): Promise<void>;
+  callSendFrame(sessionId: string, callId: string, frameBase64: string): Promise<void>;
+  callDrainFrames(sessionId: string, callId: string): Promise<readonly string[]>;
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {
@@ -558,6 +599,44 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
 
   async dismissGroupDmOffer(groupId: string, offerId: string): Promise<void> {
     await invoke(PRIVATE_GROUP_DISMISS_DM_OFFER_COMMAND, { groupId, offerId });
+  }
+
+  async callStart(sessionId: string): Promise<CallStarted> {
+    return invoke<CallStarted>(PRIVATE_DM_CALL_START_COMMAND, { sessionId });
+  }
+
+  async callAccept(sessionId: string, callId: string): Promise<void> {
+    await invoke(PRIVATE_DM_CALL_ACCEPT_COMMAND, { sessionId, callId });
+  }
+
+  async callDecline(sessionId: string, callId: string, reason: string): Promise<void> {
+    await invoke(PRIVATE_DM_CALL_DECLINE_COMMAND, { sessionId, callId, reason });
+  }
+
+  async callEnd(sessionId: string, callId: string, reason: string): Promise<void> {
+    await invoke(PRIVATE_DM_CALL_END_COMMAND, { sessionId, callId, reason });
+  }
+
+  async callSendFrame(
+    sessionId: string,
+    callId: string,
+    frameBase64: string,
+  ): Promise<void> {
+    await invoke(PRIVATE_DM_CALL_SEND_FRAME_COMMAND, {
+      sessionId,
+      callId,
+      frameB64: frameBase64,
+    });
+  }
+
+  async callDrainFrames(
+    sessionId: string,
+    callId: string,
+  ): Promise<readonly string[]> {
+    return invoke<readonly string[]>(PRIVATE_DM_CALL_DRAIN_FRAMES_COMMAND, {
+      sessionId,
+      callId,
+    });
   }
 }
 
