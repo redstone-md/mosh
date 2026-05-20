@@ -424,12 +424,14 @@ export interface NetworkInterfaceInfo {
   readonly index: number;
   readonly ipv4: string | null;
   readonly is_loopback: boolean;
-  readonly is_virtual_guess: boolean;
+  readonly is_virtual: boolean;
+  readonly is_default_route: boolean;
 }
 
 export interface VpnDetection {
   readonly vpn_likely: boolean;
   readonly suspect_interfaces: readonly string[];
+  readonly vpn_owns_default_route: boolean;
 }
 
 export class TauriNativeMessagingGateway implements NativeMessagingGateway {

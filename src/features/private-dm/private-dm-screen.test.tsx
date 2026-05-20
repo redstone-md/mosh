@@ -217,7 +217,11 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
     callSendFrame: vi.fn(async () => {}),
     callDrainFrames: vi.fn(async () => [] as readonly string[]),
     listNetworkInterfaces: vi.fn(async () => []),
-    detectVpn: vi.fn(async () => ({ vpn_likely: false, suspect_interfaces: [] })),
+    detectVpn: vi.fn(async () => ({
+      vpn_likely: false,
+      suspect_interfaces: [],
+      vpn_owns_default_route: false,
+    })),
     setBindInterface: vi.fn(async () => {}),
     getBindInterface: vi.fn(async () => null),
   };

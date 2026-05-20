@@ -69,3 +69,46 @@
   font-size: 12px;
   min-width: 180px;
 }
+
+.bind-interface-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.bind-interface-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.bind-interface-toggle input[type="checkbox"] {
+  margin: 0;
+}
+
+.bind-interface-hint {
+  font-size: 11px;
+  opacity: 0.7;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.bind-interface-select {
+  background: #1a1c20;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.bind-interface-error {
+  color: #e5484d;
+  font-size: 12px;
+  margin: 0;
+}

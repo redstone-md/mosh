@@ -78,6 +78,7 @@ import {
 import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
 import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
 import { CallLogEntry } from "./voice-call/CallLogEntry";
+import { BindInterfaceField } from "./vpn/BindInterfaceField";
 import { VpnBanner } from "./vpn/VpnBanner";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
@@ -1040,6 +1041,7 @@ export function PrivateDmScreen({
               createState={createState}
               groupCreateState={groupCreateState}
               error={error}
+              gateway={gateway}
               onDisplayName={setDisplayName}
               onStaticPeer={setStaticPeer}
               onListenPort={setListenPort}
@@ -1421,6 +1423,7 @@ function NewSessionPanel(props: {
   createState: CreateState;
   groupCreateState: GroupCreateState;
   error?: string;
+  gateway: NativeMessagingGateway;
   onDisplayName: (value: string) => void;
   onStaticPeer: (value: string) => void;
   onListenPort: (value: number) => void;
@@ -1445,6 +1448,7 @@ function NewSessionPanel(props: {
             displayName={props.displayName}
             staticPeer={props.staticPeer}
             listenPort={props.listenPort}
+            gateway={props.gateway}
             onDisplayName={props.onDisplayName}
             onStaticPeer={props.onStaticPeer}
             onListenPort={props.onListenPort}
@@ -1550,6 +1554,7 @@ function OnboardMenu(props: {
   displayName: string;
   staticPeer: string;
   listenPort: number;
+  gateway: NativeMessagingGateway;
   onDisplayName: (value: string) => void;
   onStaticPeer: (value: string) => void;
   onListenPort: (value: number) => void;
@@ -1619,6 +1624,7 @@ function OnboardMenu(props: {
               onChange={(event) => props.onListenPort(Number(event.target.value) || 0)}
             />
           </Field>
+          <BindInterfaceField gateway={props.gateway} />
         </Disclosure>
         <Disclosure icon={<IconShieldCheck size={14} />} label={onboardText.aboutToggle}>
           <p className="disclosure-text">{cryptoNotice.body}</p>

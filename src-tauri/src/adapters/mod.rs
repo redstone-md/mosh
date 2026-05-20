@@ -8,6 +8,7 @@ pub mod moss_ffi;
 pub mod moss_runtime;
 pub mod openmls_crypto;
 pub mod private_dm_runtime;
+pub mod network_inventory;
 pub mod private_group_runtime;
 pub mod secure_storage;
 pub mod voice_call_runtime;
