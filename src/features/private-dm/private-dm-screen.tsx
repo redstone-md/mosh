@@ -13,6 +13,7 @@ import {
   IconLogout,
   IconMessageCircle,
   IconPencil,
+  IconPhone,
   IconPlugConnected,
   IconPlus,
   IconRefresh,
@@ -77,6 +78,27 @@ import {
 import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
 import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
 import { CallLogEntry } from "./voice-call/CallLogEntry";
+import { CallOverlay } from "./voice-call/CallOverlay";
+import { IncomingCallModal } from "./voice-call/IncomingCallModal";
+import {
+  CALLEE_DIRECTION_BIT,
+  CALLER_DIRECTION_BIT,
+  bytesFromBase64,
+  bytesToBase64,
+  importCallKey,
+  openFrame,
+  sealFrame,
+} from "./voice-call/frame-crypto";
+import { JitterBuffer } from "./voice-call/jitter-buffer";
+import {
+  isCallAudioSupported,
+  startVoiceCapture,
+  type VoiceCaptureHandle,
+} from "./voice-call/audio-capture";
+import {
+  startVoicePlayback,
+  type VoicePlaybackHandle,
+} from "./voice-call/audio-playback";
 
 interface AttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
@@ -175,6 +197,14 @@ export function PrivateDmScreen({
   const [unread, setUnread] = useState<ReadonlyMap<string, number>>(new Map());
   const lastSeenRef = useRef<Map<string, number>>(new Map());
   const notifyReadyRef = useRef(false);
+  const callCaptureRef = useRef<VoiceCaptureHandle | null>(null);
+  const callPlaybackRef = useRef<VoicePlaybackHandle | null>(null);
+  const callKeyRef = useRef<CryptoKey | null>(null);
+  const callSeqRef = useRef<bigint>(0n);
+  const callJitterRef = useRef<JitterBuffer | null>(null);
+  const callPollRef = useRef<number | undefined>(undefined);
+  const callMutedRef = useRef(false);
+  const [callMuted, setCallMuted] = useState(false);
 
   const requestBase = useMemo(
     () => ({
@@ -612,6 +642,47 @@ export function PrivateDmScreen({
     });
   };
 
+  const startCall = useCallback(
+    (sessionId: string) => {
+      void (async () => {
+        try {
+          await gateway.callStart(sessionId);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Could not start call");
+        }
+      })();
+    },
+    [gateway],
+  );
+  const acceptCall = useCallback(
+    (sessionId: string, callId: string) => {
+      void (async () => {
+        try {
+          await gateway.callAccept(sessionId, callId);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Could not accept call");
+        }
+      })();
+    },
+    [gateway],
+  );
+  const declineCall = useCallback(
+    (sessionId: string, callId: string, reason: string) => {
+      void gateway.callDecline(sessionId, callId, reason).catch((err) => {
+        setError(err instanceof Error ? err.message : "Could not decline call");
+      });
+    },
+    [gateway],
+  );
+  const endCall = useCallback(
+    (sessionId: string, callId: string, reason: string) => {
+      void gateway.callEnd(sessionId, callId, reason).catch((err) => {
+        setError(err instanceof Error ? err.message : "Could not end call");
+      });
+    },
+    [gateway],
+  );
+
   // Initiate a private DM with a member seen in a channel or group: mint an
   // invite and publish it as an offer the targeted peer can accept.
   const offerDm = (targetFingerprint: string) => {
@@ -685,6 +756,152 @@ export function PrivateDmScreen({
   const activeGroup =
     active?.type === "group" ? groups.find((g) => g.group_id === active.id) ?? null : null;
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
+
+  const pendingCallSession = sessions.find((session) => session.pending_call);
+  const activeDmSession = activeSession;
+  const activeCall = activeDmSession?.active_call ?? null;
+  const activeCallSessionId = activeDmSession?.session_id ?? null;
+  const callSupported = isCallAudioSupported();
+  const activeCallId = activeCall?.call_id ?? null;
+  const activeCallKey = activeCall?.key_b64 ?? null;
+  const activeCallNoncePrefix = activeCall?.nonce_prefix_b64 ?? null;
+  const activeCallDirection = activeCall?.direction ?? null;
+
+  useEffect(() => {
+    if (
+      !activeCallSessionId ||
+      !activeCallId ||
+      !activeCallKey ||
+      !activeCallNoncePrefix ||
+      !activeCallDirection
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const direction =
+      activeCallDirection === "caller"
+        ? CALLER_DIRECTION_BIT
+        : CALLEE_DIRECTION_BIT;
+    const sessionId = activeCallSessionId;
+    const callId = activeCallId;
+    const noncePrefix = activeCallNoncePrefix;
+    void (async () => {
+      try {
+        callKeyRef.current = await importCallKey(activeCallKey);
+        callSeqRef.current = 0n;
+        callJitterRef.current = new JitterBuffer();
+        callPlaybackRef.current = await startVoicePlayback();
+        callCaptureRef.current = await startVoiceCapture((frame) => {
+          if (cancelled || !callKeyRef.current || callMutedRef.current) {
+            return;
+          }
+          void (async () => {
+            const seal = await sealFrame(
+              callKeyRef.current!,
+              noncePrefix,
+              callSeqRef.current,
+              direction,
+              frame,
+            );
+            callSeqRef.current += 1n;
+            try {
+              await gateway.callSendFrame(
+                sessionId,
+                callId,
+                bytesToBase64(seal),
+              );
+            } catch (err) {
+              console.warn("[voice-call] send failed", err);
+            }
+          })();
+        });
+        callPollRef.current = window.setInterval(() => {
+          void (async () => {
+            try {
+              const frames = await gateway.callDrainFrames(sessionId, callId);
+              if (frames.length === 0 || !callKeyRef.current) {
+                return;
+              }
+              for (const frameB64 of frames) {
+                const opened = await openFrame(
+                  callKeyRef.current,
+                  noncePrefix,
+                  bytesFromBase64(frameB64),
+                );
+                if (opened) {
+                  callJitterRef.current?.push({
+                    seq: opened.seq,
+                    payload: opened.payload,
+                  });
+                }
+              }
+              const ready = callJitterRef.current?.drainReady() ?? [];
+              for (const buffered of ready) {
+                callPlaybackRef.current?.pushFrame(buffered.payload);
+              }
+            } catch (err) {
+              console.warn("[voice-call] poll failed", err);
+            }
+          })();
+        }, 20);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Voice call setup failed");
+        endCall(sessionId, callId, "setup_failed");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (callPollRef.current !== undefined) {
+        window.clearInterval(callPollRef.current);
+        callPollRef.current = undefined;
+      }
+      void callCaptureRef.current?.stop();
+      void callPlaybackRef.current?.stop();
+      callCaptureRef.current = null;
+      callPlaybackRef.current = null;
+      callKeyRef.current = null;
+      callJitterRef.current = null;
+      setCallMuted(false);
+      callMutedRef.current = false;
+    };
+  }, [
+    activeCallSessionId,
+    activeCallId,
+    activeCallKey,
+    activeCallNoncePrefix,
+    activeCallDirection,
+    endCall,
+    gateway,
+  ]);
+
+  useEffect(() => {
+    if (!pendingCallSession?.pending_call) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const focused = await getCurrentWindow().isFocused();
+        if (cancelled || focused || !notifyReadyRef.current) {
+          return;
+        }
+        sendNotification({
+          title: "Mosh",
+          body: `Incoming call from ${pendingCallSession.display_name}`,
+        });
+      } catch {
+        // Notification host unavailable; the in-app modal is the user's signal.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    pendingCallSession?.session_id,
+    pendingCallSession?.pending_call?.call_id,
+    pendingCallSession?.display_name,
+  ]);
 
   const activeAttachments =
     activeSession?.attachments ??
@@ -844,6 +1061,9 @@ export function PrivateDmScreen({
               onSend={sendMessage}
               onConfirm={() => confirmFingerprint(activeSession.session_id)}
               onClose={closeActive}
+              callSupported={callSupported}
+              callBusy={!!activeSession.active_call}
+              onStartCall={() => startCall(activeSession.session_id)}
             />
           ) : activeChannel ? (
             <ActiveChannelChat
@@ -926,6 +1146,41 @@ export function PrivateDmScreen({
           descriptor={viewer.descriptor}
           src={viewer.src}
           onClose={() => setViewer(null)}
+        />
+      ) : null}
+
+      {pendingCallSession?.pending_call ? (
+        <IncomingCallModal
+          pending={pendingCallSession.pending_call}
+          peerLabel={pendingCallSession.display_name}
+          onAccept={() =>
+            acceptCall(
+              pendingCallSession.session_id,
+              pendingCallSession.pending_call!.call_id,
+            )
+          }
+          onDecline={(reason) =>
+            declineCall(
+              pendingCallSession.session_id,
+              pendingCallSession.pending_call!.call_id,
+              reason,
+            )
+          }
+        />
+      ) : null}
+      {activeCall && activeCallSessionId && activeDmSession ? (
+        <CallOverlay
+          active={activeCall}
+          peerLabel={activeDmSession.display_name}
+          muted={callMuted}
+          onToggleMute={() => {
+            const next = !callMuted;
+            setCallMuted(next);
+            callMutedRef.current = next;
+          }}
+          onHangUp={() =>
+            endCall(activeCallSessionId, activeCall.call_id, "hangup")
+          }
         />
       ) : null}
     </main>
@@ -1583,6 +1838,9 @@ function ActiveDmChat(props: {
   onSend: (event: FormEvent) => void;
   onConfirm: () => void;
   onClose: () => void;
+  callSupported: boolean;
+  callBusy: boolean;
+  onStartCall: () => void;
 }) {
   const ready = props.session.state === READY_STATE;
   const peerName = peerLabel(props.session);
@@ -1603,6 +1861,22 @@ function ActiveDmChat(props: {
           confirmed={props.confirmed}
           onConfirm={props.onConfirm}
         />
+        <button
+          className="btn btn-ghost btn-icon"
+          type="button"
+          aria-label="Start voice call"
+          title={
+            props.callSupported
+              ? "Start voice call"
+              : "Voice calls require a newer WebView"
+          }
+          disabled={
+            !props.callSupported || props.callBusy || props.busy || !ready
+          }
+          onClick={props.onStartCall}
+        >
+          <IconPhone size={16} />
+        </button>
         <button
           className="btn btn-ghost btn-icon"
           type="button"
