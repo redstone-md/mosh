@@ -60,6 +60,16 @@ impl PrivateDmState {
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<adapters::persistence::Persistence>>,
     ) -> Self {
+        // Persist the Moss node identity so its peer-id stays stable across
+        // restarts; without this Moss mints a fresh identity each launch and
+        // peers flap on reconnect. The keystore is global to the Moss library
+        // and must be installed before any node starts (including rehydrate).
+        if let Some(store) = persistence.clone() {
+            adapters::moss_ffi::set_moss_keystore(store);
+            if let Err(error) = moss.install_keystore() {
+                eprintln!("moss keystore install failed: {error}");
+            }
+        }
         let mut runtime = PrivateDmRuntime::from_shared(moss, attachment_store, persistence);
         runtime.rehydrate();
         Self {

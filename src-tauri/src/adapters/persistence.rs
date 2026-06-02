@@ -61,6 +61,9 @@ const DEK_KEY: &str = "history-dek-v1";
 const MLS_SNAPSHOT: TableDefinition<&str, &[u8]> = TableDefinition::new("mls_snapshot");
 const MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("messages");
 const SESSIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("sessions");
+const MOSS_IDENTITY: TableDefinition<&str, &[u8]> = TableDefinition::new("moss_identity");
+// Single-row table: the device's stable Moss transport identity (libp2p key).
+const MOSS_IDENTITY_KEY: &str = "node-identity-v1";
 
 pub struct Persistence {
     db: Database,
@@ -112,6 +115,8 @@ impl Persistence {
             wtx.open_table(MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(SESSIONS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         wtx.commit()
@@ -233,6 +238,35 @@ impl Persistence {
     pub fn list_messages(&self, conversation_id: &str) -> Result<Vec<Vec<u8>>, PersistenceError> {
         self.range_prefix(MESSAGES, conversation_id)
     }
+
+    /// The device's stable Moss transport identity (encrypted like everything
+    /// else). Persisting it keeps the node's peer-id constant across restarts,
+    /// which is required for peers to re-establish a connection instead of
+    /// flapping.
+    pub fn put_moss_identity(&self, raw: &[u8]) -> Result<(), PersistenceError> {
+        self.put(MOSS_IDENTITY, MOSS_IDENTITY_KEY, raw)
+    }
+    pub fn get_moss_identity(&self) -> Result<Option<Vec<u8>>, PersistenceError> {
+        self.get(MOSS_IDENTITY, MOSS_IDENTITY_KEY)
+    }
+}
+
+impl crate::adapters::moss_ffi::MossKeyStore for Persistence {
+    fn load_identity(&self) -> Option<Vec<u8>> {
+        match self.get_moss_identity() {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("moss identity load failed: {e}");
+                None
+            }
+        }
+    }
+
+    fn save_identity(&self, bytes: &[u8]) {
+        if let Err(e) = self.put_moss_identity(bytes) {
+            eprintln!("moss identity save failed: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +282,8 @@ impl Persistence {
             wtx.open_table(MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(SESSIONS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         wtx.commit()
@@ -275,6 +311,20 @@ mod tests {
         let last = blob.len() - 1;
         blob[last] ^= 0xFF;
         assert!(decrypt_blob(&dek, &blob).is_err());
+    }
+
+    #[test]
+    fn moss_identity_round_trips() {
+        let path = std::env::temp_dir().join(format!("mosh-moss-id-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [3u8; 32]).unwrap();
+
+        assert!(p.get_moss_identity().unwrap().is_none());
+        let identity = vec![9u8; 129];
+        p.put_moss_identity(&identity).unwrap();
+        assert_eq!(p.get_moss_identity().unwrap(), Some(identity));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
