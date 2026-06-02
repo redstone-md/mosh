@@ -123,6 +123,80 @@ impl PrivateDmRuntime {
         }
     }
 
+    /// Rebuild sessions + history from the encrypted store. Best-effort: a bad
+    /// row is skipped, never fatal.
+    pub fn rehydrate(&mut self) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let rows = match p.list_sessions() {
+            Ok(rows) => rows,
+            Err(_) => return,
+        };
+        for row in rows {
+            let rec: contracts::PersistedSession = match serde_json::from_slice(&row) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let snapshot = match p.get_mls_snapshot(&rec.session_id) {
+                Ok(Some(s)) => s,
+                _ => continue,
+            };
+            let crypto = match MlsSessionCrypto::restore(
+                &rec.display_name,
+                &rec.signer_public,
+                &snapshot,
+                &rec.group_id,
+            ) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let node = match start_node(
+                &self.moss,
+                &rec.mesh_id,
+                &rec.session_id,
+                rec.listen_port,
+                rec.static_peer.clone(),
+            ) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            let mut session = PrivateDmSession::new(
+                if rec.role_is_alice {
+                    SessionRole::Alice
+                } else {
+                    SessionRole::Bob
+                },
+                rec.display_name.clone(),
+                rec.participant_id.clone(),
+                rec.session_id.clone(),
+                rec.mesh_id.clone(),
+                rec.fingerprint.clone(),
+                rec.invite_uri.clone(),
+                node,
+                crypto,
+                Arc::clone(&self.attachment_store),
+            );
+            if let Ok(msgs) = p.list_messages(&rec.session_id) {
+                for m in msgs {
+                    if let Ok(pm) = serde_json::from_slice::<contracts::PersistedMessage>(&m) {
+                        session.messages.push(ChatMessage {
+                            from_device: pm.from_device,
+                            body: pm.body,
+                            attachment: None,
+                            call_event: None,
+                        });
+                    }
+                }
+            }
+            // DUP-GUARD: re-seed persisted_counts so the next persist_session_tail
+            // does NOT re-append the messages we just loaded.
+            self.persisted_counts
+                .insert(rec.session_id.clone(), session.messages.len());
+            self.sessions.insert(rec.session_id.clone(), session);
+        }
+    }
+
     pub fn create_invite(
         &mut self,
         request: StartSessionRequest,
@@ -1359,6 +1433,90 @@ mod tests {
 
         let snapshot = wait_for_message(&mut bob, &invite.session_id, "hello bob");
         assert_eq!(snapshot.state, "ready");
+    }
+
+    #[test]
+    fn history_and_session_survive_restart() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-dm-rehydrate-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [9u8; 32]).expect("store should open"));
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        // Runtime #1: create an invite + send one message, then drop it.
+        let session_id = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42140,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            alice
+                .send_message(&invite.session_id, "hello after restart".to_string())
+                .expect("Alice should send");
+            invite.session_id
+        };
+
+        // Runtime #2: rehydrate from the SAME store and prove the message is back.
+        let mut revived = PrivateDmRuntime::from_shared(
+            Arc::clone(&runtime),
+            temp_store(),
+            Some(persistence.clone()),
+        );
+        revived.rehydrate();
+
+        let listing = revived.list_sessions().expect("listing should pass");
+        let session = listing
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .expect("rehydrated session should be present");
+
+        let matching: Vec<&ChatMessage> = session
+            .messages
+            .iter()
+            .filter(|m| m.body == "hello after restart")
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected exactly one rehydrated message, dup-guard failed: {:?}",
+            session.messages
+        );
+
+        // Dup-guard: re-listing (which drains inbound + persists tail) must not
+        // duplicate the loaded message.
+        let listing2 = revived.list_sessions().expect("second listing should pass");
+        let session2 = listing2
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .expect("session should still be present");
+        let matching2 = session2
+            .messages
+            .iter()
+            .filter(|m| m.body == "hello after restart")
+            .count();
+        assert_eq!(matching2, 1, "tail-persist re-append duplicated the message");
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
