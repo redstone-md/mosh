@@ -289,3 +289,27 @@ impl From<crate::adapters::attachment_store::AttachmentStoreError> for PrivateDm
         Self::Attachment(error.to_string())
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedMessage {
+    pub conversation_id: String,
+    pub sent_at_ms: u64,
+    pub message_id: String,
+    pub from_device: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedSession {
+    pub role_is_alice: bool,
+    pub display_name: String,
+    pub participant_id: String,
+    pub session_id: String,
+    pub mesh_id: String,
+    pub fingerprint: String,
+    pub invite_uri: Option<String>,
+    pub signer_public: Vec<u8>,
+    pub group_id: Vec<u8>,
+    pub listen_port: u16,
+    pub static_peer: Option<String>,
+}
