@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 
 const TARGET_DIR = path.resolve("src-tauri", "moss-runtime");
-const MOSS_DIR = path.resolve("..", "moss");
+const MOSS_DIR = path.resolve("moss");
 const OUTPUT_NAME = process.platform === "win32" ? "moss.dll" : process.platform === "darwin" ? "libmoss.dylib" : "libmoss.so";
 const OUTPUT_PATH = path.join(TARGET_DIR, OUTPUT_NAME);
 
