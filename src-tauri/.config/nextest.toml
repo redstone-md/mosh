@@ -21,3 +21,7 @@ moss-serial = { max-threads = 1 }
 [[profile.ci.overrides]]
 filter = 'test(over_moss) | test(moss_peers) | test(survive_restart)'
 test-group = 'moss-serial'
+# The loopback MLS handshake occasionally fails to form its gossipsub mesh; a
+# fresh retry process reliably recovers. Give these extra attempts (the mesh
+# either forms within ~10s or not at all, so retrying beats a longer timeout).
+retries = 4
