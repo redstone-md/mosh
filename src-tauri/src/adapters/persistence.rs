@@ -72,18 +72,33 @@ impl Persistence {
     /// keychain (creating + storing a new random DEK on first run).
     pub fn open(path: &Path) -> Result<Self, PersistenceError> {
         let store = OsSecureSecretStore;
+        let db_exists = path.exists();
         let dek = match store.load_secret(DEK_KEY) {
             Ok(bytes) if bytes.len() == 32 => {
                 let mut d = [0u8; 32];
                 d.copy_from_slice(&bytes);
                 d
             }
-            _ => {
+            Ok(_) => {
+                // Key present but wrong size = corrupt; fail closed, never overwrite.
+                return Err(PersistenceError::Keychain(
+                    "stored DEK has unexpected length".into(),
+                ));
+            }
+            Err(e) => {
+                if db_exists {
+                    // Existing database but DEK unavailable: fail closed. Minting a new
+                    // key here would permanently orphan all persisted history.
+                    return Err(PersistenceError::Keychain(format!(
+                        "DEK unavailable but database exists: {e}"
+                    )));
+                }
+                // Genuine first run: mint and store a fresh DEK.
                 let mut d = [0u8; 32];
                 rand::rngs::OsRng.fill_bytes(&mut d);
                 store
                     .save_secret(DEK_KEY, &d)
-                    .map_err(|e| PersistenceError::Keychain(e.to_string()))?;
+                    .map_err(|err| PersistenceError::Keychain(err.to_string()))?;
                 d
             }
         };
@@ -145,8 +160,11 @@ impl Persistence {
         let t = rtx.open_table(SESSIONS).map_err(|e| PersistenceError::Db(e.to_string()))?;
         let mut out = Vec::new();
         for item in t.iter().map_err(|e| PersistenceError::Db(e.to_string()))? {
-            let (_k, v) = item.map_err(|e| PersistenceError::Db(e.to_string()))?;
-            out.push(decrypt_blob(&self.dek, v.value())?);
+            let (k, v) = item.map_err(|e| PersistenceError::Db(e.to_string()))?;
+            match decrypt_blob(&self.dek, v.value()) {
+                Ok(plain) => out.push(plain),
+                Err(e) => eprintln!("skipping undecryptable session row {}: {e}", k.value()),
+            }
         }
         Ok(out)
     }
@@ -210,6 +228,33 @@ mod tests {
 
         let msgs = p.list_messages("conv-A").unwrap();
         assert_eq!(msgs, vec![b"first".to_vec(), b"second".to_vec()]);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn messages_ordered_within_same_millisecond_batch() {
+        let dir = std::env::temp_dir().join(format!("mosh-ms-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ms-batch.redb");
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [5u8; 32]).unwrap();
+
+        let ts = 1_700_000_000_000u64;
+        // Insert 12 messages in the SAME millisecond, ids built like the runtime
+        // does after FIX 2 (zero-padded index), out of natural insertion order.
+        for i in (0..12u32).rev() {
+            let id = format!("{ts}-{i:06}");
+            let body = format!("m{i}");
+            p.append_message("conv", ts, &id, body.as_bytes()).unwrap();
+        }
+        let got: Vec<String> = p
+            .list_messages("conv")
+            .unwrap()
+            .into_iter()
+            .map(|b| String::from_utf8(b).unwrap())
+            .collect();
+        let want: Vec<String> = (0..12).map(|i| format!("m{i}")).collect();
+        assert_eq!(got, want, "same-ms messages must come back in index order");
         std::fs::remove_file(&path).ok();
     }
 }

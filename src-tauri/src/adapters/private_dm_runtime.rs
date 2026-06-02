@@ -31,13 +31,6 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn persist_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 fn random_b64(bytes: usize) -> String {
     use rand::RngCore;
     let mut buf = vec![0u8; bytes];
@@ -136,11 +129,17 @@ impl PrivateDmRuntime {
         for row in rows {
             let rec: contracts::PersistedSession = match serde_json::from_slice(&row) {
                 Ok(r) => r,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("rehydrate: bad session row: {e}");
+                    continue;
+                }
             };
             let snapshot = match p.get_mls_snapshot(&rec.session_id) {
                 Ok(Some(s)) => s,
-                _ => continue,
+                _ => {
+                    eprintln!("rehydrate: missing MLS snapshot for {}", rec.session_id);
+                    continue;
+                }
             };
             let crypto = match MlsSessionCrypto::restore(
                 &rec.display_name,
@@ -149,7 +148,10 @@ impl PrivateDmRuntime {
                 &rec.group_id,
             ) {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("rehydrate: crypto restore failed for {}: {e}", rec.session_id);
+                    continue;
+                }
             };
             let node = match start_node(
                 &self.moss,
@@ -159,7 +161,10 @@ impl PrivateDmRuntime {
                 rec.static_peer.clone(),
             ) {
                 Ok(n) => n,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("rehydrate: node start failed for {}: {e}", rec.session_id);
+                    continue;
+                }
             };
             let mut session = PrivateDmSession::new(
                 if rec.role_is_alice {
@@ -492,8 +497,8 @@ impl PrivateDmRuntime {
                 .copied()
                 .unwrap_or(0);
             for (idx, msg) in session.messages.iter().enumerate().skip(start) {
-                let ts = persist_now_ms();
-                let message_id = format!("{ts}-{idx}");
+                let ts = now_ms();
+                let message_id = format!("{ts}-{idx:06}");
                 let record = contracts::PersistedMessage {
                     conversation_id: session.session_id.clone(),
                     sent_at_ms: ts,
