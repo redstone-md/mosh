@@ -4,6 +4,16 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-06-02
+
+### Fixed
+- **Stable Moss node identity across restarts.** The Moss transport identity
+  (libp2p key) was regenerated on every launch because the host never wired
+  Moss's keystore, so after a restart a peer saw a brand-new peer-id and the
+  connection flapped (rapid `peer_joined`/`peer_left`) instead of
+  re-establishing. The identity is now persisted in the encrypted store
+  (AES-256-GCM) and reused on restart.
+
 ## [0.2.1] - 2026-06-02
 
 ### Fixed
