@@ -185,12 +185,43 @@ impl PrivateDmRuntime {
             if let Ok(msgs) = p.list_messages(&rec.session_id) {
                 for m in msgs {
                     if let Ok(pm) = serde_json::from_slice::<contracts::PersistedMessage>(&m) {
-                        session.messages.push(ChatMessage {
-                            from_device: pm.from_device,
-                            body: pm.body,
-                            attachment: None,
-                            call_event: None,
-                        });
+                        // Re-render cached attachments from the local store. Non-cached
+                        // attachments get no slot, so a peer re-offer can still register
+                        // them (auto re-download from persisted data is impossible: the
+                        // chunk-crypto manifest is not persisted and MLS forward secrecy
+                        // bars re-decrypting the original offer).
+                        if let Some(desc) = pm.message.attachment.as_ref() {
+                            if self
+                                .attachment_store
+                                .exists(&desc.content_hash, &desc.file_name)
+                                .unwrap_or(false)
+                            {
+                                if let Ok(path) = self
+                                    .attachment_store
+                                    .path_for(&desc.content_hash, &desc.file_name)
+                                {
+                                    let direction = if pm.message.from_device == rec.display_name {
+                                        AttachmentDirection::Outgoing
+                                    } else {
+                                        AttachmentDirection::Incoming
+                                    };
+                                    session
+                                        .attachment_slots
+                                        .entry(desc.attachment_id.clone())
+                                        .or_insert(AttachmentSlot {
+                                            descriptor: desc.clone(),
+                                            direction,
+                                            local_path: Some(
+                                                path.to_string_lossy().into_owned(),
+                                            ),
+                                            download_requested: false,
+                                            failed: false,
+                                            cancelled: false,
+                                        });
+                                }
+                            }
+                        }
+                        session.messages.push(pm.message);
                     }
                 }
             }
@@ -503,8 +534,7 @@ impl PrivateDmRuntime {
                     conversation_id: session.session_id.clone(),
                     sent_at_ms: ts,
                     message_id: message_id.clone(),
-                    from_device: msg.from_device.clone(),
-                    body: msg.body.clone(),
+                    message: msg.clone(),
                 };
                 if let Ok(json) = serde_json::to_vec(&record) {
                     let _ = p.append_message(&session.session_id, ts, &message_id, &json);

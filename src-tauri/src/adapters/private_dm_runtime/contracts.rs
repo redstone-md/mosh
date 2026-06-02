@@ -112,13 +112,13 @@ pub struct MeshInfo {
     pub public_key: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub from_device: String,
     pub body: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_event: Option<CallEvent>,
 }
 
@@ -295,8 +295,7 @@ pub struct PersistedMessage {
     pub conversation_id: String,
     pub sent_at_ms: u64,
     pub message_id: String,
-    pub from_device: String,
-    pub body: String,
+    pub message: ChatMessage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,4 +311,43 @@ pub struct PersistedSession {
     pub group_id: Vec<u8>,
     pub listen_port: u16,
     pub static_peer: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_message_round_trips_attachment_and_call() {
+        let msg = ChatMessage {
+            from_device: "alice".into(),
+            body: String::new(),
+            attachment: Some(AttachmentDescriptor {
+                attachment_id: "a1".into(),
+                content_hash: "abc123".into(),
+                file_name: "photo.bin".into(),
+                mime: "image/png".into(),
+                total_size: 42,
+                thumbnail_b64: None,
+                voice: None,
+            }),
+            call_event: Some(CallEvent {
+                kind: "completed".into(),
+                duration_ms: 9000,
+                call_id: "c1".into(),
+            }),
+        };
+        let pm = PersistedMessage {
+            conversation_id: "conv".into(),
+            sent_at_ms: 123,
+            message_id: "123-000000".into(),
+            message: msg,
+        };
+        let bytes = serde_json::to_vec(&pm).unwrap();
+        let back: PersistedMessage = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back.message.attachment.unwrap().file_name, "photo.bin");
+        let ce = back.message.call_event.unwrap();
+        assert_eq!(ce.kind, "completed");
+        assert_eq!(ce.duration_ms, 9000);
+    }
 }
