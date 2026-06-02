@@ -4,6 +4,21 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-06-02
+
+### Fixed
+- **Invite joiner's chat history now survives restart.** The peer who *accepted*
+  an invite only obtains its MLS group after processing the creator's Welcome,
+  so the session record written at accept time kept an empty group-id
+  placeholder and could not be reloaded — the whole conversation was silently
+  dropped on the next launch. The record is now refreshed once the group is
+  established. (The invite *creator* was unaffected.)
+
+### Changed
+- Added a quality-gated CI pipeline (rustfmt, Clippy `-D warnings`, typecheck,
+  vitest, cargo-nextest with retries) and a Windows release pipeline that builds
+  and attaches installers. The Rust toolchain is pinned via `rust-toolchain.toml`.
+
 ## [0.2.0] - 2026-06-02
 
 ### Added
