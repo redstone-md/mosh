@@ -1,15 +1,14 @@
 name: Release
 
-# Build signed-by-default-off installers and attach them to the GitHub release.
-# - push a tag `vX.Y.Z`  -> builds and publishes that release
-# - manual dispatch       -> builds an existing tag and uploads to its release
+# Build installers and attach them to a GitHub release. Manual-only: releases
+# are normally built locally (`npm run build:app`) and uploaded with
+# `gh release upload`; this workflow stays as a clean-room cloud fallback.
+# Run it from the Actions tab and pass the existing tag to build.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build and attach binaries to (e.g. v0.2.0)'
+        description: 'Existing tag to build and attach binaries to (e.g. v0.2.1)'
         required: true
 
 # tauri-action needs write access to create/update the release and upload assets.
