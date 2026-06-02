@@ -48,6 +48,8 @@ const SEEN_MESSAGE_CAP: usize = 4096;
 pub struct PrivateDmRuntime {
     moss: Arc<MossFfiRuntime>,
     attachment_store: Arc<AttachmentStore>,
+    persistence: Option<Arc<crate::adapters::persistence::Persistence>>,
+    persisted_counts: HashMap<String, usize>,
     sessions: HashMap<String, PrivateDmSession>,
 }
 
@@ -97,14 +99,137 @@ enum SessionRole {
 
 impl PrivateDmRuntime {
     pub fn new(moss: MossFfiRuntime, attachment_store: Arc<AttachmentStore>) -> Self {
-        Self::from_shared(Arc::new(moss), attachment_store)
+        Self::from_shared(Arc::new(moss), attachment_store, None)
     }
 
-    pub fn from_shared(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
+    pub fn from_shared(
+        moss: Arc<MossFfiRuntime>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<crate::adapters::persistence::Persistence>>,
+    ) -> Self {
         Self {
             moss,
             attachment_store,
+            persistence,
+            persisted_counts: HashMap::new(),
             sessions: HashMap::new(),
+        }
+    }
+
+    /// Rebuild sessions + history from the encrypted store. Best-effort: a bad
+    /// row is skipped, never fatal.
+    pub fn rehydrate(&mut self) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let rows = match p.list_sessions() {
+            Ok(rows) => rows,
+            Err(_) => return,
+        };
+        for row in rows {
+            let rec: contracts::PersistedSession = match serde_json::from_slice(&row) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("rehydrate: bad session row: {e}");
+                    continue;
+                }
+            };
+            let snapshot = match p.get_mls_snapshot(&rec.session_id) {
+                Ok(Some(s)) => s,
+                _ => {
+                    eprintln!("rehydrate: missing MLS snapshot for {}", rec.session_id);
+                    continue;
+                }
+            };
+            let crypto = match MlsSessionCrypto::restore(
+                &rec.display_name,
+                &rec.signer_public,
+                &snapshot,
+                &rec.group_id,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("rehydrate: crypto restore failed for {}: {e}", rec.session_id);
+                    continue;
+                }
+            };
+            let node = match start_node(
+                &self.moss,
+                &rec.mesh_id,
+                &rec.session_id,
+                rec.listen_port,
+                rec.static_peer.clone(),
+            ) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("rehydrate: node start failed for {}: {e}", rec.session_id);
+                    continue;
+                }
+            };
+            let mut session = PrivateDmSession::new(
+                if rec.role_is_alice {
+                    SessionRole::Alice
+                } else {
+                    SessionRole::Bob
+                },
+                rec.display_name.clone(),
+                rec.participant_id.clone(),
+                rec.session_id.clone(),
+                rec.mesh_id.clone(),
+                rec.fingerprint.clone(),
+                rec.invite_uri.clone(),
+                node,
+                crypto,
+                Arc::clone(&self.attachment_store),
+            );
+            if let Ok(msgs) = p.list_messages(&rec.session_id) {
+                for m in msgs {
+                    if let Ok(pm) = serde_json::from_slice::<contracts::PersistedMessage>(&m) {
+                        // Re-render cached attachments from the local store. Non-cached
+                        // attachments get no slot, so a peer re-offer can still register
+                        // them (auto re-download from persisted data is impossible: the
+                        // chunk-crypto manifest is not persisted and MLS forward secrecy
+                        // bars re-decrypting the original offer).
+                        if let Some(desc) = pm.message.attachment.as_ref() {
+                            if self
+                                .attachment_store
+                                .exists(&desc.content_hash, &desc.file_name)
+                                .unwrap_or(false)
+                            {
+                                if let Ok(path) = self
+                                    .attachment_store
+                                    .path_for(&desc.content_hash, &desc.file_name)
+                                {
+                                    let direction = if pm.message.from_device == rec.display_name {
+                                        AttachmentDirection::Outgoing
+                                    } else {
+                                        AttachmentDirection::Incoming
+                                    };
+                                    session
+                                        .attachment_slots
+                                        .entry(desc.attachment_id.clone())
+                                        .or_insert(AttachmentSlot {
+                                            descriptor: desc.clone(),
+                                            direction,
+                                            local_path: Some(
+                                                path.to_string_lossy().into_owned(),
+                                            ),
+                                            download_requested: false,
+                                            failed: false,
+                                            cancelled: false,
+                                        });
+                                }
+                            }
+                        }
+                        session.messages.push(pm.message);
+                    }
+                }
+            }
+            // DUP-GUARD: re-seed persisted_counts so the next persist_session_tail
+            // does NOT re-append the messages we just loaded.
+            self.persisted_counts
+                .insert(rec.session_id.clone(), session.messages.len());
+            self.sessions.insert(rec.session_id.clone(), session);
         }
     }
 
@@ -112,6 +237,8 @@ impl PrivateDmRuntime {
         &mut self,
         request: StartSessionRequest,
     ) -> Result<InviteCreated, PrivateDmRuntimeError> {
+        let persist_listen_port = request.listen_port;
+        let persist_static_peer = request.static_peer.clone();
         let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
         crypto.create_group()?;
         let session_id = crypto.random_token("session")?;
@@ -142,6 +269,27 @@ impl PrivateDmRuntime {
 
         self.sessions.insert(session_id.clone(), session);
 
+        if let Some(p) = self.persistence.as_ref() {
+            if let Some(session) = self.sessions.get(&session_id) {
+                let record = contracts::PersistedSession {
+                    role_is_alice: true,
+                    display_name: session.device_id.clone(),
+                    participant_id: session.participant_id.clone(),
+                    session_id: session.session_id.clone(),
+                    mesh_id: session.mesh_id.clone(),
+                    fingerprint: session.fingerprint.clone(),
+                    invite_uri: session.invite_uri.clone(),
+                    signer_public: session.crypto.signer_public(),
+                    group_id: session.crypto.group_id_bytes().unwrap_or_default(),
+                    listen_port: persist_listen_port,
+                    static_peer: persist_static_peer.clone(),
+                };
+                if let Ok(json) = serde_json::to_vec(&record) {
+                    let _ = p.put_session(&session.session_id, &json);
+                }
+            }
+        }
+
         Ok(InviteCreated {
             invite_uri,
             session_id,
@@ -159,15 +307,17 @@ impl PrivateDmRuntime {
         if self.sessions.contains_key(&invite.session_id) {
             return Err(PrivateDmRuntimeError::DuplicateSession(invite.session_id));
         }
+        let persist_listen_port = request.listen_port;
         let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
         let participant_id = crypto.random_token("participant")?;
         let key_package = crypto.key_package_bytes()?;
+        let persist_static_peer = request.static_peer.clone().or(invite.peer_address.clone());
         let node = start_node(
             &self.moss,
             &invite.mesh_id,
             &invite.session_id,
             request.listen_port,
-            request.static_peer.or(invite.peer_address),
+            persist_static_peer.clone(),
         )?;
         let envelope = ControlEnvelope::KeyPackage {
             session_id: invite.session_id.clone(),
@@ -193,6 +343,28 @@ impl PrivateDmRuntime {
 
         let session_id = session.session_id.clone();
         self.sessions.insert(session_id.clone(), session);
+
+        if let Some(p) = self.persistence.as_ref() {
+            if let Some(session) = self.sessions.get(&session_id) {
+                let record = contracts::PersistedSession {
+                    role_is_alice: false,
+                    display_name: session.device_id.clone(),
+                    participant_id: session.participant_id.clone(),
+                    session_id: session.session_id.clone(),
+                    mesh_id: session.mesh_id.clone(),
+                    fingerprint: session.fingerprint.clone(),
+                    invite_uri: session.invite_uri.clone(),
+                    signer_public: session.crypto.signer_public(),
+                    group_id: session.crypto.group_id_bytes().unwrap_or_default(),
+                    listen_port: persist_listen_port,
+                    static_peer: persist_static_peer.clone(),
+                };
+                if let Ok(json) = serde_json::to_vec(&record) {
+                    let _ = p.put_session(&session.session_id, &json);
+                }
+            }
+        }
+
         self.poll_session(&session_id)
     }
 
@@ -219,11 +391,13 @@ impl PrivateDmRuntime {
             call_event: None,
         });
 
-        Ok(SendMessageResult {
+        let result = SendMessageResult {
             session_id: session.session_id.clone(),
             state: session.state(),
             ciphertext_bytes: ciphertext.len(),
-        })
+        };
+        self.persist_session_tail();
+        Ok(result)
     }
 
     /// Encrypts a file, stores the sender's own copy, and announces the
@@ -339,7 +513,43 @@ impl PrivateDmRuntime {
         for session in self.sessions.values_mut() {
             session.pump_attachment_requests();
         }
+        self.persist_session_tail();
         Ok(())
+    }
+
+    fn persist_session_tail(&mut self) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        for session in self.sessions.values() {
+            let start = self
+                .persisted_counts
+                .get(&session.session_id)
+                .copied()
+                .unwrap_or(0);
+            for (idx, msg) in session.messages.iter().enumerate().skip(start) {
+                let ts = now_ms();
+                let message_id = format!("{ts}-{idx:06}");
+                let record = contracts::PersistedMessage {
+                    conversation_id: session.session_id.clone(),
+                    sent_at_ms: ts,
+                    message_id: message_id.clone(),
+                    message: msg.clone(),
+                };
+                if let Ok(json) = serde_json::to_vec(&record) {
+                    let _ = p.append_message(&session.session_id, ts, &message_id, &json);
+                }
+            }
+            let _ = p.put_mls_snapshot(&session.session_id, &session.crypto.snapshot());
+        }
+        let new_counts: Vec<(String, usize)> = self
+            .sessions
+            .values()
+            .map(|s| (s.session_id.clone(), s.messages.len()))
+            .collect();
+        for (id, len) in new_counts {
+            self.persisted_counts.insert(id, len);
+        }
     }
 
     fn session_mut(
@@ -1233,7 +1443,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         drain_received_messages();
         let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
-        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store());
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
         let invite = alice
             .create_invite(StartSessionRequest {
                 display_name: "Alice".to_string(),
@@ -1242,7 +1452,7 @@ mod tests {
             })
             .expect("Alice invite should be created");
 
-        let mut bob = PrivateDmRuntime::from_shared(runtime, temp_store());
+        let mut bob = PrivateDmRuntime::from_shared(runtime, temp_store(), None);
         bob.accept_invite(AcceptInviteRequest {
             invite_uri: invite.invite_uri.clone(),
             display_name: "Bob".to_string(),
@@ -1258,6 +1468,90 @@ mod tests {
 
         let snapshot = wait_for_message(&mut bob, &invite.session_id, "hello bob");
         assert_eq!(snapshot.state, "ready");
+    }
+
+    #[test]
+    fn history_and_session_survive_restart() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-dm-rehydrate-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [9u8; 32]).expect("store should open"));
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        // Runtime #1: create an invite + send one message, then drop it.
+        let session_id = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42140,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            alice
+                .send_message(&invite.session_id, "hello after restart".to_string())
+                .expect("Alice should send");
+            invite.session_id
+        };
+
+        // Runtime #2: rehydrate from the SAME store and prove the message is back.
+        let mut revived = PrivateDmRuntime::from_shared(
+            Arc::clone(&runtime),
+            temp_store(),
+            Some(persistence.clone()),
+        );
+        revived.rehydrate();
+
+        let listing = revived.list_sessions().expect("listing should pass");
+        let session = listing
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .expect("rehydrated session should be present");
+
+        let matching: Vec<&ChatMessage> = session
+            .messages
+            .iter()
+            .filter(|m| m.body == "hello after restart")
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected exactly one rehydrated message, dup-guard failed: {:?}",
+            session.messages
+        );
+
+        // Dup-guard: re-listing (which drains inbound + persists tail) must not
+        // duplicate the loaded message.
+        let listing2 = revived.list_sessions().expect("second listing should pass");
+        let session2 = listing2
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .expect("session should still be present");
+        let matching2 = session2
+            .messages
+            .iter()
+            .filter(|m| m.body == "hello after restart")
+            .count();
+        assert_eq!(matching2, 1, "tail-persist re-append duplicated the message");
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
@@ -1280,7 +1574,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         drain_received_messages();
         let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
-        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store());
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
         let invite = alice
             .create_invite(StartSessionRequest {
                 display_name: "Alice".to_string(),
@@ -1289,7 +1583,7 @@ mod tests {
             })
             .expect("Alice invite should be created");
 
-        let mut bob = PrivateDmRuntime::from_shared(runtime, temp_store());
+        let mut bob = PrivateDmRuntime::from_shared(runtime, temp_store(), None);
         bob.accept_invite(AcceptInviteRequest {
             invite_uri: invite.invite_uri.clone(),
             display_name: "Bob".to_string(),
@@ -1342,7 +1636,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         drain_received_messages();
         let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
-        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store());
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
         let invite = alice
             .create_invite(StartSessionRequest {
                 display_name: "Alice".to_string(),
@@ -1352,7 +1646,7 @@ mod tests {
             .expect("Alice invite should be created");
 
         let receiver_store = temp_store();
-        let mut bob = PrivateDmRuntime::from_shared(runtime, Arc::clone(&receiver_store));
+        let mut bob = PrivateDmRuntime::from_shared(runtime, Arc::clone(&receiver_store), None);
         bob.accept_invite(AcceptInviteRequest {
             invite_uri: invite.invite_uri.clone(),
             display_name: "Bob".to_string(),

@@ -55,9 +55,15 @@ struct PrivateDmState {
 }
 
 impl PrivateDmState {
-    fn ready(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
+    fn ready(
+        moss: Arc<MossFfiRuntime>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<adapters::persistence::Persistence>>,
+    ) -> Self {
+        let mut runtime = PrivateDmRuntime::from_shared(moss, attachment_store, persistence);
+        runtime.rehydrate();
         Self {
-            runtime: Mutex::new(Some(PrivateDmRuntime::from_shared(moss, attachment_store))),
+            runtime: Mutex::new(Some(runtime)),
             load_error: None,
         }
     }
@@ -449,6 +455,18 @@ fn load_attachment_store(app: &tauri::AppHandle) -> Arc<AttachmentStore> {
         .or_else(|_| AttachmentStore::new(std::env::temp_dir().join("mosh")))
         .expect("attachment store directory should be creatable");
     Arc::new(store)
+}
+
+fn load_persistence(app: &tauri::AppHandle) -> Option<Arc<adapters::persistence::Persistence>> {
+    let base = app.path().app_data_dir().ok()?;
+    std::fs::create_dir_all(&base).ok()?;
+    match adapters::persistence::Persistence::open(&base.join("mosh-history.redb")) {
+        Ok(p) => Some(Arc::new(p)),
+        Err(e) => {
+            eprintln!("persistence unavailable: {e}");
+            None
+        }
+    }
 }
 
 const STREAM_RESPONSE_WINDOW: u64 = 512 * 1024;
@@ -905,9 +923,11 @@ pub fn run() {
                 Ok(moss) => {
                     let moss = Arc::new(moss);
                     let attachment_store = load_attachment_store(app.handle());
+                    let persistence = load_persistence(app.handle());
                     app.manage(PrivateDmState::ready(
                         Arc::clone(&moss),
                         Arc::clone(&attachment_store),
+                        persistence,
                     ));
                     app.manage(ChannelState::ready(
                         Arc::clone(&moss),
