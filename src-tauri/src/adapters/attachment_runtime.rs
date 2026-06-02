@@ -865,10 +865,7 @@ mod tests {
         assert_eq!(request.chunk_indices.first().copied(), Some(2));
 
         // Deliver every chunk, then the same range reads back exactly.
-        loop {
-            let Some(request) = receiver.next_chunk_request("a") else {
-                break;
-            };
+        while let Some(request) = receiver.next_chunk_request("a") {
             for frame in sender.serve_chunks(&request).unwrap() {
                 let _ = receiver.ingest_chunk(&frame).unwrap();
             }

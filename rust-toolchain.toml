@@ -1,0 +1,5 @@
+# Pin the Rust toolchain so local builds and CI use the exact same compiler and
+# lint set. Bump this single value to upgrade everywhere at once.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

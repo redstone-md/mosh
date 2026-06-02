@@ -60,9 +60,10 @@ jobs:
           go-version: stable
           cache-dependency-path: moss/go.sum
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Install the toolchain pinned by rust-toolchain.toml (channel +
+      # rustfmt/clippy components) so CI lints match local exactly.
+      - name: Install pinned Rust toolchain
+        run: rustup show
 
       - uses: Swatinem/rust-cache@v2
         with:
