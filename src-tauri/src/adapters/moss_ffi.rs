@@ -62,11 +62,34 @@ type MossGetMeshInfo = unsafe extern "C" fn(MossHandle) -> *mut c_char;
 type MossGetNatType = unsafe extern "C" fn(MossHandle) -> *mut c_char;
 type MossGetPublicKey = unsafe extern "C" fn(MossHandle) -> *mut u8;
 type MossFree = unsafe extern "C" fn(*mut c_void);
+// Keystore callbacks let Moss persist its node identity through the host.
+// Load is probed first with a null buffer to learn the size, then called again
+// with a buffer of that capacity; it returns the number of bytes written.
+type KeyStoreLoadCallback = unsafe extern "C" fn(*mut u8, u32) -> u32;
+type KeyStoreSaveCallback = unsafe extern "C" fn(*const u8, u32);
+type MossSetKeyStore =
+    unsafe extern "C" fn(Option<KeyStoreLoadCallback>, Option<KeyStoreSaveCallback>) -> i32;
 
 const EVENT_RING_CAPACITY: usize = 64;
 
 static RECEIVED_MESSAGES: Mutex<Vec<MossReceivedMessage>> = Mutex::new(Vec::new());
 static EVENT_LOG: Mutex<Vec<MossEvent>> = Mutex::new(Vec::new());
+
+/// Backing store for the Moss node identity. Implemented by the encrypted
+/// persistence layer; held in a process global because the C keystore callbacks
+/// are context-free function pointers.
+pub trait MossKeyStore: Send + Sync {
+    fn load_identity(&self) -> Option<Vec<u8>>;
+    fn save_identity(&self, bytes: &[u8]);
+}
+
+static MOSS_KEYSTORE: Mutex<Option<Arc<dyn MossKeyStore>>> = Mutex::new(None);
+
+/// Register the persistent backing store for the Moss node identity. Call once
+/// (before any node is started) and then `MossFfiRuntime::install_keystore`.
+pub fn set_moss_keystore(store: Arc<dyn MossKeyStore>) {
+    *MOSS_KEYSTORE.lock().expect("moss keystore lock poisoned") = Some(store);
+}
 
 #[cfg(test)]
 pub static MOSS_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -127,6 +150,7 @@ pub struct MossFfiRuntime {
     get_nat_type: MossGetNatType,
     get_public_key: MossGetPublicKey,
     free: MossFree,
+    set_key_store: MossSetKeyStore,
 }
 
 pub struct MossNode {
@@ -182,7 +206,18 @@ impl MossFfiRuntime {
             get_nat_type: load_symbol(&library, b"Moss_GetNATType\0")?,
             get_public_key: load_symbol(&library, b"Moss_GetPublicKey\0")?,
             free: load_symbol(&library, b"Moss_Free\0")?,
+            set_key_store: load_symbol(&library, b"Moss_SetKeyStore\0")?,
             _library: ManuallyDrop::new(library),
+        })
+    }
+
+    /// Wire Moss's identity keystore to the registered host store
+    /// ([`set_moss_keystore`]). Global in Moss, so call once after load and
+    /// before starting any node; afterwards the node identity persists across
+    /// restarts instead of being regenerated each launch.
+    pub fn install_keystore(&self) -> Result<(), MossFfiError> {
+        check_code("set_key_store", unsafe {
+            (self.set_key_store)(Some(keystore_load), Some(keystore_save))
         })
     }
 
@@ -486,6 +521,41 @@ unsafe extern "C" fn on_moss_message(
         .push(MossReceivedMessage { channel, payload });
 }
 
+/// Moss identity load callback. A probe call (null buffer / zero capacity)
+/// returns the stored size; the real call copies up to `capacity` bytes and
+/// returns the number written. Returns 0 when nothing is stored.
+unsafe extern "C" fn keystore_load(buffer: *mut u8, capacity: u32) -> u32 {
+    let guard = MOSS_KEYSTORE.lock().expect("moss keystore lock poisoned");
+    let Some(store) = guard.as_ref() else {
+        return 0;
+    };
+    let Some(bytes) = store.load_identity() else {
+        return 0;
+    };
+    let len = bytes.len() as u32;
+    if buffer.is_null() || capacity == 0 {
+        return len; // size probe
+    }
+    if capacity < len {
+        return 0; // buffer too small; Moss probes first, so this is defensive
+    }
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, bytes.len()) };
+    len
+}
+
+/// Moss identity save callback. Persists the encoded identity bytes through the
+/// registered host store.
+unsafe extern "C" fn keystore_save(data: *const u8, len: u32) {
+    if data.is_null() || len == 0 {
+        return;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(data, len as usize) }.to_vec();
+    let guard = MOSS_KEYSTORE.lock().expect("moss keystore lock poisoned");
+    if let Some(store) = guard.as_ref() {
+        store.save_identity(&bytes);
+    }
+}
+
 unsafe extern "C" fn on_moss_event(event_type: i32, detail_json: *const c_char) {
     let detail = if detail_json.is_null() {
         String::new()
@@ -514,6 +584,40 @@ unsafe extern "C" fn on_moss_event(event_type: i32, detail_json: *const c_char) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Exercises the probe-then-copy keystore protocol against a mock store,
+    // without loading the Moss library. Process-isolated under nextest, so
+    // mutating the MOSS_KEYSTORE global here does not leak into other tests.
+    #[test]
+    fn keystore_callbacks_round_trip_identity() {
+        struct MemStore(Mutex<Option<Vec<u8>>>);
+        impl MossKeyStore for MemStore {
+            fn load_identity(&self) -> Option<Vec<u8>> {
+                self.0.lock().unwrap().clone()
+            }
+            fn save_identity(&self, bytes: &[u8]) {
+                *self.0.lock().unwrap() = Some(bytes.to_vec());
+            }
+        }
+
+        set_moss_keystore(Arc::new(MemStore(Mutex::new(None))));
+
+        // Nothing stored yet: probe returns 0.
+        assert_eq!(unsafe { keystore_load(std::ptr::null_mut(), 0) }, 0);
+
+        let identity = [7u8; 40];
+        unsafe { keystore_save(identity.as_ptr(), identity.len() as u32) };
+
+        // Probe reports the stored size.
+        let size = unsafe { keystore_load(std::ptr::null_mut(), 0) };
+        assert_eq!(size, identity.len() as u32);
+
+        // Real read copies the bytes into the buffer.
+        let mut buffer = vec![0u8; size as usize];
+        let read = unsafe { keystore_load(buffer.as_mut_ptr(), buffer.len() as u32) };
+        assert_eq!(read, identity.len() as u32);
+        assert_eq!(buffer, identity);
+    }
 
     const TEST_MESH: &str = "mosh-runtime-smoke";
     const TEST_CHANNEL: &str = "mls-control";
