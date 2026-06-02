@@ -77,8 +77,14 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      # Process-per-test isolation + retries for flaky loopback handshakes.
+      - name: Cargo test (nextest)
+        run: cargo nextest run --profile ci --manifest-path src-tauri/Cargo.toml
 
       - name: Build installers & upload to release
         uses: tauri-apps/tauri-action@v0

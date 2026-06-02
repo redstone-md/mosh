@@ -1,0 +1,11 @@
+# nextest configuration.
+#
+# The CI profile runs each test in its own process (nextest's default), which
+# isolates the process-global state inside the Moss Go runtime that the FFI
+# tests would otherwise share. Retries absorb the occasional dropped loopback
+# handshake on a cold runner; deterministic tests pass on the first attempt and
+# never consume a retry.
+[profile.ci]
+retries = 2
+# A hung Moss handshake should fail fast and be retried rather than stall the job.
+slow-timeout = { period = "45s", terminate-after = 2 }

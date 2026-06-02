@@ -88,5 +88,13 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
-      - name: Cargo test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      # nextest runs each test in its own process (isolating the Moss runtime's
+      # process-global state) and retries flaky loopback handshakes per the ci
+      # profile in src-tauri/.config/nextest.toml.
+      - name: Cargo test (nextest)
+        run: cargo nextest run --profile ci --manifest-path src-tauri/Cargo.toml
