@@ -530,6 +530,7 @@ impl PrivateDmRuntime {
                 .get(&session.session_id)
                 .copied()
                 .unwrap_or(0);
+            let has_new_messages = session.messages.len() > start;
             for (idx, msg) in session.messages.iter().enumerate().skip(start) {
                 let ts = now_ms();
                 let message_id = format!("{ts}-{idx:06}");
@@ -543,13 +544,24 @@ impl PrivateDmRuntime {
                     let _ = p.append_message(&session.session_id, ts, &message_id, &json);
                 }
             }
-            let _ = p.put_mls_snapshot(&session.session_id, &session.crypto.snapshot());
 
-            // Refresh the session record once (e.g. after the joiner processes
-            // the Welcome) so its group_id is no longer the empty placeholder.
-            if !self.finalized_session_records.contains(&session.session_id)
-                && session.crypto.group_id_bytes().is_some()
-            {
+            // The session record needs refreshing once the MLS group exists
+            // (e.g. after the joiner processes the Welcome), so its group_id is
+            // no longer the empty placeholder.
+            let needs_record_refresh =
+                !self.finalized_session_records.contains(&session.session_id)
+                    && session.crypto.group_id_bytes().is_some();
+
+            // Only rewrite the (encrypted) MLS snapshot when state actually
+            // advanced — new messages ratchet the group, and a freshly joined
+            // group must be captured. Skipping idle polls avoids re-encrypting
+            // the full snapshot on every UI refresh, which also starved the
+            // loopback handshake under test on slow CI hardware.
+            if has_new_messages || needs_record_refresh {
+                let _ = p.put_mls_snapshot(&session.session_id, &session.crypto.snapshot());
+            }
+
+            if needs_record_refresh {
                 if let Ok(json) = serde_json::to_vec(&session.to_persisted_record()) {
                     pending_records.push((session.session_id.clone(), json));
                 }
