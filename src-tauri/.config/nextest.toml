@@ -9,3 +9,15 @@
 retries = 2
 # A hung Moss handshake should fail fast and be retried rather than stall the job.
 slow-timeout = { period = "45s", terminate-after = 2 }
+
+# Per-process isolation means the in-test MOSS_TEST_LOCK no longer serializes the
+# Moss tests against each other (each runs in its own process). Running several
+# real loopback P2P handshakes concurrently starves the timing-sensitive
+# handshake on a 2-core runner, so pin all Moss-runtime tests to a single-thread
+# group: they keep process isolation but run one at a time across the whole run.
+[test-groups]
+moss-serial = { max-threads = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(over_moss) | test(moss_peers) | test(survive_restart)'
+test-group = 'moss-serial'
