@@ -66,6 +66,10 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # Build the Moss shared library so the runtime-loading tests can find it.
+      - name: Build Moss shared library
+        run: npm run moss:prepare
+
       # Gate: do not publish artifacts unless the quality bar passes.
       - name: Rustfmt check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
