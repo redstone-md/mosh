@@ -51,6 +51,9 @@ pub struct PrivateDmRuntime {
     attachment_store: Arc<AttachmentStore>,
     persistence: Option<Arc<crate::adapters::persistence::Persistence>>,
     persisted_counts: HashMap<String, usize>,
+    // Sessions whose persisted record already carries a valid (non-empty)
+    // group_id, so the tail-persist loop refreshes each record only once.
+    finalized_session_records: HashSet<String>,
     sessions: HashMap<String, PrivateDmSession>,
 }
 
@@ -77,6 +80,10 @@ struct PrivateDmSession {
     mesh_id: String,
     fingerprint: String,
     invite_uri: Option<String>,
+    // Transport coordinates kept so the persisted session record can be
+    // rebuilt verbatim (notably to refresh the joiner's group_id after join).
+    listen_port: u16,
+    static_peer: Option<String>,
     peer_joined: bool,
     node: MossNode,
     crypto: MlsSessionCrypto,
@@ -113,6 +120,7 @@ impl PrivateDmRuntime {
             attachment_store,
             persistence,
             persisted_counts: HashMap::new(),
+            finalized_session_records: HashSet::new(),
             sessions: HashMap::new(),
         }
     }
@@ -182,6 +190,8 @@ impl PrivateDmRuntime {
                 rec.mesh_id.clone(),
                 rec.fingerprint.clone(),
                 rec.invite_uri.clone(),
+                rec.listen_port,
+                rec.static_peer.clone(),
                 node,
                 crypto,
                 Arc::clone(&self.attachment_store),
@@ -231,6 +241,9 @@ impl PrivateDmRuntime {
             // does NOT re-append the messages we just loaded.
             self.persisted_counts
                 .insert(rec.session_id.clone(), session.messages.len());
+            // The loaded record already has a valid group_id; don't rewrite it.
+            self.finalized_session_records
+                .insert(rec.session_id.clone());
             self.sessions.insert(rec.session_id.clone(), session);
         }
     }
@@ -264,6 +277,8 @@ impl PrivateDmRuntime {
             mesh_id.clone(),
             fingerprint.clone(),
             Some(invite_uri.clone()),
+            persist_listen_port,
+            persist_static_peer.clone(),
             node,
             crypto,
             Arc::clone(&self.attachment_store),
@@ -271,23 +286,13 @@ impl PrivateDmRuntime {
 
         self.sessions.insert(session_id.clone(), session);
 
+        // Alice's group exists from create_group(), so the record is final the
+        // moment it is written.
         if let Some(p) = self.persistence.as_ref() {
             if let Some(session) = self.sessions.get(&session_id) {
-                let record = contracts::PersistedSession {
-                    role_is_alice: true,
-                    display_name: session.device_id.clone(),
-                    participant_id: session.participant_id.clone(),
-                    session_id: session.session_id.clone(),
-                    mesh_id: session.mesh_id.clone(),
-                    fingerprint: session.fingerprint.clone(),
-                    invite_uri: session.invite_uri.clone(),
-                    signer_public: session.crypto.signer_public(),
-                    group_id: session.crypto.group_id_bytes().unwrap_or_default(),
-                    listen_port: persist_listen_port,
-                    static_peer: persist_static_peer.clone(),
-                };
-                if let Ok(json) = serde_json::to_vec(&record) {
+                if let Ok(json) = serde_json::to_vec(&session.to_persisted_record()) {
                     let _ = p.put_session(&session.session_id, &json);
+                    self.finalized_session_records.insert(session_id.clone());
                 }
             }
         }
@@ -338,6 +343,8 @@ impl PrivateDmRuntime {
             invite.mesh_id,
             invite.fingerprint,
             Some(request.invite_uri),
+            persist_listen_port,
+            persist_static_peer.clone(),
             node,
             crypto,
             Arc::clone(&self.attachment_store),
@@ -346,22 +353,13 @@ impl PrivateDmRuntime {
         let session_id = session.session_id.clone();
         self.sessions.insert(session_id.clone(), session);
 
+        // Bob has no MLS group until he processes Alice's Welcome, so this
+        // record carries an empty group_id placeholder. It is intentionally NOT
+        // finalized here; persist_session_tail refreshes it once the group
+        // exists so rehydrate can load it after a restart.
         if let Some(p) = self.persistence.as_ref() {
             if let Some(session) = self.sessions.get(&session_id) {
-                let record = contracts::PersistedSession {
-                    role_is_alice: false,
-                    display_name: session.device_id.clone(),
-                    participant_id: session.participant_id.clone(),
-                    session_id: session.session_id.clone(),
-                    mesh_id: session.mesh_id.clone(),
-                    fingerprint: session.fingerprint.clone(),
-                    invite_uri: session.invite_uri.clone(),
-                    signer_public: session.crypto.signer_public(),
-                    group_id: session.crypto.group_id_bytes().unwrap_or_default(),
-                    listen_port: persist_listen_port,
-                    static_peer: persist_static_peer.clone(),
-                };
-                if let Ok(json) = serde_json::to_vec(&record) {
+                if let Ok(json) = serde_json::to_vec(&session.to_persisted_record()) {
                     let _ = p.put_session(&session.session_id, &json);
                 }
             }
@@ -523,6 +521,9 @@ impl PrivateDmRuntime {
         let Some(p) = self.persistence.as_ref().cloned() else {
             return;
         };
+        // Records to (re)write once their MLS group exists. Collected during the
+        // read-only loop and applied after, since finalizing mutates self.
+        let mut pending_records: Vec<(String, Vec<u8>)> = Vec::new();
         for session in self.sessions.values() {
             let start = self
                 .persisted_counts
@@ -543,6 +544,20 @@ impl PrivateDmRuntime {
                 }
             }
             let _ = p.put_mls_snapshot(&session.session_id, &session.crypto.snapshot());
+
+            // Refresh the session record once (e.g. after the joiner processes
+            // the Welcome) so its group_id is no longer the empty placeholder.
+            if !self.finalized_session_records.contains(&session.session_id)
+                && session.crypto.group_id_bytes().is_some()
+            {
+                if let Ok(json) = serde_json::to_vec(&session.to_persisted_record()) {
+                    pending_records.push((session.session_id.clone(), json));
+                }
+            }
+        }
+        for (id, json) in pending_records {
+            let _ = p.put_session(&id, &json);
+            self.finalized_session_records.insert(id);
         }
         let new_counts: Vec<(String, usize)> = self
             .sessions
@@ -642,6 +657,8 @@ impl PrivateDmSession {
         mesh_id: String,
         fingerprint: String,
         invite_uri: Option<String>,
+        listen_port: u16,
+        static_peer: Option<String>,
         node: MossNode,
         crypto: MlsSessionCrypto,
         attachment_store: Arc<AttachmentStore>,
@@ -657,6 +674,8 @@ impl PrivateDmSession {
             mesh_id,
             fingerprint,
             invite_uri,
+            listen_port,
+            static_peer,
             peer_joined: false,
             node,
             crypto,
@@ -670,6 +689,25 @@ impl PrivateDmSession {
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
             call: None,
+        }
+    }
+
+    /// Builds the persisted record from the live session. `group_id` reflects
+    /// the current MLS group, so re-persisting after the joiner processes the
+    /// Welcome replaces the empty placeholder written at accept time.
+    fn to_persisted_record(&self) -> contracts::PersistedSession {
+        contracts::PersistedSession {
+            role_is_alice: matches!(self.role, SessionRole::Alice),
+            display_name: self.device_id.clone(),
+            participant_id: self.participant_id.clone(),
+            session_id: self.session_id.clone(),
+            mesh_id: self.mesh_id.clone(),
+            fingerprint: self.fingerprint.clone(),
+            invite_uri: self.invite_uri.clone(),
+            signer_public: self.crypto.signer_public(),
+            group_id: self.crypto.group_id_bytes().unwrap_or_default(),
+            listen_port: self.listen_port,
+            static_peer: self.static_peer.clone(),
         }
     }
 
@@ -1554,6 +1592,82 @@ mod tests {
         assert_eq!(
             matching2, 1,
             "tail-persist re-append duplicated the message"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    // Regression: the invite *joiner* (Bob) only obtains an MLS group after he
+    // processes Alice's Welcome, so his persisted session record must be
+    // refreshed with the real group_id once joined. Otherwise rehydrate cannot
+    // load the group and the whole conversation is silently dropped on restart.
+    #[test]
+    fn joiner_history_and_session_survive_restart() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!(
+            "mosh-dm-joiner-rehydrate-{}.redb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        // Alice (creator) is memory-only; Bob (joiner) is the one that persists.
+        let bob_store =
+            Arc::new(Persistence::open_with_dek(&db_path, [7u8; 32]).expect("store should open"));
+
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42150,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let session_id = {
+            let mut bob = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(bob_store.clone()),
+            );
+            bob.accept_invite(AcceptInviteRequest {
+                invite_uri: invite.invite_uri.clone(),
+                display_name: "Bob".to_string(),
+                listen_port: 42151,
+                static_peer: Some("127.0.0.1:42150".to_string()),
+            })
+            .expect("Bob should accept invite");
+
+            wait_until_ready(&mut alice, &mut bob, &invite.session_id);
+            bob.send_message(&invite.session_id, "joiner persists".to_string())
+                .expect("Bob should send");
+            invite.session_id.clone()
+        };
+
+        // Bob "restarts": brand-new runtime, same encrypted store.
+        let mut revived =
+            PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), Some(bob_store));
+        revived.rehydrate();
+
+        let listing = revived.list_sessions().expect("listing should pass");
+        let session = listing
+            .sessions
+            .iter()
+            .find(|s| s.session_id == session_id)
+            .expect("rehydrated joiner session should be present");
+        assert!(
+            session.messages.iter().any(|m| m.body == "joiner persists"),
+            "joiner message lost across restart: {:?}",
+            session.messages
         );
 
         let _ = std::fs::remove_file(&db_path);
