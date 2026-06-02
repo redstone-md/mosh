@@ -103,49 +103,95 @@ impl Persistence {
             }
         };
         let db = Database::create(path).map_err(|e| PersistenceError::Db(e.to_string()))?;
-        let wtx = db.begin_write().map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let wtx = db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
         {
-            wtx.open_table(MLS_SNAPSHOT).map_err(|e| PersistenceError::Db(e.to_string()))?;
-            wtx.open_table(MESSAGES).map_err(|e| PersistenceError::Db(e.to_string()))?;
-            wtx.open_table(SESSIONS).map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(MLS_SNAPSHOT)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(SESSIONS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
-        wtx.commit().map_err(|e| PersistenceError::Db(e.to_string()))?;
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
         Ok(Self { db, dek })
     }
 
-    fn put(&self, table: TableDefinition<&str, &[u8]>, key: &str, plaintext: &[u8]) -> Result<(), PersistenceError> {
+    fn put(
+        &self,
+        table: TableDefinition<&str, &[u8]>,
+        key: &str,
+        plaintext: &[u8],
+    ) -> Result<(), PersistenceError> {
         let blob = encrypt_blob(&self.dek, plaintext)?;
-        let wtx = self.db.begin_write().map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let wtx = self
+            .db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
         {
-            let mut t = wtx.open_table(table).map_err(|e| PersistenceError::Db(e.to_string()))?;
-            t.insert(key, blob.as_slice()).map_err(|e| PersistenceError::Db(e.to_string()))?;
+            let mut t = wtx
+                .open_table(table)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            t.insert(key, blob.as_slice())
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
-        wtx.commit().map_err(|e| PersistenceError::Db(e.to_string()))
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))
     }
 
-    fn get(&self, table: TableDefinition<&str, &[u8]>, key: &str) -> Result<Option<Vec<u8>>, PersistenceError> {
-        let rtx = self.db.begin_read().map_err(|e| PersistenceError::Db(e.to_string()))?;
-        let t = rtx.open_table(table).map_err(|e| PersistenceError::Db(e.to_string()))?;
-        match t.get(key).map_err(|e| PersistenceError::Db(e.to_string()))? {
+    fn get(
+        &self,
+        table: TableDefinition<&str, &[u8]>,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>, PersistenceError> {
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let t = rtx
+            .open_table(table)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        match t
+            .get(key)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?
+        {
             Some(g) => Ok(Some(decrypt_blob(&self.dek, g.value())?)),
             None => Ok(None),
         }
     }
 
-    fn range_prefix(&self, table: TableDefinition<&str, &[u8]>, prefix: &str) -> Result<Vec<Vec<u8>>, PersistenceError> {
+    fn range_prefix(
+        &self,
+        table: TableDefinition<&str, &[u8]>,
+        prefix: &str,
+    ) -> Result<Vec<Vec<u8>>, PersistenceError> {
         let lo = format!("{prefix}\u{0001}");
         let hi = format!("{prefix}\u{0002}");
-        let rtx = self.db.begin_read().map_err(|e| PersistenceError::Db(e.to_string()))?;
-        let t = rtx.open_table(table).map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let t = rtx
+            .open_table(table)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
         let mut out = Vec::new();
-        for item in t.range(lo.as_str()..hi.as_str()).map_err(|e| PersistenceError::Db(e.to_string()))? {
+        for item in t
+            .range(lo.as_str()..hi.as_str())
+            .map_err(|e| PersistenceError::Db(e.to_string()))?
+        {
             let (_k, v) = item.map_err(|e| PersistenceError::Db(e.to_string()))?;
             out.push(decrypt_blob(&self.dek, v.value())?);
         }
         Ok(out)
     }
 
-    pub fn put_mls_snapshot(&self, session_id: &str, snapshot: &[u8]) -> Result<(), PersistenceError> {
+    pub fn put_mls_snapshot(
+        &self,
+        session_id: &str,
+        snapshot: &[u8],
+    ) -> Result<(), PersistenceError> {
         self.put(MLS_SNAPSHOT, session_id, snapshot)
     }
     pub fn get_mls_snapshot(&self, session_id: &str) -> Result<Option<Vec<u8>>, PersistenceError> {
@@ -156,8 +202,13 @@ impl Persistence {
         self.put(SESSIONS, session_id, json)
     }
     pub fn list_sessions(&self) -> Result<Vec<Vec<u8>>, PersistenceError> {
-        let rtx = self.db.begin_read().map_err(|e| PersistenceError::Db(e.to_string()))?;
-        let t = rtx.open_table(SESSIONS).map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let t = rtx
+            .open_table(SESSIONS)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
         let mut out = Vec::new();
         for item in t.iter().map_err(|e| PersistenceError::Db(e.to_string()))? {
             let (k, v) = item.map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -169,7 +220,13 @@ impl Persistence {
         Ok(out)
     }
 
-    pub fn append_message(&self, conversation_id: &str, sent_at_ms: u64, message_id: &str, json: &[u8]) -> Result<(), PersistenceError> {
+    pub fn append_message(
+        &self,
+        conversation_id: &str,
+        sent_at_ms: u64,
+        message_id: &str,
+        json: &[u8],
+    ) -> Result<(), PersistenceError> {
         let key = format!("{conversation_id}\u{0001}{sent_at_ms:020}\u{0001}{message_id}");
         self.put(MESSAGES, &key, json)
     }
@@ -182,13 +239,19 @@ impl Persistence {
 impl Persistence {
     pub fn open_with_dek(path: &Path, dek: [u8; 32]) -> Result<Self, PersistenceError> {
         let db = Database::create(path).map_err(|e| PersistenceError::Db(e.to_string()))?;
-        let wtx = db.begin_write().map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let wtx = db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
         {
-            wtx.open_table(MLS_SNAPSHOT).map_err(|e| PersistenceError::Db(e.to_string()))?;
-            wtx.open_table(MESSAGES).map_err(|e| PersistenceError::Db(e.to_string()))?;
-            wtx.open_table(SESSIONS).map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(MLS_SNAPSHOT)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(SESSIONS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
-        wtx.commit().map_err(|e| PersistenceError::Db(e.to_string()))?;
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
         Ok(Self { db, dek })
     }
 }

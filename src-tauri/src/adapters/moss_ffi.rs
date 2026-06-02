@@ -22,7 +22,9 @@ static BIND_INTERFACE: RwLock<Option<String>> = RwLock::new(None);
 /// Future Moss nodes inherit the new value; nodes already started keep the
 /// value they were created with — restart the session to apply a change.
 pub fn set_bind_interface(value: Option<String>) {
-    let mut guard = BIND_INTERFACE.write().expect("bind interface lock poisoned");
+    let mut guard = BIND_INTERFACE
+        .write()
+        .expect("bind interface lock poisoned");
     *guard = value.filter(|s| !s.is_empty());
 }
 

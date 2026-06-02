@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 pub use crate::adapters::attachment_runtime::VoiceMeta;
 use crate::adapters::attachment_runtime::{
-    AttachmentManifest, AttachmentRuntime, ChunkOutcome, StreamRange, CHUNK_SIZE,
+    AttachmentManifest, AttachmentRuntime, ChunkOutcome, OutgoingAttachment, StreamRange,
+    CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::MlsSessionCrypto;
@@ -149,7 +150,10 @@ impl PrivateDmRuntime {
             ) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("rehydrate: crypto restore failed for {}: {e}", rec.session_id);
+                    eprintln!(
+                        "rehydrate: crypto restore failed for {}: {e}",
+                        rec.session_id
+                    );
                     continue;
                 }
             };
@@ -211,9 +215,7 @@ impl PrivateDmRuntime {
                                         .or_insert(AttachmentSlot {
                                             descriptor: desc.clone(),
                                             direction,
-                                            local_path: Some(
-                                                path.to_string_lossy().into_owned(),
-                                            ),
+                                            local_path: Some(path.to_string_lossy().into_owned()),
                                             download_requested: false,
                                             failed: false,
                                             cancelled: false,
@@ -992,15 +994,15 @@ impl PrivateDmSession {
             return Err(PrivateDmRuntimeError::NotReady);
         }
         let attachment_id = self.crypto.random_token("attachment")?;
-        let manifest = self.attachments.prepare_outgoing(
-            attachment_id.clone(),
+        let manifest = self.attachments.prepare_outgoing(OutgoingAttachment {
+            attachment_id: attachment_id.clone(),
             file_name,
             mime,
-            self.fingerprint.clone(),
-            bytes.clone(),
-            thumbnail,
+            from_fingerprint: self.fingerprint.clone(),
+            bytes: bytes.clone(),
+            thumbnail_b64: thumbnail,
             voice,
-        )?;
+        })?;
         let stored = self.attachment_store.write_blob(
             &manifest.content_hash,
             &manifest.file_name,
@@ -1549,7 +1551,10 @@ mod tests {
             .iter()
             .filter(|m| m.body == "hello after restart")
             .count();
-        assert_eq!(matching2, 1, "tail-persist re-append duplicated the message");
+        assert_eq!(
+            matching2, 1,
+            "tail-persist re-append duplicated the message"
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }
