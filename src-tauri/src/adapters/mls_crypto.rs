@@ -331,7 +331,9 @@ impl MlsSessionCrypto {
 
     /// Group id bytes (the key for `MlsGroup::load`).
     pub fn group_id_bytes(&self) -> Option<Vec<u8>> {
-        self.group.as_ref().map(|g| g.group_id().as_slice().to_vec())
+        self.group
+            .as_ref()
+            .map(|g| g.group_id().as_slice().to_vec())
     }
 
     /// Rebuild a session from a persisted snapshot.

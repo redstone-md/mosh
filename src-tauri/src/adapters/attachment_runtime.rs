@@ -85,6 +85,18 @@ pub struct AttachmentManifest {
     pub from_fingerprint: String,
 }
 
+/// Inputs for registering an outgoing transfer. Grouped into one value so call
+/// sites name each field rather than threading a long positional list.
+pub struct OutgoingAttachment {
+    pub attachment_id: String,
+    pub file_name: String,
+    pub mime: String,
+    pub from_fingerprint: String,
+    pub bytes: Vec<u8>,
+    pub thumbnail_b64: Option<String>,
+    pub voice: Option<VoiceMeta>,
+}
+
 /// Receiver -> sender: asks for a batch of chunk indices. Plain metadata, so
 /// it can ride the dedicated blob channel without extra protection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,14 +201,17 @@ impl AttachmentRuntime {
     /// runtime can answer chunk requests on demand.
     pub fn prepare_outgoing(
         &mut self,
-        attachment_id: String,
-        file_name: String,
-        mime: String,
-        from_fingerprint: String,
-        bytes: Vec<u8>,
-        thumbnail_b64: Option<String>,
-        voice: Option<VoiceMeta>,
+        request: OutgoingAttachment,
     ) -> Result<AttachmentManifest, AttachmentRuntimeError> {
+        let OutgoingAttachment {
+            attachment_id,
+            file_name,
+            mime,
+            from_fingerprint,
+            bytes,
+            thumbnail_b64,
+            voice,
+        } = request;
         if bytes.is_empty() {
             return Err(AttachmentRuntimeError::Empty);
         }
@@ -613,15 +628,15 @@ mod tests {
         let mut sender = AttachmentRuntime::new();
         let mut receiver = AttachmentRuntime::new();
         let manifest = sender
-            .prepare_outgoing(
-                "att-1".to_string(),
-                "file.bin".to_string(),
-                "application/octet-stream".to_string(),
-                "AABB".to_string(),
-                bytes.clone(),
-                None,
-                None,
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "att-1".to_string(),
+                file_name: "file.bin".to_string(),
+                mime: "application/octet-stream".to_string(),
+                from_fingerprint: "AABB".to_string(),
+                bytes: bytes.clone(),
+                thumbnail_b64: None,
+                voice: None,
+            })
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
         receiver.start_download("att-1").unwrap();
@@ -660,15 +675,15 @@ mod tests {
         let mut runtime = AttachmentRuntime::new();
         let huge = vec![0u8; (MAX_ATTACHMENT_SIZE + 1) as usize];
         assert!(matches!(
-            runtime.prepare_outgoing(
-                "x".to_string(),
-                "x".to_string(),
-                "x".to_string(),
-                "x".to_string(),
-                huge,
-                None,
-                None,
-            ),
+            runtime.prepare_outgoing(OutgoingAttachment {
+                attachment_id: "x".to_string(),
+                file_name: "x".to_string(),
+                mime: "x".to_string(),
+                from_fingerprint: "x".to_string(),
+                bytes: huge,
+                thumbnail_b64: None,
+                voice: None,
+            }),
             Err(AttachmentRuntimeError::TooLarge { .. })
         ));
     }
@@ -677,15 +692,15 @@ mod tests {
     fn rejects_empty_attachment() {
         let mut runtime = AttachmentRuntime::new();
         assert!(matches!(
-            runtime.prepare_outgoing(
-                "x".to_string(),
-                "x".to_string(),
-                "x".to_string(),
-                "x".to_string(),
-                Vec::new(),
-                None,
-                None,
-            ),
+            runtime.prepare_outgoing(OutgoingAttachment {
+                attachment_id: "x".to_string(),
+                file_name: "x".to_string(),
+                mime: "x".to_string(),
+                from_fingerprint: "x".to_string(),
+                bytes: Vec::new(),
+                thumbnail_b64: None,
+                voice: None,
+            }),
             Err(AttachmentRuntimeError::Empty)
         ));
     }
@@ -695,15 +710,15 @@ mod tests {
         let mut sender = AttachmentRuntime::new();
         let mut receiver = AttachmentRuntime::new();
         let manifest = sender
-            .prepare_outgoing(
-                "a".to_string(),
-                "f".to_string(),
-                "m".to_string(),
-                "fp".to_string(),
-                payload(2048),
-                None,
-                None,
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "f".to_string(),
+                mime: "m".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload(2048),
+                thumbnail_b64: None,
+                voice: None,
+            })
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
         let request = ChunkRequest {
@@ -724,15 +739,15 @@ mod tests {
         let mut sender = AttachmentRuntime::new();
         let mut receiver = AttachmentRuntime::new();
         let manifest = sender
-            .prepare_outgoing(
-                "a".to_string(),
-                "f".to_string(),
-                "m".to_string(),
-                "fp".to_string(),
-                payload(512),
-                None,
-                None,
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "f".to_string(),
+                mime: "m".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload(512),
+                thumbnail_b64: None,
+                voice: None,
+            })
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
         let request = ChunkRequest {
@@ -748,15 +763,15 @@ mod tests {
     fn cancel_stops_serving_chunks() {
         let mut sender = AttachmentRuntime::new();
         sender
-            .prepare_outgoing(
-                "a".to_string(),
-                "f".to_string(),
-                "m".to_string(),
-                "fp".to_string(),
-                payload(4096),
-                None,
-                None,
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "f".to_string(),
+                mime: "m".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload(4096),
+                thumbnail_b64: None,
+                voice: None,
+            })
             .unwrap();
         sender.cancel("a");
         let frames = sender
@@ -773,15 +788,15 @@ mod tests {
         let mut sender = AttachmentRuntime::new();
         let mut receiver = AttachmentRuntime::new();
         let manifest = sender
-            .prepare_outgoing(
-                "a".to_string(),
-                "f".to_string(),
-                "m".to_string(),
-                "fp".to_string(),
-                payload(4096),
-                None,
-                None,
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "f".to_string(),
+                mime: "m".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload(4096),
+                thumbnail_b64: None,
+                voice: None,
+            })
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
         assert!(receiver.next_chunk_request("a").is_none());
@@ -794,15 +809,15 @@ mod tests {
         let mut sender = AttachmentRuntime::new();
         let mut receiver = AttachmentRuntime::new();
         let manifest = sender
-            .prepare_outgoing(
-                "a".to_string(),
-                "f".to_string(),
-                "m".to_string(),
-                "fp".to_string(),
-                payload((CHUNK_SIZE as usize) * 3),
-                None,
-                None,
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "f".to_string(),
+                mime: "m".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload((CHUNK_SIZE as usize) * 3),
+                thumbnail_b64: None,
+                voice: None,
+            })
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
         receiver.start_download("a").unwrap();
@@ -827,15 +842,15 @@ mod tests {
         let mut receiver = AttachmentRuntime::new();
         let bytes = payload((CHUNK_SIZE as usize) * 3 + 40);
         let manifest = sender
-            .prepare_outgoing(
-                "a".to_string(),
-                "v.bin".to_string(),
-                "video/mp4".to_string(),
-                "fp".to_string(),
-                bytes.clone(),
-                None,
-                None,
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "v.bin".to_string(),
+                mime: "video/mp4".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: bytes.clone(),
+                thumbnail_b64: None,
+                voice: None,
+            })
             .unwrap();
         receiver.register_incoming(manifest).unwrap();
 
@@ -903,15 +918,15 @@ mod tests {
             peaks_b64: "AAA=".to_string(),
         };
         let manifest = runtime
-            .prepare_outgoing(
-                "att-1".into(),
-                "voice-message.webm".into(),
-                "audio/webm".into(),
-                "fp".into(),
-                vec![1, 2, 3, 4],
-                None,
-                Some(voice),
-            )
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "att-1".into(),
+                file_name: "voice-message.webm".into(),
+                mime: "audio/webm".into(),
+                from_fingerprint: "fp".into(),
+                bytes: vec![1, 2, 3, 4],
+                thumbnail_b64: None,
+                voice: Some(voice),
+            })
             .expect("prepare");
         let stamped = manifest.voice.expect("voice present");
         assert_eq!(stamped.duration_ms, 1000);

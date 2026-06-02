@@ -32,7 +32,11 @@ impl PersistentProvider {
     /// (MemoryStorage's own serialize() is gated behind `test-utils`, so we
     /// go through the public field directly.)
     pub fn snapshot_bytes(&self) -> Vec<u8> {
-        let guard = self.storage.values.read().expect("mls storage lock poisoned");
+        let guard = self
+            .storage
+            .values
+            .read()
+            .expect("mls storage lock poisoned");
         let pairs: Vec<(Vec<u8>, Vec<u8>)> =
             guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         serde_json::to_vec(&pairs).expect("serialize mls pairs")
@@ -40,11 +44,14 @@ impl PersistentProvider {
 
     /// Rebuild a provider from a snapshot produced by `snapshot_bytes`.
     pub fn from_snapshot(bytes: &[u8]) -> Self {
-        let pairs: Vec<(Vec<u8>, Vec<u8>)> =
-            serde_json::from_slice(bytes).unwrap_or_default();
+        let pairs: Vec<(Vec<u8>, Vec<u8>)> = serde_json::from_slice(bytes).unwrap_or_default();
         let map: HashMap<Vec<u8>, Vec<u8>> = pairs.into_iter().collect();
         let provider = Self::default();
-        *provider.storage.values.write().expect("mls storage lock poisoned") = map;
+        *provider
+            .storage
+            .values
+            .write()
+            .expect("mls storage lock poisoned") = map;
         provider
     }
 }
@@ -73,12 +80,16 @@ mod tests {
             .build();
         let group = MlsGroup::new(&provider, &signer, &config, credential).unwrap();
         let gid = group.group_id().clone();
-        let before = group.export_secret(provider.crypto(), "t", &[], 32).unwrap();
+        let before = group
+            .export_secret(provider.crypto(), "t", &[], 32)
+            .unwrap();
 
         let snap = provider.snapshot_bytes();
         let restored = PersistentProvider::from_snapshot(&snap);
         let loaded = MlsGroup::load(restored.storage(), &gid).unwrap().unwrap();
-        let after = loaded.export_secret(restored.crypto(), "t", &[], 32).unwrap();
+        let after = loaded
+            .export_secret(restored.crypto(), "t", &[], 32)
+            .unwrap();
 
         assert_eq!(before, after);
     }

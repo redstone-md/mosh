@@ -4,8 +4,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::attachment_runtime::{
-    AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest, StreamRange,
-    CHUNK_SIZE,
+    AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest,
+    OutgoingAttachment, StreamRange, CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::{MlsCryptoError, MlsSessionCrypto};
@@ -943,15 +943,15 @@ impl GroupSession {
             return Err(PrivateGroupError::NotReady);
         }
         let attachment_id = self.crypto.random_token("attachment")?;
-        let manifest = self.attachments.prepare_outgoing(
-            attachment_id.clone(),
+        let manifest = self.attachments.prepare_outgoing(OutgoingAttachment {
+            attachment_id: attachment_id.clone(),
             file_name,
             mime,
-            self.device_fingerprint.clone(),
-            bytes.clone(),
-            thumbnail,
+            from_fingerprint: self.device_fingerprint.clone(),
+            bytes: bytes.clone(),
+            thumbnail_b64: thumbnail,
             voice,
-        )?;
+        })?;
         let stored = self.attachment_store.write_blob(
             &manifest.content_hash,
             &manifest.file_name,
