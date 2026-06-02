@@ -4,6 +4,7 @@ pub mod attachment_store;
 pub mod channel_runtime;
 pub mod ciphertext_store;
 pub mod mls_crypto;
+pub mod mls_storage;
 pub mod moss_ffi;
 pub mod moss_runtime;
 pub mod openmls_crypto;
