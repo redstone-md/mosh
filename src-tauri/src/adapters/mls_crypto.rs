@@ -1,8 +1,9 @@
 use openmls::prelude::tls_codec::{Deserialize, Serialize};
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_rust_crypto::OpenMlsRustCrypto;
 use openmls_traits::types::SignatureScheme;
+
+use crate::adapters::mls_storage::PersistentProvider;
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 const FINGERPRINT_LEN: usize = 16;
@@ -33,7 +34,7 @@ pub struct AddOutcome {
 }
 
 pub struct MlsSessionCrypto {
-    provider: OpenMlsRustCrypto,
+    provider: PersistentProvider,
     signer: SignatureKeyPair,
     credential: CredentialWithKey,
     group: Option<MlsGroup>,
@@ -41,7 +42,7 @@ pub struct MlsSessionCrypto {
 
 impl MlsSessionCrypto {
     pub fn new(identity: &str) -> Result<Self, MlsCryptoError> {
-        let provider = OpenMlsRustCrypto::default();
+        let provider = PersistentProvider::default();
         let signer = SignatureKeyPair::new(SignatureScheme::ED25519)
             .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
         signer
@@ -317,6 +318,47 @@ impl MlsSessionCrypto {
     fn decode_key_package(&self, bytes: &[u8]) -> Result<KeyPackage, MlsCryptoError> {
         decode_key_package_impl(&self.provider, bytes)
     }
+
+    /// Serialize MLS state for at-rest persistence.
+    pub fn snapshot(&self) -> Vec<u8> {
+        self.provider.snapshot_bytes()
+    }
+
+    /// Public signature key bytes (needed to re-read the signer on restore).
+    pub fn signer_public(&self) -> Vec<u8> {
+        self.signer.to_public_vec()
+    }
+
+    /// Group id bytes (the key for `MlsGroup::load`).
+    pub fn group_id_bytes(&self) -> Option<Vec<u8>> {
+        self.group.as_ref().map(|g| g.group_id().as_slice().to_vec())
+    }
+
+    /// Rebuild a session from a persisted snapshot.
+    pub fn restore(
+        identity: &str,
+        signer_public: &[u8],
+        snapshot: &[u8],
+        group_id: &[u8],
+    ) -> Result<Self, MlsCryptoError> {
+        let provider = PersistentProvider::from_snapshot(snapshot);
+        let signer =
+            SignatureKeyPair::read(provider.storage(), signer_public, SignatureScheme::ED25519)
+                .ok_or_else(|| MlsCryptoError::OpenMls("signer not found in snapshot".into()))?;
+        let credential = CredentialWithKey {
+            credential: BasicCredential::new(identity.as_bytes().to_vec()).into(),
+            signature_key: signer.to_public_vec().into(),
+        };
+        let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(group_id))
+            .map_err(|e| MlsCryptoError::OpenMls(e.to_string()))?
+            .ok_or(MlsCryptoError::NotReady)?;
+        Ok(Self {
+            provider,
+            signer,
+            credential,
+            group: Some(group),
+        })
+    }
 }
 
 fn fingerprint_from_signature_key(bytes: &[u8]) -> String {
@@ -328,7 +370,7 @@ fn fingerprint_from_signature_key(bytes: &[u8]) -> String {
 }
 
 fn decode_key_package_impl(
-    provider: &OpenMlsRustCrypto,
+    provider: &PersistentProvider,
     bytes: &[u8],
 ) -> Result<KeyPackage, MlsCryptoError> {
     let message = MlsMessageIn::tls_deserialize(&mut &bytes[..])
@@ -340,4 +382,29 @@ fn decode_key_package_impl(
     key_package
         .validate(provider.crypto(), ProtocolVersion::default())
         .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_keeps_sending() {
+        let mut alice = MlsSessionCrypto::new("alice").unwrap();
+        alice.create_group().unwrap();
+        let mut bob = MlsSessionCrypto::new("bob").unwrap();
+        let bob_kp = bob.key_package_bytes().unwrap();
+        let (welcome, tree) = alice.add_peer(&bob_kp).unwrap();
+        bob.join_welcome(&welcome, &tree).unwrap();
+
+        let snap = alice.snapshot();
+        let pubkey = alice.signer_public();
+        let gid = alice.group_id_bytes().unwrap();
+        drop(alice);
+        let mut alice2 = MlsSessionCrypto::restore("alice", &pubkey, &snap, &gid).unwrap();
+
+        let ct = alice2.encrypt(b"after restart").unwrap();
+        let pt = bob.decrypt(&ct).unwrap();
+        assert_eq!(pt, b"after restart");
+    }
 }
