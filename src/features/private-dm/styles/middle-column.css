@@ -27,6 +27,36 @@
   overflow-y: auto;
 }
 
+/* Slim, theme-tinted scrollbars instead of the chunky native one. */
+.diagnostics-content,
+.diagnostic-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.diagnostics-content::-webkit-scrollbar,
+.diagnostic-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.diagnostics-content::-webkit-scrollbar-track,
+.diagnostic-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.diagnostics-content::-webkit-scrollbar-thumb,
+.diagnostic-scroll::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.diagnostics-content:hover::-webkit-scrollbar-thumb,
+.diagnostic-scroll:hover::-webkit-scrollbar-thumb {
+  background: var(--fg-3);
+}
+
 .diagnostics-panel header {
   display: flex;
   align-items: center;
