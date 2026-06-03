@@ -4,6 +4,22 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-06-03
+
+### Fixed
+- **Sending works again after a restart.** When the app reconnects, the mesh
+  re-delivers already-consumed MLS messages; decrypting those fails by design
+  ("secret deleted to preserve forward secrecy"). Because the inbound drain ran
+  before every send, that expected error was surfaced as a *send* failure. The
+  drain now drops an undecryptable/replayed frame and keeps going, so sending
+  is unaffected.
+
+### Changed
+- **Deleting a conversation now removes it for good.** Closing a chat previously
+  only dropped it from the in-memory list, so it reappeared on the next launch.
+  It now purges the persisted session record, MLS snapshot and messages, and
+  asks for confirmation first.
+
 ## [0.2.2] - 2026-06-02
 
 ### Fixed
