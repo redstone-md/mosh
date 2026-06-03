@@ -500,6 +500,10 @@ export function PrivateDmScreen({
     if (!active) {
       return;
     }
+    // Deleting a conversation purges its persisted history — confirm first.
+    if (!window.confirm(shellText.closeSessionConfirm)) {
+      return;
+    }
     void run(async () => {
       if (active.type === "dm") {
         await gateway.closePrivateSession(active.id);

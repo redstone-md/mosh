@@ -409,4 +409,48 @@ mod tests {
         let pt = bob.decrypt(&ct).unwrap();
         assert_eq!(pt, b"after restart");
     }
+
+    // Reproduces the field bug: after both sides have already exchanged a
+    // message (so their own sender ratchet has advanced past generation 0),
+    // a snapshot/restore must still let each side send AND receive. The joiner
+    // (Bob) restoring and then sending is the reported failure
+    // ("secret deleted to preserve forward secrecy").
+    #[test]
+    fn restore_keeps_sending_after_generation_advance() {
+        let mut alice = MlsSessionCrypto::new("alice").unwrap();
+        alice.create_group().unwrap();
+        let mut bob = MlsSessionCrypto::new("bob").unwrap();
+        let bob_kp = bob.key_package_bytes().unwrap();
+        let (welcome, tree) = alice.add_peer(&bob_kp).unwrap();
+        bob.join_welcome(&welcome, &tree).unwrap();
+
+        // Generation 0 consumed on both sender ratchets.
+        let c1 = alice.encrypt(b"a1").unwrap();
+        assert_eq!(bob.decrypt(&c1).unwrap(), b"a1");
+        let r1 = bob.encrypt(b"b1").unwrap();
+        assert_eq!(alice.decrypt(&r1).unwrap(), b"b1");
+
+        // Snapshot + restore BOTH after the advance.
+        let restore = |c: &MlsSessionCrypto, id: &str| {
+            MlsSessionCrypto::restore(
+                id,
+                &c.signer_public(),
+                &c.snapshot(),
+                &c.group_id_bytes().unwrap(),
+            )
+            .unwrap()
+        };
+        let mut alice2 = restore(&alice, "alice");
+        let mut bob2 = restore(&bob, "bob");
+        drop(alice);
+        drop(bob);
+
+        // Joiner sends after restart, creator receives.
+        let r2 = bob2.encrypt(b"b2 after restart").unwrap();
+        assert_eq!(alice2.decrypt(&r2).unwrap(), b"b2 after restart");
+
+        // Creator sends after restart, joiner receives.
+        let c2 = alice2.encrypt(b"a2 after restart").unwrap();
+        assert_eq!(bob2.decrypt(&c2).unwrap(), b"a2 after restart");
+    }
 }
