@@ -46,6 +46,7 @@ function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
     mesh_id: "mesh-one",
     role: "bob",
     display_name: "mosh-bob",
+    peer_display_name: "Alice",
     state: "ready",
     invite_uri: INVITE,
     fingerprint: FINGERPRINT,

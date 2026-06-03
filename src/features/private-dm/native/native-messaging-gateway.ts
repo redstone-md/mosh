@@ -167,6 +167,11 @@ export interface PendingCall {
   readonly from_device: string;
 }
 
+/** The caller-side "ringing" state while waiting for the peer to answer. */
+export interface OutgoingCall {
+  readonly call_id: string;
+}
+
 export interface ActiveCall {
   readonly call_id: string;
   readonly direction: "caller" | "callee";
@@ -209,7 +214,10 @@ export interface SessionSnapshot {
   readonly session_id: string;
   readonly mesh_id: string;
   readonly role: string;
+  /** The local device's own display name. */
   readonly display_name: string;
+  /** The remote peer's display name (empty until first inbound frame). */
+  readonly peer_display_name: string;
   readonly state: string;
   readonly invite_uri: string | null;
   readonly fingerprint: string;
@@ -218,6 +226,7 @@ export interface SessionSnapshot {
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
   readonly pending_call?: PendingCall;
+  readonly outgoing_call?: OutgoingCall;
   readonly active_call?: ActiveCall;
 }
 
