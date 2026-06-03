@@ -1,13 +1,30 @@
 .diagnostics-panel {
   min-height: 0;
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 10px;
   background: var(--bg-0);
   border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* Header stays pinned; only the diagnostic groups scroll. */
+.diagnostics-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Bound a long group (e.g. the Moss event log) so it scrolls internally
+   instead of pushing the rest of the panel off-screen. */
+.diagnostic-scroll {
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .diagnostics-panel header {
