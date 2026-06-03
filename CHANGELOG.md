@@ -4,6 +4,23 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-06-03
+
+### Added
+- **Outgoing call UI.** Placing a call now shows a "Calling…" overlay with the
+  peer's name, a dial tone, and a cancel button while waiting for an answer
+  (previously the caller saw nothing).
+
+### Fixed
+- **Call screens show the right name.** An incoming call now shows the caller's
+  name, and the active/outgoing call overlay shows the peer's name — instead of
+  the local user's own display name. The peer name is learned from inbound
+  frames and restored after a restart.
+
+### Changed
+- The right-hand peer-status panel is now reliably scrollable and more compact
+  (smaller type, tighter spacing) so it no longer overflows the window.
+
 ## [0.2.4] - 2026-06-03
 
 ### Fixed

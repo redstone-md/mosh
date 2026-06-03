@@ -32,7 +32,11 @@ pub struct SessionSnapshot {
     pub session_id: String,
     pub mesh_id: String,
     pub role: String,
+    /// The local device's own display name.
     pub display_name: String,
+    /// The remote peer's display name, learned from inbound messages/control.
+    /// Empty until the first inbound frame from the peer is seen.
+    pub peer_display_name: String,
     pub state: String,
     pub invite_uri: Option<String>,
     pub fingerprint: String,
@@ -42,6 +46,10 @@ pub struct SessionSnapshot {
     pub events: Vec<SnapshotEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_call: Option<PendingCall>,
+    /// Present while the local user is placing a call and waiting for the peer
+    /// to answer (caller-side "ringing" state).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outgoing_call: Option<OutgoingCall>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_call: Option<ActiveCall>,
 }
@@ -126,6 +134,11 @@ pub struct ChatMessage {
 pub struct PendingCall {
     pub call_id: String,
     pub from_device: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OutgoingCall {
+    pub call_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -16,8 +16,8 @@ use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 pub use contracts::{
     AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
     AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
-    DmOffer, InviteCreated, MeshInfo, PendingCall, PrivateDmRuntimeError, SendMessageResult,
-    SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
+    DmOffer, InviteCreated, MeshInfo, OutgoingCall, PendingCall, PrivateDmRuntimeError,
+    SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use wire::{
@@ -84,6 +84,8 @@ struct PrivateDmSession {
     // rebuilt verbatim (notably to refresh the joiner's group_id after join).
     listen_port: u16,
     static_peer: Option<String>,
+    // The remote peer's display name, learned from the first inbound frame.
+    peer_display_name: Option<String>,
     peer_joined: bool,
     node: MossNode,
     crypto: MlsSessionCrypto,
@@ -237,6 +239,14 @@ impl PrivateDmRuntime {
                     }
                 }
             }
+            // Recover the peer's display name from a restored inbound message so
+            // the chat/call UI still shows it after a restart.
+            session.peer_display_name = session
+                .messages
+                .iter()
+                .map(|message| message.from_device.as_str())
+                .find(|name| !name.is_empty() && *name != rec.display_name)
+                .map(str::to_string);
             // DUP-GUARD: re-seed persisted_counts so the next persist_session_tail
             // does NOT re-append the messages we just loaded.
             self.persisted_counts
@@ -709,6 +719,7 @@ impl PrivateDmSession {
             invite_uri,
             listen_port,
             static_peer,
+            peer_display_name: None,
             peer_joined: false,
             node,
             crypto,
@@ -798,6 +809,16 @@ impl PrivateDmSession {
         false
     }
 
+    /// Remember the peer's display name from an inbound frame's `from_device`.
+    fn note_peer_name(&mut self, from_device: &str) {
+        if from_device.is_empty() || from_device == self.device_id {
+            return;
+        }
+        if self.peer_display_name.as_deref() != Some(from_device) {
+            self.peer_display_name = Some(from_device.to_string());
+        }
+    }
+
     fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
 
@@ -805,12 +826,13 @@ impl PrivateDmSession {
             ControlEnvelope::KeyPackage {
                 session_id,
                 participant_id,
+                from_device,
                 key_package_b64,
-                ..
             } if self.is_alice_session(&session_id, &participant_id) => {
                 if self.peer_joined {
                     return Ok(());
                 }
+                self.note_peer_name(&from_device);
                 let key_package = decode(&key_package_b64)?;
                 let (welcome, tree) = self.crypto.add_peer(&key_package)?;
                 self.peer_joined = true;
@@ -827,13 +849,14 @@ impl PrivateDmSession {
             ControlEnvelope::Welcome {
                 session_id,
                 participant_id,
+                from_device,
                 welcome_b64,
                 ratchet_tree_b64,
-                ..
             } if self.is_bob_session(&session_id, &participant_id) => {
                 if self.peer_joined {
                     return Ok(());
                 }
+                self.note_peer_name(&from_device);
                 self.crypto
                     .join_welcome(&decode(&welcome_b64)?, &decode(&ratchet_tree_b64)?)?;
                 self.peer_joined = true;
@@ -845,6 +868,7 @@ impl PrivateDmSession {
                 from_device,
                 manifest_ciphertext_b64,
             } if session_id == self.session_id && participant_id != self.participant_id => {
+                self.note_peer_name(&from_device);
                 let manifest_json = self.crypto.decrypt(&decode(&manifest_ciphertext_b64)?)?;
                 let manifest: AttachmentManifest = decode_json(&manifest_json)?;
                 self.accept_incoming_manifest(from_device, manifest)
@@ -859,6 +883,7 @@ impl PrivateDmSession {
                 if self.call.is_some() {
                     return Ok(());
                 }
+                self.note_peer_name(&from_device);
                 let plaintext = self.crypto.decrypt(&decode(&offer_ciphertext_b64)?)?;
                 let body: CallOfferBody = decode_json(&plaintext)?;
                 let channel = voice_call_channel(&call_id);
@@ -957,6 +982,7 @@ impl PrivateDmSession {
         }
 
         let plaintext = self.crypto.decrypt(&decode(&envelope.ciphertext_b64)?)?;
+        self.note_peer_name(&envelope.from_device);
         self.messages.push(ChatMessage {
             from_device: envelope.from_device,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
@@ -1197,6 +1223,7 @@ impl PrivateDmSession {
             mesh_id: self.mesh_id.clone(),
             role: self.role.as_str().to_string(),
             display_name: self.device_id.clone(),
+            peer_display_name: self.peer_display_name.clone().unwrap_or_default(),
             state: self.state(),
             invite_uri: self.invite_uri.clone(),
             fingerprint: self.fingerprint.clone(),
@@ -1217,6 +1244,15 @@ impl PrivateDmSession {
                     Some(PendingCall {
                         call_id: call.call_id.clone(),
                         from_device: call.remote_device.clone(),
+                    })
+                } else {
+                    None
+                }
+            }),
+            outgoing_call: self.call.as_ref().and_then(|call| {
+                if call.phase == CallPhase::Outgoing {
+                    Some(OutgoingCall {
+                        call_id: call.call_id.clone(),
                     })
                 } else {
                     None

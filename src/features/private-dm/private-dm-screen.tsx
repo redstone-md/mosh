@@ -82,6 +82,7 @@ import { BindInterfaceField } from "./vpn/BindInterfaceField";
 import { VpnBanner } from "./vpn/VpnBanner";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
+import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
 import {
   CALLEE_DIRECTION_BIT,
   CALLER_DIRECTION_BIT,
@@ -1112,28 +1113,30 @@ export function PrivateDmScreen({
             </button>
           </header>
 
-          {activeSession ? (
-            <SessionDiagnostics session={activeSession} />
-          ) : activeChannel ? (
-            <ChannelDiagnostics channel={activeChannel} />
-          ) : activeGroup ? (
-            <GroupDiagnostics group={activeGroup} />
-          ) : (
-            <div className="diagnostic-group">
-              <div className="diagnostic-group-label">Session</div>
-              <div className="diagnostic-row">
-                <span>State</span>
-                <strong>{shellText.noActive}</strong>
+          <div className="diagnostics-content">
+            {activeSession ? (
+              <SessionDiagnostics session={activeSession} />
+            ) : activeChannel ? (
+              <ChannelDiagnostics channel={activeChannel} />
+            ) : activeGroup ? (
+              <GroupDiagnostics group={activeGroup} />
+            ) : (
+              <div className="diagnostic-group">
+                <div className="diagnostic-group-label">Session</div>
+                <div className="diagnostic-row">
+                  <span>State</span>
+                  <strong>{shellText.noActive}</strong>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {error ? (
-            <div className="diagnostic-row diagnostic-error">
-              <span>Runtime error</span>
-              <strong>{error}</strong>
-            </div>
-          ) : null}
+            {error ? (
+              <div className="diagnostic-row diagnostic-error">
+                <span>Runtime error</span>
+                <strong>{error}</strong>
+              </div>
+            ) : null}
+          </div>
         </aside>
       </div>
 
@@ -1148,7 +1151,7 @@ export function PrivateDmScreen({
       {pendingCallSession?.pending_call ? (
         <IncomingCallModal
           pending={pendingCallSession.pending_call}
-          peerLabel={pendingCallSession.display_name}
+          peerLabel={pendingCallSession.pending_call.from_device || "Peer"}
           onAccept={() =>
             acceptCall(
               pendingCallSession.session_id,
@@ -1164,10 +1167,23 @@ export function PrivateDmScreen({
           }
         />
       ) : null}
+      {activeDmSession?.outgoing_call && !activeCall ? (
+        <OutgoingCallModal
+          callId={activeDmSession.outgoing_call.call_id}
+          peerLabel={activeDmSession.peer_display_name || "Peer"}
+          onCancel={() =>
+            endCall(
+              activeDmSession.session_id,
+              activeDmSession.outgoing_call!.call_id,
+              "hangup",
+            )
+          }
+        />
+      ) : null}
       {activeCall && activeCallSessionId && activeDmSession ? (
         <CallOverlay
           active={activeCall}
-          peerLabel={activeDmSession.display_name}
+          peerLabel={activeDmSession.peer_display_name || "Peer"}
           muted={callMuted}
           onToggleMute={() => {
             const next = !callMuted;
@@ -2596,33 +2612,35 @@ function MeshDiagnostics({ mesh }: { mesh: MeshInfo | null }) {
 }
 
 function EventLog({ events }: { events: readonly SnapshotEvent[] }) {
-  const slice = events.slice(-12).reverse();
+  const slice = events.slice(-40).reverse();
   return (
     <div className="diagnostic-group">
       <div className="diagnostic-group-label">
         <IconActivity size={11} style={{ marginRight: 6, verticalAlign: "-1px" }} />
         Moss events
       </div>
-      {slice.length === 0 ? (
-        <div className="diagnostic-row event-empty">
-          <span>—</span>
-          <strong>no events yet</strong>
-        </div>
-      ) : (
-        slice.map((event, index) => {
-          const detail = compactDetail(event.detail_json);
-          const time = formatTime(event.epoch_millis);
-          return (
-            <div className={`diagnostic-row event-row event-${event.event_name}`} key={index}>
-              <span>{time}</span>
-              <strong>
-                <span className="event-name">{event.event_name}</span>
-                {detail ? <span className="event-detail">{detail}</span> : null}
-              </strong>
-            </div>
-          );
-        })
-      )}
+      <div className="diagnostic-scroll">
+        {slice.length === 0 ? (
+          <div className="diagnostic-row event-empty">
+            <span>—</span>
+            <strong>no events yet</strong>
+          </div>
+        ) : (
+          slice.map((event, index) => {
+            const detail = compactDetail(event.detail_json);
+            const time = formatTime(event.epoch_millis);
+            return (
+              <div className={`diagnostic-row event-row event-${event.event_name}`} key={index}>
+                <span>{time}</span>
+                <strong>
+                  <span className="event-name">{event.event_name}</span>
+                  {detail ? <span className="event-detail">{detail}</span> : null}
+                </strong>
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
