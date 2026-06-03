@@ -4,6 +4,21 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-06-03
+
+### Fixed
+- **Honest NAT reachability detection (peer flapping).** A node behind NAT was
+  classified as publicly reachable ("open") from a single reflexive address —
+  which is only the NAT's WAN IP — so peers kept attempting futile direct dials
+  and the connection flapped (rapid `peer_joined`/`peer_left`). The Moss runtime
+  (bumped to v0.3.1) now leaves reachability to an actual inbound probe and
+  detects symmetric NAT from varying mapped ports.
+
+### Note
+- Two peers both behind symmetric NAT still require a relay/supernode to
+  connect; correct detection lets Moss pick relay paths instead of looping on
+  direct dials.
+
 ## [0.2.3] - 2026-06-03
 
 ### Fixed
