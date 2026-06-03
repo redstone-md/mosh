@@ -239,6 +239,54 @@ impl Persistence {
         self.range_prefix(MESSAGES, conversation_id)
     }
 
+    /// Permanently remove a conversation: its session record, MLS snapshot and
+    /// every persisted message. Used when the user deletes a chat so it does
+    /// not return on the next launch.
+    pub fn delete_session(&self, session_id: &str) -> Result<(), PersistenceError> {
+        let wtx = self
+            .db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        {
+            let mut sessions = wtx
+                .open_table(SESSIONS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            sessions
+                .remove(session_id)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        {
+            let mut snapshot = wtx
+                .open_table(MLS_SNAPSHOT)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            snapshot
+                .remove(session_id)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        {
+            let lo = format!("{session_id}\u{0001}");
+            let hi = format!("{session_id}\u{0002}");
+            let mut messages = wtx
+                .open_table(MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            let keys: Vec<String> = messages
+                .range(lo.as_str()..hi.as_str())
+                .map_err(|e| PersistenceError::Db(e.to_string()))?
+                .map(|item| {
+                    item.map(|(k, _)| k.value().to_string())
+                        .map_err(|e| PersistenceError::Db(e.to_string()))
+                })
+                .collect::<Result<_, _>>()?;
+            for key in keys {
+                messages
+                    .remove(key.as_str())
+                    .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            }
+        }
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))
+    }
+
     /// The device's stable Moss transport identity (encrypted like everything
     /// else). Persisting it keeps the node's peer-id constant across restarts,
     /// which is required for peers to re-establish a connection instead of
@@ -323,6 +371,30 @@ mod tests {
         let identity = vec![9u8; 129];
         p.put_moss_identity(&identity).unwrap();
         assert_eq!(p.get_moss_identity().unwrap(), Some(identity));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn delete_session_removes_record_snapshot_and_messages() {
+        let path = std::env::temp_dir().join(format!("mosh-del-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [5u8; 32]).unwrap();
+
+        p.put_session("s1", b"rec").unwrap();
+        p.put_mls_snapshot("s1", b"snap").unwrap();
+        p.append_message("s1", 1, "m1", b"hi").unwrap();
+        p.append_message("s1", 2, "m2", b"yo").unwrap();
+        // Unrelated conversation must survive.
+        p.put_session("s2", b"rec2").unwrap();
+        p.append_message("s2", 1, "x", b"keep").unwrap();
+
+        p.delete_session("s1").unwrap();
+
+        assert!(p.get_mls_snapshot("s1").unwrap().is_none());
+        assert!(p.list_messages("s1").unwrap().is_empty());
+        assert_eq!(p.list_sessions().unwrap().len(), 1);
+        assert_eq!(p.list_messages("s2").unwrap().len(), 1);
 
         let _ = std::fs::remove_file(&path);
     }
