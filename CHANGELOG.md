@@ -4,7 +4,7 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.5] - 2026-06-03
+## [0.2.6] - 2026-06-03
 
 ### Added
 - **Outgoing call UI.** Placing a call now shows a "Calling…" overlay with the
