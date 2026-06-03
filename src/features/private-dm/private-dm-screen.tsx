@@ -82,6 +82,7 @@ import { BindInterfaceField } from "./vpn/BindInterfaceField";
 import { VpnBanner } from "./vpn/VpnBanner";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
+import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
 import {
   CALLEE_DIRECTION_BIT,
   CALLER_DIRECTION_BIT,
@@ -1148,7 +1149,7 @@ export function PrivateDmScreen({
       {pendingCallSession?.pending_call ? (
         <IncomingCallModal
           pending={pendingCallSession.pending_call}
-          peerLabel={pendingCallSession.display_name}
+          peerLabel={pendingCallSession.pending_call.from_device || "Peer"}
           onAccept={() =>
             acceptCall(
               pendingCallSession.session_id,
@@ -1164,10 +1165,23 @@ export function PrivateDmScreen({
           }
         />
       ) : null}
+      {activeDmSession?.outgoing_call && !activeCall ? (
+        <OutgoingCallModal
+          callId={activeDmSession.outgoing_call.call_id}
+          peerLabel={activeDmSession.peer_display_name || "Peer"}
+          onCancel={() =>
+            endCall(
+              activeDmSession.session_id,
+              activeDmSession.outgoing_call!.call_id,
+              "hangup",
+            )
+          }
+        />
+      ) : null}
       {activeCall && activeCallSessionId && activeDmSession ? (
         <CallOverlay
           active={activeCall}
-          peerLabel={activeDmSession.display_name}
+          peerLabel={activeDmSession.peer_display_name || "Peer"}
           muted={callMuted}
           onToggleMute={() => {
             const next = !callMuted;
