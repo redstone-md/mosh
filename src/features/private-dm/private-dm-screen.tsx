@@ -83,6 +83,7 @@ import { VpnBanner } from "./vpn/VpnBanner";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
 import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
+import { parseMoshGroupInvite, parseMoshInvite } from "./invite/invite-uri";
 import {
   CALLEE_DIRECTION_BIT,
   CALLER_DIRECTION_BIT,
@@ -1415,13 +1416,18 @@ function detectInviteKind(value: string): "dm" | "group" | "empty" | "unknown" {
   if (!trimmed) {
     return "empty";
   }
-  if (trimmed.startsWith("mosh://invite")) {
+  try {
+    parseMoshInvite(trimmed);
     return "dm";
+  } catch {
+    // Keep checking: a valid group invite intentionally fails the DM parser.
   }
-  if (trimmed.startsWith("mosh://group")) {
+  try {
+    parseMoshGroupInvite(trimmed);
     return "group";
+  } catch {
+    return "unknown";
   }
-  return "unknown";
 }
 
 function NewSessionPanel(props: {
