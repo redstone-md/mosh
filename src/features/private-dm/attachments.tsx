@@ -10,11 +10,12 @@ import {
 } from "@tabler/icons-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import type {
   AttachmentDescriptor,
   AttachmentView,
 } from "./native/native-messaging-gateway";
+import { useModalFocus } from "./use-modal-focus";
 import { VoiceMessage } from "./voice/VoiceMessage";
 
 export function isViewableMedia(mime: string): boolean {
@@ -408,16 +409,7 @@ export function MediaViewer({
   src: string;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
+  const modalRef = useModalFocus(onClose);
   const mime = descriptor.mime;
   const isImage = mime.startsWith("image/");
   const isVideo = mime.startsWith("video/");
@@ -425,10 +417,12 @@ export function MediaViewer({
 
   return (
     <div
+      ref={modalRef}
       className="media-viewer"
       role="dialog"
       aria-modal="true"
       aria-label={descriptor.file_name}
+      tabIndex={-1}
       onClick={onClose}
     >
       <button
