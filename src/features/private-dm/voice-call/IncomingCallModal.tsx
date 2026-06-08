@@ -1,6 +1,7 @@
 import { IconPhone, IconPhoneOff } from "@tabler/icons-react";
 import { useEffect, useRef } from "react";
 import type { PendingCall } from "../native/native-messaging-gateway";
+import { useModalFocus } from "../use-modal-focus";
 import { NO_ANSWER_TIMEOUT_MS } from "./call-state";
 import { startRingtone, type RingtoneHandle } from "./ringtone";
 
@@ -17,6 +18,7 @@ export function IncomingCallModal({
 }) {
   const ringtoneRef = useRef<RingtoneHandle | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
+  const modalRef = useModalFocus(() => onDecline("declined"));
 
   useEffect(() => {
     try {
@@ -39,10 +41,12 @@ export function IncomingCallModal({
 
   return (
     <div
+      ref={modalRef}
       className="call-modal"
       role="dialog"
       aria-modal="true"
       aria-label="Incoming call"
+      tabIndex={-1}
     >
       <div className="call-modal-card">
         <strong className="call-modal-peer">{peerLabel}</strong>

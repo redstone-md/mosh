@@ -1,6 +1,7 @@
 import { IconMicrophone, IconMicrophoneOff, IconPhoneOff } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { ActiveCall } from "../native/native-messaging-gateway";
+import { useModalFocus } from "../use-modal-focus";
 
 function formatClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -23,6 +24,7 @@ export function CallOverlay({
   onHangUp: () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const modalRef = useModalFocus(onHangUp);
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(id);
@@ -31,10 +33,12 @@ export function CallOverlay({
 
   return (
     <div
+      ref={modalRef}
       className="call-overlay"
       role="dialog"
       aria-modal="true"
       aria-label="Active call"
+      tabIndex={-1}
     >
       <div className="call-overlay-card">
         <strong className="call-overlay-peer">{peerLabel}</strong>

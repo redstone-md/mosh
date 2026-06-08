@@ -1,5 +1,6 @@
 import { IconPhoneOff } from "@tabler/icons-react";
 import { useEffect, useRef } from "react";
+import { useModalFocus } from "../use-modal-focus";
 import { startRingtone, type RingtoneHandle } from "./ringtone";
 
 /**
@@ -17,6 +18,7 @@ export function OutgoingCallModal({
   onCancel: () => void;
 }) {
   const ringtoneRef = useRef<RingtoneHandle | null>(null);
+  const modalRef = useModalFocus(onCancel);
 
   useEffect(() => {
     try {
@@ -32,10 +34,12 @@ export function OutgoingCallModal({
 
   return (
     <div
+      ref={modalRef}
       className="call-modal"
       role="dialog"
       aria-modal="true"
       aria-label="Outgoing call"
+      tabIndex={-1}
     >
       <div className="call-modal-card">
         <strong className="call-modal-peer">{peerLabel}</strong>
