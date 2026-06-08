@@ -280,6 +280,18 @@ describe("PrivateDmScreen", () => {
     );
   });
 
+  it("keeps malformed invite links from looking ready to connect", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway();
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await user.click(screen.getByRole("button", { name: /Join with a link/ }));
+    await user.type(screen.getByRole("textbox", { name: "Invite link" }), "mosh://invite?bad=1");
+
+    expect(screen.getByText("That does not look like a mosh:// invite")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+  });
+
   it("lists active sessions in the rail and switches between them", async () => {
     const second = snapshot({
       session_id: "session-two",

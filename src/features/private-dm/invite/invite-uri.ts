@@ -1,11 +1,14 @@
 const MOSH_INVITE_PROTOCOL = "mosh:";
 const INVITE_HOST = "invite";
+const GROUP_HOST = "group";
 const MESH_PARAM = "mesh";
 const SESSION_PARAM = "session";
+const GROUP_PARAM = "group";
 const PEER_PARAM = "peer";
 const FINGERPRINT_PARAM = "fp";
 const MIN_TOKEN_LENGTH = 4;
 const MIN_FINGERPRINT_LENGTH = 8;
+const GROUP_FINGERPRINT_LENGTH = 32;
 const TOKEN_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
 const FINGERPRINT_PATTERN = /^[a-f0-9-]+$/i;
 
@@ -14,6 +17,7 @@ export type InviteParseErrorCode =
   | "invalid_scheme"
   | "missing_mesh"
   | "missing_session"
+  | "missing_group"
   | "missing_fingerprint"
   | "invalid_fingerprint";
 
@@ -21,6 +25,13 @@ export interface MoshInvite {
   readonly meshId: string;
   readonly sessionId: string;
   readonly peerHint: string | null;
+  readonly fingerprint: string;
+}
+
+export interface MoshGroupInvite {
+  readonly meshId: string;
+  readonly groupId: string;
+  readonly label: string | null;
   readonly fingerprint: string;
 }
 
@@ -44,6 +55,21 @@ export function parseMoshInvite(rawInvite: string): MoshInvite {
   const fingerprint = readFingerprint(url);
 
   return { meshId, sessionId, peerHint, fingerprint };
+}
+
+export function parseMoshGroupInvite(rawInvite: string): MoshGroupInvite {
+  const url = parseUrl(rawInvite);
+
+  if (url.protocol !== MOSH_INVITE_PROTOCOL || url.hostname !== GROUP_HOST) {
+    throw new InviteParseError("invalid_scheme");
+  }
+
+  const meshId = readToken(url, MESH_PARAM, "missing_mesh");
+  const groupId = readToken(url, GROUP_PARAM, "missing_group");
+  const label = url.searchParams.get("name")?.trim() || null;
+  const fingerprint = readGroupFingerprint(url);
+
+  return { meshId, groupId, label, fingerprint };
 }
 
 function parseUrl(rawInvite: string): URL {
@@ -84,6 +110,25 @@ function readFingerprint(url: URL): string {
   const normalized = fingerprint.replace(/-/g, "").toUpperCase();
 
   if (normalized.length < MIN_FINGERPRINT_LENGTH || !FINGERPRINT_PATTERN.test(fingerprint)) {
+    throw new InviteParseError("invalid_fingerprint");
+  }
+
+  return normalized;
+}
+
+function readGroupFingerprint(url: URL): string {
+  const fingerprint = url.hash.replace(/^#/, "").replace(`${FINGERPRINT_PARAM}=`, "").trim();
+
+  if (!fingerprint) {
+    throw new InviteParseError("missing_fingerprint");
+  }
+
+  const normalized = fingerprint.replace(/-/g, "").toUpperCase();
+
+  if (
+    normalized.length !== GROUP_FINGERPRINT_LENGTH ||
+    !FINGERPRINT_PATTERN.test(fingerprint)
+  ) {
     throw new InviteParseError("invalid_fingerprint");
   }
 

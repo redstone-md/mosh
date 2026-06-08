@@ -206,3 +206,9 @@
 
 .btn-icon { width: 32px; padding: 0; }
 .btn-full { width: 100%; }
+
+@media (max-width: 1100px) {
+  .diagnostics-panel {
+    display: none;
+  }
+}
