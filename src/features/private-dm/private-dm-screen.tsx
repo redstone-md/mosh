@@ -51,6 +51,7 @@ import {
   channelText,
   groupText,
 } from "./private-dm.content";
+import { type OperationKind, useOperationBusy } from "./use-operation-busy";
 import {
   AttachmentView,
   ChannelMessage,
@@ -184,7 +185,7 @@ export function PrivateDmScreen({
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
   const [groupCreateState, setGroupCreateState] = useState<GroupCreateState>({ copied: false });
   const [error, setError] = useState<string | undefined>(undefined);
-  const [busy, setBusy] = useState(false);
+  const { counts: operationCounts, runOperation } = useOperationBusy();
   const [showSetup, setShowSetup] = useState(false);
   const [viewer, setViewer] = useState<
     { descriptor: AttachmentDescriptor; src: string } | null
@@ -207,6 +208,13 @@ export function PrivateDmScreen({
   const callPollRef = useRef<number | undefined>(undefined);
   const callMutedRef = useRef(false);
   const [callMuted, setCallMuted] = useState(false);
+  const refreshBusy = operationCounts.refresh > 0;
+  const setupBusy = operationCounts.setup > 0;
+  const messageBusy = operationCounts.message > 0;
+  const transferBusy = operationCounts.transfer > 0;
+  const sessionBusy = operationCounts.session > 0;
+  const offerBusy = operationCounts.offer > 0;
+  const chatBusy = messageBusy || sessionBusy;
 
   const requestBase = useMemo(
     () => ({
@@ -229,10 +237,9 @@ export function PrivateDmScreen({
       }
       pollInFlight.current = true;
       if (!quiet) {
-        setBusy(true);
         setError(undefined);
       }
-      try {
+      const loadSnapshots = async () => {
         const [sessionList, channelList, groupList] = await Promise.all([
           gateway.listPrivateSessions(),
           gateway.listChannels(),
@@ -262,13 +269,10 @@ export function PrivateDmScreen({
           }
           return null;
         });
-        if (!quiet) {
-          setBusy(false);
-        }
+      };
+      try {
+        await (quiet ? loadSnapshots() : runOperation("refresh", loadSnapshots));
       } catch (err) {
-        if (!quiet) {
-          setBusy(false);
-        }
         setError(readableError(err));
       } finally {
         pollInFlight.current = false;
@@ -281,7 +285,7 @@ export function PrivateDmScreen({
         }
       }
     },
-    [gateway],
+    [gateway, runOperation],
   );
   refreshRef.current = refresh;
 
@@ -381,20 +385,17 @@ export function PrivateDmScreen({
     };
   }, [sessions, channels, groups, active]);
 
-  const run = async (action: () => Promise<void>) => {
-    setBusy(true);
+  const run = async (kind: OperationKind, action: () => Promise<void>) => {
     setError(undefined);
     try {
-      await action();
-      setBusy(false);
+      await runOperation(kind, action);
     } catch (err) {
       setError(readableError(err));
-      setBusy(false);
     }
   };
 
   const createInvite = () =>
-    run(async () => {
+    run("setup", async () => {
       const invite = await gateway.createPrivateInvite(requestBase);
       await copyText(invite.invite_uri);
       setCreateState({ inviteUri: invite.invite_uri, copied: true });
@@ -404,7 +405,7 @@ export function PrivateDmScreen({
     });
 
   const acceptInvite = (uri: string) =>
-    run(async () => {
+    run("setup", async () => {
       const trimmed = uri.trim();
       if (!trimmed) {
         return;
@@ -419,7 +420,7 @@ export function PrivateDmScreen({
     });
 
   const joinChannel = (name: string) =>
-    run(async () => {
+    run("setup", async () => {
       const trimmed = name.trim();
       if (!trimmed) {
         return;
@@ -434,7 +435,7 @@ export function PrivateDmScreen({
     });
 
   const createGroup = (label: string) =>
-    run(async () => {
+    run("setup", async () => {
       const created = await gateway.createPrivateGroup({
         ...requestBase,
         label: label.trim() || null,
@@ -447,7 +448,7 @@ export function PrivateDmScreen({
     });
 
   const joinGroup = (uri: string) =>
-    run(async () => {
+    run("setup", async () => {
       const trimmed = uri.trim();
       if (!trimmed) {
         return;
@@ -485,7 +486,7 @@ export function PrivateDmScreen({
     if (!body || !active) {
       return;
     }
-    void run(async () => {
+    void run("message", async () => {
       if (active.type === "dm") {
         await gateway.sendPrivateMessage(active.id, body);
       } else if (active.type === "channel") {
@@ -506,7 +507,7 @@ export function PrivateDmScreen({
     if (!window.confirm(shellText.closeSessionConfirm)) {
       return;
     }
-    void run(async () => {
+    void run("session", async () => {
       if (active.type === "dm") {
         await gateway.closePrivateSession(active.id);
         setConfirmedFingerprints((current) => {
@@ -536,7 +537,7 @@ export function PrivateDmScreen({
       return;
     }
     const target = active;
-    void run(async () => {
+    void run("transfer", async () => {
       const dataBase64 = await readFileAsBase64(file);
       const thumbnail = await createThumbnail(file);
       const mime = file.type ?? "";
@@ -578,7 +579,7 @@ export function PrivateDmScreen({
       ? "voice-message.ogg"
       : "voice-message.webm";
     const meta = { duration_ms: voice.durationMs, peaks_b64: voice.peaksB64 };
-    void run(async () => {
+    void run("transfer", async () => {
       const dataBase64 = await readFileAsBase64(
         new File([voice.blob], fileName, { type: voice.mime }),
       );
@@ -619,7 +620,7 @@ export function PrivateDmScreen({
       return;
     }
     const target = active;
-    void run(async () => {
+    void run("transfer", async () => {
       if (target.type === "dm") {
         await gateway.downloadPrivateAttachment(target.id, attachmentId);
       } else if (target.type === "channel") {
@@ -636,7 +637,7 @@ export function PrivateDmScreen({
       return;
     }
     const target = active;
-    void run(async () => {
+    void run("transfer", async () => {
       if (target.type === "dm") {
         await gateway.cancelPrivateAttachment(target.id, attachmentId);
       } else if (target.type === "channel") {
@@ -696,7 +697,7 @@ export function PrivateDmScreen({
       return;
     }
     const target = active;
-    void run(async () => {
+    void run("offer", async () => {
       const invite = await gateway.createPrivateInvite(requestBase);
       if (target.type === "channel") {
         await gateway.sendChannelDmOffer(target.name, targetFingerprint, invite.invite_uri);
@@ -711,7 +712,7 @@ export function PrivateDmScreen({
   };
 
   const acceptDmOffer = (offer: PendingDmOffer) => {
-    void run(async () => {
+    void run("offer", async () => {
       const snapshot = await gateway.acceptPrivateInvite({
         ...requestBase,
         invite_uri: offer.invite_uri,
@@ -728,7 +729,7 @@ export function PrivateDmScreen({
   };
 
   const dismissDmOffer = (offer: PendingDmOffer) => {
-    void run(async () => {
+    void run("offer", async () => {
       if (offer.kind === "channel") {
         await gateway.dismissChannelDmOffer(offer.host, offer.offer_id);
       } else {
@@ -960,7 +961,7 @@ export function PrivateDmScreen({
 
   const attachmentApi: AttachmentApi = {
     views: attachmentViews,
-    busy,
+    busy: transferBusy,
     onSend: sendAttachment,
     onSendVoice: sendVoice,
     onVoiceError: setError,
@@ -1032,7 +1033,7 @@ export function PrivateDmScreen({
               displayName={displayName}
               staticPeer={staticPeer}
               listenPort={listenPort}
-              busy={busy}
+              busy={setupBusy}
               createState={createState}
               groupCreateState={groupCreateState}
               error={error}
@@ -1053,7 +1054,7 @@ export function PrivateDmScreen({
               session={activeSession}
               composer={composer}
               confirmed={confirmedFingerprints.has(activeSession.session_id)}
-              busy={busy}
+              busy={chatBusy}
               attachments={attachmentApi}
               onComposer={setComposer}
               onSend={sendMessage}
@@ -1067,12 +1068,12 @@ export function PrivateDmScreen({
             <ActiveChannelChat
               channel={activeChannel}
               composer={composer}
-              busy={busy}
+              busy={chatBusy}
               attachments={attachmentApi}
               peer={{
                 ownFingerprint: activeChannel.device_fingerprint,
                 offered: offeredFingerprints,
-                busy,
+                busy: offerBusy,
                 onMessage: offerDm,
               }}
               onComposer={setComposer}
@@ -1083,12 +1084,12 @@ export function PrivateDmScreen({
             <ActiveGroupChat
               group={activeGroup}
               composer={composer}
-              busy={busy}
+              busy={chatBusy}
               attachments={attachmentApi}
               peer={{
                 ownFingerprint: activeGroup.device_fingerprint,
                 offered: offeredFingerprints,
-                busy,
+                busy: offerBusy,
                 onMessage: offerDm,
               }}
               onComposer={setComposer}
@@ -1109,6 +1110,7 @@ export function PrivateDmScreen({
               type="button"
               onClick={() => void refresh(false)}
               aria-label="Refresh status"
+              disabled={refreshBusy}
             >
               <IconRefresh size={14} />
             </button>
