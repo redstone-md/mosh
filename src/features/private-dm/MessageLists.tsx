@@ -18,6 +18,8 @@ import type {
 import { channelText, chatText, groupText } from "./private-dm.content";
 import { CallLogEntry } from "./voice-call/CallLogEntry";
 
+const GROUP_WINDOW_MS = 5 * 60 * 1000;
+
 interface MessageAttachmentApi {
   readonly views: ReadonlyMap<string, AttachmentView>;
   readonly busy: boolean;
@@ -31,6 +33,17 @@ export interface PeerActions {
   readonly offered: ReadonlySet<string>;
   readonly busy: boolean;
   readonly onMessage: (fingerprint: string) => void;
+}
+
+interface MessageMetadata {
+  readonly message_id?: string;
+  readonly sent_at_ms?: number;
+}
+
+interface MessageRenderItem<T extends MessageMetadata> {
+  readonly message: T;
+  readonly grouped: boolean;
+  readonly key: string;
 }
 
 export function GroupChatList({
@@ -64,12 +77,13 @@ export function GroupChatList({
   }
   return (
     <div className="message-stack">
-      {visibleMessages.map((message, index) => (
+      {messageItems(visibleMessages, (message) => message.from_fingerprint).map((item) => (
         <GroupMessageRow
-          message={message}
+          message={item.message}
+          grouped={item.grouped}
           attachments={attachments}
           peer={peer}
-          key={`${message.from_fingerprint}-${index}`}
+          key={item.key}
         />
       ))}
       <div ref={anchorRef} aria-hidden="true" />
@@ -106,11 +120,12 @@ export function DmChatList({
   }
   return (
     <div className="message-stack">
-      {visibleMessages.map((message, index) => (
+      {messageItems(visibleMessages, (message) => message.from_device).map((item) => (
         <DmMessageRow
-          message={message}
+          message={item.message}
+          grouped={item.grouped}
           attachments={attachments}
-          key={`${message.from_device}-${index}`}
+          key={item.key}
         />
       ))}
       <div ref={anchorRef} aria-hidden="true" />
@@ -149,12 +164,13 @@ export function ChannelChatList({
   }
   return (
     <div className="message-stack">
-      {visibleMessages.map((message, index) => (
+      {messageItems(visibleMessages, (message) => message.from_fingerprint).map((item) => (
         <ChannelMessageRow
-          message={message}
+          message={item.message}
+          grouped={item.grouped}
           attachments={attachments}
           peer={peer}
-          key={`${message.from_fingerprint}-${index}`}
+          key={item.key}
         />
       ))}
       <div ref={anchorRef} aria-hidden="true" />
@@ -216,26 +232,35 @@ function PeerNickname({
 
 function GroupMessageRow({
   message,
+  grouped,
   attachments,
   peer,
 }: {
   message: GroupMessage;
+  grouped: boolean;
   attachments: MessageAttachmentApi;
   peer: PeerActions;
 }) {
   return (
-    <article className="message-row">
-      <Avatar name={message.from_device} />
+    <article className={`message-row${grouped ? " message-row-grouped" : ""}`}>
+      {grouped ? (
+        <span className="avatar avatar-spacer" aria-hidden="true" />
+      ) : (
+        <Avatar name={message.from_device} />
+      )}
       <div className="message-body">
-        <div className="message-meta">
-          <PeerNickname
-            name={message.from_device}
-            fingerprint={message.from_fingerprint}
-            peer={peer}
-          />
-          <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
-          <code>MLS</code>
-        </div>
+        {grouped ? null : (
+          <div className="message-meta">
+            <PeerNickname
+              name={message.from_device}
+              fingerprint={message.from_fingerprint}
+              peer={peer}
+            />
+            <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
+            <code>MLS</code>
+            <MessageTimestamp epoch={message.sent_at_ms} />
+          </div>
+        )}
         {message.body ? <p>{message.body}</p> : null}
         {message.attachment ? (
           <AttachmentCard
@@ -258,19 +283,28 @@ function GroupMessageRow({
 
 function DmMessageRow({
   message,
+  grouped,
   attachments,
 }: {
   message: ChatMessage;
+  grouped: boolean;
   attachments: MessageAttachmentApi;
 }) {
   return (
-    <article className="message-row">
-      <Avatar name={message.from_device} />
+    <article className={`message-row${grouped ? " message-row-grouped" : ""}`}>
+      {grouped ? (
+        <span className="avatar avatar-spacer" aria-hidden="true" />
+      ) : (
+        <Avatar name={message.from_device} />
+      )}
       <div className="message-body">
-        <div className="message-meta">
-          <strong>{message.from_device}</strong>
-          <code>MLS</code>
-        </div>
+        {grouped ? null : (
+          <div className="message-meta">
+            <strong>{message.from_device}</strong>
+            <code>MLS</code>
+            <MessageTimestamp epoch={message.sent_at_ms} />
+          </div>
+        )}
         {message.body ? <p>{message.body}</p> : null}
         {message.attachment ? (
           <AttachmentCard
@@ -294,25 +328,34 @@ function DmMessageRow({
 
 function ChannelMessageRow({
   message,
+  grouped,
   attachments,
   peer,
 }: {
   message: ChannelMessage;
+  grouped: boolean;
   attachments: MessageAttachmentApi;
   peer: PeerActions;
 }) {
   return (
-    <article className="message-row">
-      <Avatar name={message.from_device} />
+    <article className={`message-row${grouped ? " message-row-grouped" : ""}`}>
+      {grouped ? (
+        <span className="avatar avatar-spacer" aria-hidden="true" />
+      ) : (
+        <Avatar name={message.from_device} />
+      )}
       <div className="message-body">
-        <div className="message-meta">
-          <PeerNickname
-            name={message.from_device}
-            fingerprint={message.from_fingerprint}
-            peer={peer}
-          />
-          <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
-        </div>
+        {grouped ? null : (
+          <div className="message-meta">
+            <PeerNickname
+              name={message.from_device}
+              fingerprint={message.from_fingerprint}
+              peer={peer}
+            />
+            <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
+            <MessageTimestamp epoch={message.sent_at_ms} />
+          </div>
+        )}
         {message.body ? <p>{message.body}</p> : null}
         {message.attachment ? (
           <AttachmentCard
@@ -326,5 +369,51 @@ function ChannelMessageRow({
         ) : null}
       </div>
     </article>
+  );
+}
+
+function messageItems<T extends MessageMetadata>(
+  messages: readonly T[],
+  senderKey: (message: T) => string,
+): readonly MessageRenderItem<T>[] {
+  return messages.map((message, index) => {
+    const previous = index > 0 ? messages[index - 1] : undefined;
+    const grouped = previous ? shouldGroup(previous, message, senderKey) : false;
+    return {
+      message,
+      grouped,
+      key: message.message_id ?? `${senderKey(message)}-${index}`,
+    };
+  });
+}
+
+function shouldGroup<T extends MessageMetadata>(
+  previous: T,
+  current: T,
+  senderKey: (message: T) => string,
+): boolean {
+  if (!previous.sent_at_ms || !current.sent_at_ms) {
+    return false;
+  }
+  return (
+    senderKey(previous) === senderKey(current) &&
+    current.sent_at_ms >= previous.sent_at_ms &&
+    current.sent_at_ms - previous.sent_at_ms <= GROUP_WINDOW_MS
+  );
+}
+
+function MessageTimestamp({ epoch }: { epoch?: number }) {
+  if (!epoch) {
+    return null;
+  }
+  const date = new Date(epoch);
+  return (
+    <time
+      className="message-time"
+      dateTime={date.toISOString()}
+      title={date.toLocaleString()}
+    >
+      {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+    </time>
   );
 }

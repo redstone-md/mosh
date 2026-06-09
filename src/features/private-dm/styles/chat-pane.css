@@ -201,6 +201,10 @@
   gap: 12px;
 }
 
+.message-row-grouped {
+  margin-top: -6px;
+}
+
 .message-body { flex: 1; min-width: 0; }
 
 .message-meta {
@@ -222,6 +226,12 @@
   padding: 2px 5px;
   border-radius: 4px;
   background: var(--bg-2);
+}
+
+.message-time {
+  color: var(--fg-4);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .message-body p {
@@ -662,6 +672,10 @@
   font-weight: 700;
   user-select: none;
   letter-spacing: 0.04em;
+}
+
+.avatar-spacer {
+  visibility: hidden;
 }
 
 .scroll::-webkit-scrollbar { width: 10px; height: 10px; }

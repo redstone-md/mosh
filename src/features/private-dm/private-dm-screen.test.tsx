@@ -388,6 +388,48 @@ describe("PrivateDmScreen", () => {
     expect(screen.queryByText("release notes are ready")).not.toBeInTheDocument();
   });
 
+  it("shows timestamps and groups adjacent stamped messages", async () => {
+    const sentAt = Date.UTC(2026, 0, 1, 10, 0);
+    const gateway = createGateway([
+      snapshot({
+        messages: [
+          {
+            from_device: "Alice",
+            body: "first stamped message",
+            message_id: "message-1",
+            sent_at_ms: sentAt,
+          },
+          {
+            from_device: "Alice",
+            body: "second grouped message",
+            message_id: "message-2",
+            sent_at_ms: sentAt + 60_000,
+          },
+          {
+            from_device: "Alice",
+            body: "later message",
+            message_id: "message-3",
+            sent_at_ms: sentAt + 10 * 60_000,
+          },
+        ],
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await screen.findByText("first stamped message");
+    const expectedTime = new Date(sentAt).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    expect(screen.getByText(expectedTime)).toBeInTheDocument();
+    expect(screen.getByText("second grouped message").closest(".message-row")).toHaveClass(
+      "message-row-grouped",
+    );
+    expect(screen.getByText("later message").closest(".message-row")).not.toHaveClass(
+      "message-row-grouped",
+    );
+  });
+
   it("closes the active session and returns to the empty state", async () => {
     const gateway = createGateway([snapshot()]);
     render(<PrivateDmScreen gateway={gateway} />);
