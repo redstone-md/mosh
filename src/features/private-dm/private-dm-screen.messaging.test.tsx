@@ -138,4 +138,51 @@ describe("PrivateDmScreen messaging", () => {
     ).toHaveTextContent("2.0 KB · Transfer failed");
     expect(screen.getByRole("button", { name: "Retry brief.pdf" })).toBeEnabled();
   });
+
+  it("exposes active attachment download progress and cancel action", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway([
+      snapshot({
+        messages: [
+          {
+            from_device: "Alice",
+            body: "",
+            attachment: {
+              attachment_id: "downloading-file",
+              content_hash: "2".repeat(64),
+              file_name: "report.zip",
+              mime: "application/zip",
+              total_size: 8192,
+            },
+          },
+        ],
+        attachments: [
+          {
+            attachment_id: "downloading-file",
+            direction: "incoming",
+            state: "downloading",
+            completed_chunks: 1,
+            chunk_count: 4,
+          },
+        ],
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    expect(
+      await screen.findByRole("status", { name: "Downloading 25% for report.zip" }),
+    ).toHaveTextContent("8.0 KB · Downloading 25%");
+    expect(
+      screen.getByRole("progressbar", { name: "Download progress for report.zip" }),
+    ).toHaveAttribute("aria-valuenow", "25");
+
+    await user.click(screen.getByRole("button", { name: "Cancel download for report.zip" }));
+
+    await waitFor(() =>
+      expect(gateway.cancelPrivateAttachment).toHaveBeenCalledWith(
+        SESSION_ID,
+        "downloading-file",
+      ),
+    );
+  });
 });
