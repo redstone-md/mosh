@@ -13,6 +13,7 @@ use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
+use crate::adapters::persistence::Persistence;
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
@@ -106,6 +107,26 @@ struct AttachmentSlot {
     cancelled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedChannelMessage {
+    conversation_id: String,
+    sent_at_ms: u64,
+    message_id: String,
+    message: ChannelMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedChannelSession {
+    name: String,
+    topic: String,
+    blob_topic: String,
+    mesh_id: String,
+    display_name: String,
+    device_fingerprint: String,
+    listen_port: u16,
+    static_peer: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelListSnapshot {
     pub channels: Vec<ChannelSnapshot>,
@@ -167,6 +188,8 @@ impl From<crate::adapters::attachment_store::AttachmentStoreError> for ChannelRu
 pub struct ChannelRuntime {
     moss: Arc<MossFfiRuntime>,
     attachment_store: Arc<AttachmentStore>,
+    persistence: Option<Arc<Persistence>>,
+    persisted_counts: HashMap<String, usize>,
     channels: HashMap<String, ChannelSession>,
 }
 
@@ -177,6 +200,8 @@ struct ChannelSession {
     mesh_id: String,
     display_name: String,
     device_fingerprint: String,
+    listen_port: u16,
+    static_peer: Option<String>,
     node: MossNode,
     messages: Vec<ChannelMessage>,
     seen_set: HashSet<String>,
@@ -189,14 +214,124 @@ struct ChannelSession {
 
 impl ChannelRuntime {
     pub fn new(moss: MossFfiRuntime, attachment_store: Arc<AttachmentStore>) -> Self {
-        Self::from_shared(Arc::new(moss), attachment_store)
+        Self::from_shared(Arc::new(moss), attachment_store, None)
     }
 
-    pub fn from_shared(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
+    pub fn from_shared(
+        moss: Arc<MossFfiRuntime>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<Persistence>>,
+    ) -> Self {
         Self {
             moss,
             attachment_store,
+            persistence,
+            persisted_counts: HashMap::new(),
             channels: HashMap::new(),
+        }
+    }
+
+    /// Restore joined public channels and local scrollback from encrypted disk.
+    pub fn rehydrate(&mut self) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let rows = match p.list_channels() {
+            Ok(rows) => rows,
+            Err(_) => return,
+        };
+        for row in rows {
+            let rec: PersistedChannelSession = match serde_json::from_slice(&row) {
+                Ok(record) => record,
+                Err(error) => {
+                    eprintln!("channel rehydrate: bad channel row: {error}");
+                    continue;
+                }
+            };
+            let node = match start_channel_node(
+                &self.moss,
+                &rec.mesh_id,
+                &rec.topic,
+                &rec.blob_topic,
+                rec.listen_port,
+                rec.static_peer.clone(),
+            ) {
+                Ok(node) => node,
+                Err(error) => {
+                    eprintln!(
+                        "channel rehydrate: node start failed for {}: {error}",
+                        rec.name
+                    );
+                    continue;
+                }
+            };
+            let mut session = ChannelSession {
+                name: rec.name.clone(),
+                topic: rec.topic.clone(),
+                blob_topic: rec.blob_topic.clone(),
+                mesh_id: rec.mesh_id.clone(),
+                display_name: rec.display_name.clone(),
+                device_fingerprint: node
+                    .public_key_hex()
+                    .unwrap_or_else(|| rec.device_fingerprint.clone()),
+                listen_port: rec.listen_port,
+                static_peer: rec.static_peer.clone(),
+                node,
+                messages: Vec::new(),
+                seen_set: HashSet::new(),
+                seen_order: VecDeque::new(),
+                attachment_store: Arc::clone(&self.attachment_store),
+                attachments: AttachmentRuntime::new(),
+                attachment_slots: HashMap::new(),
+                dm_offers: Vec::new(),
+            };
+            if let Ok(messages) = p.list_channel_messages(&rec.name) {
+                for row in messages {
+                    if let Ok(persisted) = serde_json::from_slice::<PersistedChannelMessage>(&row) {
+                        let mut message = persisted.message;
+                        if message.message_id.is_none() {
+                            message.message_id = Some(persisted.message_id.clone());
+                        }
+                        if message.sent_at_ms.is_none() {
+                            message.sent_at_ms = Some(persisted.sent_at_ms);
+                        }
+                        if let Some(desc) = message.attachment.as_ref() {
+                            if self
+                                .attachment_store
+                                .exists(&desc.content_hash, &desc.file_name)
+                                .unwrap_or(false)
+                            {
+                                if let Ok(path) = self
+                                    .attachment_store
+                                    .path_for(&desc.content_hash, &desc.file_name)
+                                {
+                                    let direction =
+                                        if message.from_fingerprint == rec.device_fingerprint {
+                                            AttachmentDirection::Outgoing
+                                        } else {
+                                            AttachmentDirection::Incoming
+                                        };
+                                    session.attachment_slots.insert(
+                                        desc.attachment_id.clone(),
+                                        AttachmentSlot {
+                                            descriptor: desc.clone(),
+                                            direction,
+                                            local_path: Some(path.to_string_lossy().into_owned()),
+                                            download_requested: false,
+                                            failed: false,
+                                            cancelled: false,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        session.messages.push(message);
+                    }
+                }
+            }
+            self.persisted_counts
+                .insert(rec.name.clone(), session.messages.len());
+            self.channels.insert(rec.name, session);
         }
     }
 
@@ -208,6 +343,8 @@ impl ChannelRuntime {
         if self.channels.contains_key(&normalized) {
             return Err(ChannelRuntimeError::DuplicateChannel(normalized));
         }
+        let listen_port = request.listen_port;
+        let static_peer = request.static_peer.clone();
 
         let mesh_id = format!("{MESH_PREFIX}{normalized}");
         let topic = format!("{TOPIC_PREFIX}{normalized}");
@@ -217,8 +354,8 @@ impl ChannelRuntime {
             &mesh_id,
             &topic,
             &blob_topic,
-            request.listen_port,
-            request.static_peer,
+            listen_port,
+            static_peer.clone(),
         )?;
         let device_fingerprint = node
             .public_key_hex()
@@ -231,6 +368,8 @@ impl ChannelRuntime {
             mesh_id,
             display_name: request.display_name,
             device_fingerprint,
+            listen_port,
+            static_peer,
             node,
             messages: Vec::new(),
             seen_set: HashSet::new(),
@@ -242,6 +381,7 @@ impl ChannelRuntime {
         };
 
         self.channels.insert(normalized.clone(), session);
+        self.persist_channel_tail();
         self.poll(&normalized)
     }
 
@@ -288,10 +428,18 @@ impl ChannelRuntime {
     pub fn leave(&mut self, name: &str) -> Result<ChannelLeaveResult, ChannelRuntimeError> {
         let normalized = normalize_name(name)?;
         match self.channels.remove(&normalized) {
-            Some(_) => Ok(ChannelLeaveResult {
-                name: normalized,
-                closed: true,
-            }),
+            Some(_) => {
+                self.persisted_counts.remove(&normalized);
+                if let Some(p) = self.persistence.as_ref() {
+                    if let Err(error) = p.delete_channel(&normalized) {
+                        eprintln!("failed to delete persisted channel {normalized}: {error}");
+                    }
+                }
+                Ok(ChannelLeaveResult {
+                    name: normalized,
+                    closed: true,
+                })
+            }
             None => Err(ChannelRuntimeError::MissingChannel(normalized)),
         }
     }
@@ -306,30 +454,34 @@ impl ChannelRuntime {
         }
         self.drain_inbound()?;
         let normalized = normalize_name(name)?;
-        let session = self
-            .channels
-            .get_mut(&normalized)
-            .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-        let envelope = session.stamp_message(ChannelMessage {
-            from_device: session.display_name.clone(),
-            from_fingerprint: session.device_fingerprint.clone(),
-            body: body.clone(),
-            message_id: None,
-            sent_at_ms: None,
-            attachment: None,
-        });
-        let payload = serde_json::to_vec(&envelope)
-            .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
-        session
-            .node
-            .publish(&session.topic, &payload)
-            .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-        session.messages.push(envelope);
+        let result = {
+            let session = self
+                .channels
+                .get_mut(&normalized)
+                .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+            let envelope = session.stamp_message(ChannelMessage {
+                from_device: session.display_name.clone(),
+                from_fingerprint: session.device_fingerprint.clone(),
+                body: body.clone(),
+                message_id: None,
+                sent_at_ms: None,
+                attachment: None,
+            });
+            let payload = serde_json::to_vec(&envelope)
+                .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
+            session
+                .node
+                .publish(&session.topic, &payload)
+                .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
+            session.messages.push(envelope);
 
-        Ok(ChannelSendResult {
-            name: normalized,
-            bytes: payload.len(),
-        })
+            ChannelSendResult {
+                name: normalized,
+                bytes: payload.len(),
+            }
+        };
+        self.persist_channel_tail();
+        Ok(result)
     }
 
     /// Encrypts a file, stores the sender's copy, and broadcasts the manifest
@@ -349,7 +501,9 @@ impl ChannelRuntime {
             .channels
             .get_mut(&normalized)
             .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-        session.send_attachment(file_name, mime, bytes, thumbnail, voice)
+        let result = session.send_attachment(file_name, mime, bytes, thumbnail, voice)?;
+        self.persist_channel_tail();
+        Ok(result)
     }
 
     pub fn download_attachment(
@@ -407,6 +561,7 @@ impl ChannelRuntime {
 
     pub fn poll(&mut self, name: &str) -> Result<ChannelSnapshot, ChannelRuntimeError> {
         self.drain_inbound()?;
+        self.persist_channel_tail();
         let normalized = normalize_name(name)?;
         let session = self
             .channels
@@ -417,6 +572,7 @@ impl ChannelRuntime {
 
     pub fn list(&mut self) -> Result<ChannelListSnapshot, ChannelRuntimeError> {
         self.drain_inbound()?;
+        self.persist_channel_tail();
         let mut channels: Vec<ChannelSnapshot> = self
             .channels
             .values()
@@ -447,6 +603,53 @@ impl ChannelRuntime {
         }
         Ok(())
     }
+
+    fn persist_channel_tail(&mut self) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        for session in self.channels.values() {
+            let start = self
+                .persisted_counts
+                .get(&session.name)
+                .copied()
+                .unwrap_or(0);
+            for (idx, msg) in session.messages.iter().enumerate().skip(start) {
+                let sent_at_ms = msg.sent_at_ms.unwrap_or_else(now_ms);
+                let message_id = msg
+                    .message_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{sent_at_ms}-{idx:06}"));
+                let mut message = msg.clone();
+                if message.sent_at_ms.is_none() {
+                    message.sent_at_ms = Some(sent_at_ms);
+                }
+                if message.message_id.is_none() {
+                    message.message_id = Some(message_id.clone());
+                }
+                let record = PersistedChannelMessage {
+                    conversation_id: session.name.clone(),
+                    sent_at_ms,
+                    message_id: message_id.clone(),
+                    message,
+                };
+                if let Ok(json) = serde_json::to_vec(&record) {
+                    let _ = p.append_channel_message(&session.name, sent_at_ms, &message_id, &json);
+                }
+            }
+            if let Ok(json) = serde_json::to_vec(&session.to_persisted_record()) {
+                let _ = p.put_channel(&session.name, &json);
+            }
+        }
+        let new_counts: Vec<(String, usize)> = self
+            .channels
+            .values()
+            .map(|channel| (channel.name.clone(), channel.messages.len()))
+            .collect();
+        for (name, count) in new_counts {
+            self.persisted_counts.insert(name, count);
+        }
+    }
 }
 
 impl ChannelSession {
@@ -459,6 +662,19 @@ impl ChannelSession {
         message
     }
 
+    fn to_persisted_record(&self) -> PersistedChannelSession {
+        PersistedChannelSession {
+            name: self.name.clone(),
+            topic: self.topic.clone(),
+            blob_topic: self.blob_topic.clone(),
+            mesh_id: self.mesh_id.clone(),
+            display_name: self.display_name.clone(),
+            device_fingerprint: self.device_fingerprint.clone(),
+            listen_port: self.listen_port,
+            static_peer: self.static_peer.clone(),
+        }
+    }
+
     fn handle_message(&mut self, message: MossReceivedMessage) -> Result<(), ChannelRuntimeError> {
         if self.has_seen(&message) {
             return Ok(());
@@ -466,6 +682,9 @@ impl ChannelSession {
         if message.channel == self.topic {
             let envelope: ChannelMessage = serde_json::from_slice(&message.payload)
                 .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
+            if self.has_message(&envelope) {
+                return Ok(());
+            }
             if envelope.from_fingerprint == self.device_fingerprint {
                 return Ok(());
             }
@@ -733,6 +952,24 @@ impl ChannelSession {
         false
     }
 
+    fn has_message(&self, candidate: &ChannelMessage) -> bool {
+        self.messages.iter().any(|existing| {
+            existing.from_fingerprint == candidate.from_fingerprint
+                && match (
+                    existing.message_id.as_deref(),
+                    candidate.message_id.as_deref(),
+                ) {
+                    (Some(left), Some(right)) if !left.is_empty() && !right.is_empty() => {
+                        left == right
+                    }
+                    _ => {
+                        existing.sent_at_ms == candidate.sent_at_ms
+                            && existing.body == candidate.body
+                    }
+                }
+        })
+    }
+
     fn snapshot(&self) -> ChannelSnapshot {
         ChannelSnapshot {
             name: self.name.clone(),
@@ -892,6 +1129,22 @@ impl AttachmentSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
+    use crate::adapters::persistence::Persistence;
+    use std::path::PathBuf;
+
+    fn temp_store() -> Arc<AttachmentStore> {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "mosh-channel-attachments-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        Arc::new(AttachmentStore::new(&path).expect("attachment store should init"))
+    }
 
     #[test]
     fn normalize_strips_prefix_and_lowercases() {
@@ -915,5 +1168,80 @@ mod tests {
             Some("mosh-dev")
         );
         assert_eq!(channel_name_from_topic("mls-control/sid"), None);
+    }
+
+    #[test]
+    fn channel_history_survives_restart_without_duplicate_tail() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!(
+            "mosh-channel-rehydrate-{}.redb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [16u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        {
+            let mut channels = ChannelRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            channels
+                .join(JoinChannelRequest {
+                    name: "restart-channel".to_string(),
+                    display_name: "Alice".to_string(),
+                    listen_port: 42340,
+                    static_peer: None,
+                })
+                .expect("channel should join");
+            channels
+                .send("restart-channel", "hello after channel restart".to_string())
+                .expect("channel message should send");
+        }
+
+        let mut revived = ChannelRuntime::from_shared(
+            Arc::clone(&runtime),
+            temp_store(),
+            Some(persistence.clone()),
+        );
+        revived.rehydrate();
+
+        let listing = revived.list().expect("listing should pass");
+        let channel = listing
+            .channels
+            .iter()
+            .find(|channel| channel.name == "restart-channel")
+            .expect("rehydrated channel should be present");
+        assert!(
+            channel
+                .messages
+                .iter()
+                .any(|message| message.body == "hello after channel restart"),
+            "rehydrated channel message missing: {:?}",
+            channel.messages
+        );
+
+        let listing2 = revived.list().expect("second listing should pass");
+        let channel2 = listing2
+            .channels
+            .iter()
+            .find(|channel| channel.name == "restart-channel")
+            .expect("channel should still be present");
+        let matching = channel2
+            .messages
+            .iter()
+            .filter(|message| message.body == "hello after channel restart")
+            .count();
+        assert_eq!(matching, 1, "persist tail duplicated the channel message");
+
+        let _ = std::fs::remove_file(&db_path);
     }
 }
