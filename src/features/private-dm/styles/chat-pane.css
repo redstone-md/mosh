@@ -253,15 +253,6 @@
   color: var(--fg-1);
 }
 
-.message-seal {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 3px;
-  color: rgba(220,228,216,0.38);
-  font-size: 10px;
-}
-
 .nick-anchor {
   position: relative;
   display: inline-flex;

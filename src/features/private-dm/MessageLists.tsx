@@ -1,4 +1,4 @@
-import { IconLock, IconLockOpen, IconMessageCircle } from "@tabler/icons-react";
+import { IconMessageCircle } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
 import { AttachmentCard } from "./attachments";
 import { Avatar } from "./Avatar";
@@ -257,7 +257,7 @@ function GroupMessageRow({
               peer={peer}
             />
             <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
-            <code>MLS</code>
+            <MlsBadge />
             <MessageTimestamp epoch={message.sent_at_ms} />
           </div>
         )}
@@ -272,7 +272,6 @@ function GroupMessageRow({
             onOpen={attachments.onOpen}
           />
         ) : null}
-        <SealLine grouped={grouped} open />
       </div>
     </article>
   );
@@ -298,7 +297,7 @@ function DmMessageRow({
         {grouped ? null : (
           <div className="message-meta">
             <strong>{message.from_device}</strong>
-            <code>MLS</code>
+            <MlsBadge />
             <MessageTimestamp epoch={message.sent_at_ms} />
           </div>
         )}
@@ -314,7 +313,6 @@ function DmMessageRow({
           />
         ) : null}
         {message.call_event ? <CallLogEntry event={message.call_event} /> : null}
-        <SealLine grouped={grouped} />
       </div>
     </article>
   );
@@ -412,15 +410,14 @@ function MessageTimestamp({ epoch }: { epoch?: number }) {
   );
 }
 
-function SealLine({ grouped, open = false }: { grouped: boolean; open?: boolean }) {
-  if (grouped) {
-    return null;
-  }
-  const Icon = open ? IconLockOpen : IconLock;
+function MlsBadge() {
   return (
-    <div className="message-seal">
-      <Icon size={10} />
-      <span>OpenMLS · sealed</span>
-    </div>
+    <code
+      className="message-protocol"
+      title="Message content is protected by OpenMLS"
+      aria-label="OpenMLS protected"
+    >
+      MLS
+    </code>
   );
 }
