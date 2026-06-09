@@ -36,6 +36,8 @@
   and expandable on desktop for readable conversation names.
 - Extract voice-call orchestration from `private-dm-screen.tsx` into a focused
   hook that owns audio, crypto frame polling, mute state, and call actions.
+- Collapse mobile chat actions into a Telegram-like topbar: search opens on
+  demand, while files and delete/leave actions live in the three-dot menu.
 
 ## Deferred
 

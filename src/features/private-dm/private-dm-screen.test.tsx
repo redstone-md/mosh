@@ -387,6 +387,42 @@ describe("PrivateDmScreen", () => {
     );
   });
 
+  it("keeps files and delete behind the chat actions menu", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway([
+      snapshot({
+        messages: [
+          { from_device: "Alice", body: "plain update" },
+          {
+            from_device: "Alice",
+            body: "",
+            attachment: {
+              attachment_id: "brief-file",
+              content_hash: "2".repeat(64),
+              file_name: "brief.pdf",
+              mime: "application/pdf",
+              total_size: 1800,
+            },
+          },
+        ],
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    expect(await screen.findByText("plain update")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "More chat actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Files" }));
+
+    expect(screen.getByText("brief.pdf")).toBeInTheDocument();
+    expect(screen.queryByText("plain update")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "More chat actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete chat" }));
+    expect(
+      screen.getByRole("dialog", { name: "Delete chat with Alice?" }),
+    ).toBeInTheDocument();
+  });
+
   it("filters active messages by text and attachments", async () => {
     const user = userEvent.setup();
     const gateway = createGateway([

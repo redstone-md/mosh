@@ -42,6 +42,63 @@
   margin-left: 0;
 }
 
+.chat-header-actions .chat-mobile-only {
+  display: none;
+}
+
+.chat-more {
+  position: relative;
+}
+
+.chat-more-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 760;
+  min-width: 188px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--bg-0);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
+}
+
+.chat-more-item {
+  width: 100%;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.chat-more-item:hover:not(:disabled) {
+  background: var(--bg-3);
+  color: var(--fg-1);
+}
+
+.chat-more-item:disabled {
+  color: var(--fg-4);
+  cursor: default;
+}
+
+.chat-more-item-danger {
+  color: var(--danger);
+}
+
+.chat-more-item-danger:hover:not(:disabled) {
+  background: rgba(232,106,90,0.12);
+  color: #ff9a8d;
+}
+
 .chat-state-line {
   display: flex;
   align-items: center;
@@ -125,6 +182,12 @@
   font-size: 12.5px;
 }
 
+.conversation-search input:focus,
+.conversation-search input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .conversation-search input::placeholder {
   color: var(--fg-3);
 }
@@ -157,6 +220,11 @@
 
 .conversation-filter button:hover {
   color: var(--fg-1);
+}
+
+.mobile-conversation-search,
+.mobile-active-filter {
+  display: none;
 }
 
 .conversation-filter .conversation-filter-active {
@@ -390,10 +458,11 @@
 @media (max-width: 640px) {
   .chat-header {
     display: grid;
-    grid-template-columns: 32px minmax(0, 1fr);
+    grid-template-columns: 32px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px 12px;
-    padding: 12px 14px;
+    gap: 10px;
+    min-height: 54px;
+    padding: 8px 10px;
   }
 
   .chat-title-block {
@@ -402,38 +471,113 @@
     min-width: 0;
   }
 
+  .chat-title-block h1,
+  .chat-title-block p {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-title-block h1 {
+    font-size: 14px;
+  }
+
+  .chat-title-block p {
+    margin-top: 2px;
+    font-size: 11px;
+  }
+
   .chat-header-actions {
-    grid-column: 2;
-    grid-row: 2;
+    grid-column: 3;
+    grid-row: 1;
     min-width: 0;
-    justify-content: flex-start;
-    gap: 8px;
+    justify-content: flex-end;
+    gap: 4px;
     margin-left: 0;
   }
 
-  .chat-header-actions .fingerprint-badge {
-    flex: 0 1 auto;
+  .chat-header-actions .chat-desktop-only {
+    display: none;
+  }
+
+  .chat-header-actions .chat-mobile-only {
+    display: inline-flex;
+  }
+
+  .chat-header-actions .chat-more.chat-mobile-only {
+    display: block;
+  }
+
+  .chat-header-actions .btn-icon {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+  }
+
+  .chat-header-actions .btn-icon.is-active {
+    background: var(--bg-3);
+    color: var(--fg-1);
+  }
+
+  .chat-more-menu {
+    right: -2px;
+  }
+
+  .conversation-tools-desktop {
+    display: none;
+  }
+
+  .mobile-conversation-search {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 10px 0;
+  }
+
+  .mobile-conversation-search .conversation-search {
+    height: 32px;
+  }
+
+  .mobile-search-close {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+  }
+
+  .mobile-active-filter {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 32px;
+    margin: 8px 10px 0;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg-2);
+    color: var(--fg-3);
+    font-size: 11.5px;
+  }
+
+  .mobile-active-filter span {
     min-width: 0;
-    max-width: calc(100% - 80px);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 650;
   }
 
-  .chat-header-actions .fingerprint-badge code {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-
-  .conversation-tools {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .conversation-filter {
-    width: 100%;
-  }
-
-  .conversation-filter button {
-    flex: 1;
-    justify-content: center;
+  .mobile-active-filter button {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    color: var(--moss);
+    font-size: 11.5px;
+    font-weight: 750;
   }
 }
 
