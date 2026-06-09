@@ -13,6 +13,7 @@ use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
+use crate::adapters::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
 use crate::adapters::persistence::Persistence;
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
@@ -27,12 +28,25 @@ const MAX_LABEL_LEN: usize = 64;
 const MAX_BODY_LEN: usize = 4096;
 const DEDUP_BUFFER_CAP: usize = 4096;
 const INVITE_FINGERPRINT_LEN: usize = 32;
+const OUTBOUND_SCOPE_PRIVATE_GROUP: &str = "private_group";
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn apply_delivery(
+    message: &mut GroupMessage,
+    status: MessageDeliveryStatus,
+    error: Option<String>,
+    retry_count: u32,
+) {
+    message.delivery_status = Some(status);
+    message.delivery_error = error;
+    message.retry_count = Some(retry_count);
+    message.retryable = Some(matches!(status, MessageDeliveryStatus::Failed));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +85,14 @@ pub struct GroupMessage {
     pub sent_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_status: Option<MessageDeliveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +123,11 @@ pub struct GroupListSnapshot {
 pub struct GroupSendResult {
     pub group_id: String,
     pub bytes: usize,
+    pub message_id: String,
+    pub sent_at_ms: u64,
+    pub delivery_status: MessageDeliveryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +144,7 @@ pub enum PrivateGroupError {
     InvalidInvite(String),
     BodyTooLarge,
     MissingGroup(String),
+    MissingMessage(String),
     DuplicateGroup(String),
     NotReady,
     Attachment(String),
@@ -132,6 +160,7 @@ impl std::fmt::Display for PrivateGroupError {
             Self::InvalidInvite(error) => write!(formatter, "invalid group invite: {error}"),
             Self::BodyTooLarge => write!(formatter, "group message too large"),
             Self::MissingGroup(id) => write!(formatter, "group not joined: {id}"),
+            Self::MissingMessage(id) => write!(formatter, "group message missing: {id}"),
             Self::DuplicateGroup(id) => write!(formatter, "already joined group: {id}"),
             Self::NotReady => write!(formatter, "group not ready"),
             Self::Attachment(error) => write!(formatter, "attachment error: {error}"),
@@ -314,6 +343,7 @@ struct GroupSession {
     attachment_store: Arc<AttachmentStore>,
     attachments: AttachmentRuntime,
     attachment_slots: HashMap<String, AttachmentSlot>,
+    outbound_attempts: HashMap<String, OutboundAttemptRecord>,
     dm_offers: Vec<DmOffer>,
 }
 
@@ -420,6 +450,7 @@ impl PrivateGroupRuntime {
                 attachment_store: Arc::clone(&self.attachment_store),
                 attachments: AttachmentRuntime::new(),
                 attachment_slots: HashMap::new(),
+                outbound_attempts: HashMap::new(),
                 dm_offers: Vec::new(),
             };
             if let Ok(messages) = p.list_group_messages(&rec.group_id) {
@@ -463,8 +494,37 @@ impl PrivateGroupRuntime {
                                 }
                             }
                         }
-                        session.messages.push(message);
+                        session.upsert_message(message);
                     }
+                }
+            }
+            if let Ok(rows) = p.list_outbound_attempts(OUTBOUND_SCOPE_PRIVATE_GROUP, &rec.group_id)
+            {
+                for row in rows {
+                    let Ok(attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row) else {
+                        continue;
+                    };
+                    let Ok(mut message) =
+                        serde_json::from_str::<GroupMessage>(&attempt.message_json)
+                    else {
+                        continue;
+                    };
+                    if message.message_id.is_none() {
+                        message.message_id = Some(attempt.message_id.clone());
+                    }
+                    if message.sent_at_ms.is_none() {
+                        message.sent_at_ms = Some(attempt.sent_at_ms);
+                    }
+                    apply_delivery(
+                        &mut message,
+                        attempt.delivery_status,
+                        attempt.delivery_error.clone(),
+                        attempt.retry_count,
+                    );
+                    session.upsert_message(message);
+                    session
+                        .outbound_attempts
+                        .insert(attempt.message_id.clone(), attempt);
                 }
             }
             self.persisted_counts
@@ -524,6 +584,7 @@ impl PrivateGroupRuntime {
             attachment_store: Arc::clone(&self.attachment_store),
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            outbound_attempts: HashMap::new(),
             dm_offers: Vec::new(),
         };
 
@@ -595,6 +656,7 @@ impl PrivateGroupRuntime {
             attachment_store: Arc::clone(&self.attachment_store),
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            outbound_attempts: HashMap::new(),
             dm_offers: Vec::new(),
         };
         self.groups.insert(invite.group_id.clone(), session);
@@ -725,7 +787,7 @@ impl PrivateGroupRuntime {
             return Err(PrivateGroupError::BodyTooLarge);
         }
         self.drain_inbound()?;
-        let result = {
+        let (group_id_owned, data_channel, message_id, sent_at_ms, ciphertext_bytes, payload) = {
             let session = self
                 .groups
                 .get_mut(group_id)
@@ -734,31 +796,218 @@ impl PrivateGroupRuntime {
                 return Err(PrivateGroupError::NotReady);
             }
             let ciphertext = session.crypto.encrypt(body.as_bytes())?;
-            let message = session.stamp_message(GroupMessage {
+            let mut message = session.stamp_message(GroupMessage {
                 from_device: session.display_name.clone(),
                 from_fingerprint: session.device_fingerprint.clone(),
                 body,
                 message_id: None,
                 sent_at_ms: None,
                 attachment: None,
+                delivery_status: Some(MessageDeliveryStatus::Pending),
+                delivery_error: None,
+                retryable: None,
+                retry_count: Some(0),
             });
+            let message_id = message.message_id.clone().unwrap_or_default();
+            let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+            message.message_id = Some(message_id.clone());
+            message.sent_at_ms = Some(sent_at_ms);
             let envelope = DataEnvelope {
                 group_id: session.group_id.clone(),
                 participant_id: session.participant_id.clone(),
                 from_device: session.display_name.clone(),
                 from_fingerprint: session.device_fingerprint.clone(),
-                message_id: message.message_id.clone(),
-                sent_at_ms: message.sent_at_ms,
+                message_id: Some(message_id.clone()),
+                sent_at_ms: Some(sent_at_ms),
                 ciphertext_b64: encode(&ciphertext),
             };
-            publish_json(&session.node, &session.data_channel, &envelope)?;
-            session.messages.push(message);
-            GroupSendResult {
-                group_id: session.group_id.clone(),
-                bytes: ciphertext.len(),
+            let payload = serde_json::to_vec(&envelope)
+                .map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
+            let attempt = OutboundAttemptRecord {
+                conversation_id: session.group_id.clone(),
+                message_id: message_id.clone(),
+                sent_at_ms,
+                ciphertext_bytes: ciphertext.len(),
+                message_json: serde_json::to_string(&message)
+                    .map_err(|error| PrivateGroupError::Codec(error.to_string()))?,
+                publish_payload_b64: encode(&payload),
+                delivery_status: MessageDeliveryStatus::Pending,
+                delivery_error: None,
+                retry_count: 0,
+            };
+            session.upsert_message(message);
+            session.outbound_attempts.insert(message_id.clone(), attempt);
+            (
+                session.group_id.clone(),
+                session.data_channel.clone(),
+                message_id,
+                sent_at_ms,
+                ciphertext.len(),
+                payload,
+            )
+        };
+        self.persist_outbound_state(group_id, &message_id, true);
+        let publish = {
+            let session = self
+                .groups
+                .get(group_id)
+                .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+            session
+                .node
+                .publish(&data_channel, &payload)
+                .map_err(|error| PrivateGroupError::Moss(error.to_string()))
+        };
+        let result = match publish {
+            Ok(()) => {
+                let session = self
+                    .groups
+                    .get_mut(group_id)
+                    .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+                session.mark_delivery(&message_id, MessageDeliveryStatus::Sent, None, 0)?;
+                session.outbound_attempts.remove(&message_id);
+                GroupSendResult {
+                    group_id: group_id_owned,
+                    bytes: ciphertext_bytes,
+                    message_id: message_id.clone(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Sent,
+                    delivery_error: None,
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let session = self
+                    .groups
+                    .get_mut(group_id)
+                    .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+                let retry_count = if let Some(attempt) = session.outbound_attempts.get_mut(&message_id)
+                {
+                    attempt.delivery_status = MessageDeliveryStatus::Failed;
+                    attempt.delivery_error = Some(error_text.clone());
+                    attempt.retry_count
+                } else {
+                    0
+                };
+                session.mark_delivery(
+                    &message_id,
+                    MessageDeliveryStatus::Failed,
+                    Some(error_text.clone()),
+                    retry_count,
+                )?;
+                session.sync_attempt_message_json(&message_id)?;
+                GroupSendResult {
+                    group_id: group_id_owned,
+                    bytes: ciphertext_bytes,
+                    message_id: message_id.clone(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Failed,
+                    delivery_error: Some(error_text),
+                }
             }
         };
+        self.persist_outbound_state(group_id, &message_id, false);
         self.persist_group_tail();
+        Ok(result)
+    }
+
+    pub fn retry_message(
+        &mut self,
+        group_id: &str,
+        message_id: &str,
+    ) -> Result<GroupSendResult, PrivateGroupError> {
+        self.drain_inbound()?;
+        let (group_id_owned, data_channel, sent_at_ms, ciphertext_bytes, retry_count, payload) = {
+            let session = self
+                .groups
+                .get_mut(group_id)
+                .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+            let (payload_b64, sent_at_ms, ciphertext_bytes) = {
+                let attempt = session
+                    .outbound_attempts
+                    .get_mut(message_id)
+                    .ok_or_else(|| PrivateGroupError::MissingMessage(message_id.to_string()))?;
+                attempt.retry_count = attempt.retry_count.saturating_add(1);
+                attempt.delivery_status = MessageDeliveryStatus::Pending;
+                attempt.delivery_error = None;
+                (
+                    attempt.publish_payload_b64.clone(),
+                    attempt.sent_at_ms,
+                    attempt.ciphertext_bytes,
+                )
+            };
+            let payload = decode(&payload_b64)?;
+            let retry_count = session
+                .outbound_attempts
+                .get(message_id)
+                .map(|attempt| attempt.retry_count)
+                .unwrap_or(0);
+            session.mark_delivery(message_id, MessageDeliveryStatus::Pending, None, retry_count)?;
+            session.sync_attempt_message_json(message_id)?;
+            (
+                session.group_id.clone(),
+                session.data_channel.clone(),
+                sent_at_ms,
+                ciphertext_bytes,
+                retry_count,
+                payload,
+            )
+        };
+        self.persist_outbound_state(group_id, message_id, false);
+        let publish = {
+            let session = self
+                .groups
+                .get(group_id)
+                .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+            session
+                .node
+                .publish(&data_channel, &payload)
+                .map_err(|error| PrivateGroupError::Moss(error.to_string()))
+        };
+        let result = match publish {
+            Ok(()) => {
+                let session = self
+                    .groups
+                    .get_mut(group_id)
+                    .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+                session.mark_delivery(message_id, MessageDeliveryStatus::Sent, None, retry_count)?;
+                session.outbound_attempts.remove(message_id);
+                GroupSendResult {
+                    group_id: group_id_owned,
+                    bytes: ciphertext_bytes,
+                    message_id: message_id.to_string(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Sent,
+                    delivery_error: None,
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let session = self
+                    .groups
+                    .get_mut(group_id)
+                    .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+                if let Some(attempt) = session.outbound_attempts.get_mut(message_id) {
+                    attempt.delivery_status = MessageDeliveryStatus::Failed;
+                    attempt.delivery_error = Some(error_text.clone());
+                }
+                session.mark_delivery(
+                    message_id,
+                    MessageDeliveryStatus::Failed,
+                    Some(error_text.clone()),
+                    retry_count,
+                )?;
+                session.sync_attempt_message_json(message_id)?;
+                GroupSendResult {
+                    group_id: group_id_owned,
+                    bytes: ciphertext_bytes,
+                    message_id: message_id.to_string(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Failed,
+                    delivery_error: Some(error_text),
+                }
+            }
+        };
+        self.persist_outbound_state(group_id, message_id, false);
         Ok(result)
     }
 
@@ -925,6 +1174,79 @@ impl PrivateGroupRuntime {
             self.persisted_counts.insert(group_id, count);
         }
     }
+
+    fn persist_outbound_state(&mut self, group_id: &str, message_id: &str, persist_snapshot: bool) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let (
+            sent_at_ms,
+            message_row,
+            attempt_row,
+            snapshot,
+            group_row,
+            needs_record_refresh,
+        ) = {
+            let Some(session) = self.groups.get(group_id) else {
+                return;
+            };
+            let Some(message) = session
+                .messages
+                .iter()
+                .find(|message| message.message_id.as_deref() == Some(message_id))
+            else {
+                return;
+            };
+            let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+            let message_row = serde_json::to_vec(&PersistedGroupMessage {
+                conversation_id: session.group_id.clone(),
+                sent_at_ms,
+                message_id: message_id.to_string(),
+                message: message.clone(),
+            })
+            .ok();
+            let attempt_row = session
+                .outbound_attempts
+                .get(message_id)
+                .and_then(|attempt| serde_json::to_vec(attempt).ok());
+            let snapshot = persist_snapshot.then(|| session.crypto.snapshot());
+            let needs_record_refresh =
+                !self.finalized_group_records.contains(group_id)
+                    && session.crypto.group_id_bytes().is_some();
+            let group_row = needs_record_refresh
+                .then(|| serde_json::to_vec(&session.to_persisted_record()).ok())
+                .flatten();
+            (
+                sent_at_ms,
+                message_row,
+                attempt_row,
+                snapshot,
+                group_row,
+                needs_record_refresh,
+            )
+        };
+
+        if let Some(row) = message_row {
+            let _ = p.append_group_message(group_id, sent_at_ms, message_id, &row);
+        }
+        if let Some(snapshot) = snapshot {
+            let _ = p.put_group_mls_snapshot(group_id, &snapshot);
+        }
+        match attempt_row {
+            Some(row) => {
+                let _ = p.put_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_GROUP, group_id, message_id, &row);
+            }
+            None => {
+                let _ = p.delete_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_GROUP, group_id, message_id);
+            }
+        }
+        if let Some(row) = group_row {
+            let _ = p.put_group(group_id, &row);
+            if needs_record_refresh {
+                self.finalized_group_records.insert(group_id.to_string());
+            }
+        }
+    }
 }
 
 impl GroupSession {
@@ -935,6 +1257,74 @@ impl GroupSession {
             message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
         }
         message
+    }
+
+    fn upsert_message(&mut self, message: GroupMessage) {
+        if let Some(message_id) = message.message_id.as_deref() {
+            if let Some(existing) = self
+                .messages
+                .iter_mut()
+                .find(|existing| existing.message_id.as_deref() == Some(message_id))
+            {
+                *existing = message;
+                return;
+            }
+        }
+        self.messages.push(message);
+    }
+
+    fn find_message_mut(&mut self, message_id: &str) -> Option<&mut GroupMessage> {
+        self.messages
+            .iter_mut()
+            .find(|message| message.message_id.as_deref() == Some(message_id))
+    }
+
+    fn has_message(&self, candidate: &GroupMessage) -> bool {
+        self.messages.iter().any(|existing| {
+            existing.from_fingerprint == candidate.from_fingerprint
+                && match (
+                    existing.message_id.as_deref(),
+                    candidate.message_id.as_deref(),
+                ) {
+                    (Some(left), Some(right)) if !left.is_empty() && !right.is_empty() => {
+                        left == right
+                    }
+                    _ => {
+                        existing.sent_at_ms == candidate.sent_at_ms
+                            && existing.body == candidate.body
+                    }
+                }
+        })
+    }
+
+    fn mark_delivery(
+        &mut self,
+        message_id: &str,
+        status: MessageDeliveryStatus,
+        error: Option<String>,
+        retry_count: u32,
+    ) -> Result<(), PrivateGroupError> {
+        let message = self
+            .find_message_mut(message_id)
+            .ok_or_else(|| PrivateGroupError::MissingMessage(message_id.to_string()))?;
+        apply_delivery(message, status, error, retry_count);
+        Ok(())
+    }
+
+    fn sync_attempt_message_json(&mut self, message_id: &str) -> Result<(), PrivateGroupError> {
+        let message_json = self
+            .messages
+            .iter()
+            .find(|message| message.message_id.as_deref() == Some(message_id))
+            .ok_or_else(|| PrivateGroupError::MissingMessage(message_id.to_string()))
+            .and_then(|message| {
+                serde_json::to_string(message)
+                    .map_err(|error| PrivateGroupError::Codec(error.to_string()))
+            })?;
+        if let Some(attempt) = self.outbound_attempts.get_mut(message_id) {
+            attempt.message_json = message_json;
+        }
+        Ok(())
     }
 
     fn to_persisted_record(&self) -> PersistedGroupSession {
@@ -1152,7 +1542,14 @@ impl GroupSession {
             message_id: envelope.message_id,
             sent_at_ms: envelope.sent_at_ms,
             attachment: None,
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
+        if self.has_message(&message) {
+            return Ok(());
+        }
         self.messages.push(message);
         Ok(())
     }
@@ -1247,6 +1644,10 @@ impl GroupSession {
             message_id: None,
             sent_at_ms: None,
             attachment: Some(descriptor),
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
         self.messages.push(message);
         Ok(())
@@ -1309,6 +1710,10 @@ impl GroupSession {
             message_id: None,
             sent_at_ms: None,
             attachment: Some(descriptor),
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
         self.messages.push(message);
         Ok(AttachmentSendResult {
@@ -1635,7 +2040,9 @@ fn optional_query(url: &url::Url, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
+    use crate::adapters::moss_ffi::{
+        drain_received_messages, fail_next_test_publish, MossFfiRuntime, MOSS_TEST_LOCK,
+    };
     use crate::adapters::persistence::Persistence;
     use std::path::PathBuf;
 
@@ -1768,6 +2175,140 @@ mod tests {
             .filter(|message| message.body == "hello after group restart")
             .count();
         assert_eq!(matching, 1, "persist tail duplicated the group message");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn failed_send_rehydrates_as_retryable_message() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-group-failed-send-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [21u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let (group_id, message_id) = {
+            let mut groups = PrivateGroupRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let created = groups
+                .create_group(CreateGroupRequest {
+                    label: Some("Retry Club".to_string()),
+                    display_name: "Alice".to_string(),
+                    listen_port: 42241,
+                    static_peer: None,
+                })
+                .expect("group should be created");
+            let _publish_fail = fail_next_test_publish("simulated publish failure");
+            let result = groups
+                .send(&created.group_id, "hello failed group".to_string())
+                .expect("send should return failed result");
+            assert_eq!(result.delivery_status, MessageDeliveryStatus::Failed);
+            assert_eq!(
+                result.delivery_error.as_deref(),
+                Some("Moss error: simulated publish failure")
+            );
+
+            let live = groups
+                .poll(&created.group_id)
+                .expect("poll should surface failed message");
+            let failed = live
+                .messages
+                .iter()
+                .find(|message| message.message_id.as_deref() == Some(result.message_id.as_str()))
+                .expect("failed message should be recorded");
+            assert_eq!(failed.delivery_status, Some(MessageDeliveryStatus::Failed));
+            assert_eq!(failed.retryable, Some(true));
+
+            (created.group_id, result.message_id)
+        };
+
+        let mut revived =
+            PrivateGroupRuntime::from_shared(Arc::clone(&runtime), temp_store(), Some(persistence));
+        revived.rehydrate();
+        let listing = revived.list().expect("listing should pass");
+        let group = listing
+            .groups
+            .iter()
+            .find(|group| group.group_id == group_id)
+            .expect("rehydrated group should be present");
+        let failed = group
+            .messages
+            .iter()
+            .find(|message| message.message_id.as_deref() == Some(message_id.as_str()))
+            .expect("failed message should rehydrate");
+        assert_eq!(failed.delivery_status, Some(MessageDeliveryStatus::Failed));
+        assert_eq!(failed.retryable, Some(true));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn retry_message_reuses_message_id_and_clears_failed_attempt() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-group-retry-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [22u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let (group_id, failed_message_id) = {
+            let mut groups = PrivateGroupRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let created = groups
+                .create_group(CreateGroupRequest {
+                    label: Some("Retry Club".to_string()),
+                    display_name: "Alice".to_string(),
+                    listen_port: 42242,
+                    static_peer: None,
+                })
+                .expect("group should be created");
+            let _publish_fail = fail_next_test_publish("simulated publish failure");
+            let failed = groups
+                .send(&created.group_id, "retry this group message".to_string())
+                .expect("failed send should still return a result");
+
+            let retried = groups
+                .retry_message(&created.group_id, &failed.message_id)
+                .expect("retry should succeed");
+            assert_eq!(retried.message_id, failed.message_id);
+            assert_eq!(retried.delivery_status, MessageDeliveryStatus::Sent);
+
+            let snapshot = groups.poll(&created.group_id).expect("poll should pass");
+            let matching: Vec<&GroupMessage> = snapshot
+                .messages
+                .iter()
+                .filter(|message| message.message_id.as_deref() == Some(failed.message_id.as_str()))
+                .collect();
+            assert_eq!(matching.len(), 1, "retry should update, not duplicate, the row");
+            assert_eq!(matching[0].delivery_status, Some(MessageDeliveryStatus::Sent));
+            assert_eq!(matching[0].retry_count, Some(1));
+
+            (created.group_id, failed.message_id)
+        };
+
+        let stored_attempt = persistence
+            .get_outbound_attempt("private_group", &group_id, &failed_message_id)
+            .expect("lookup should pass");
+        assert!(stored_attempt.is_none());
 
         let _ = std::fs::remove_file(&db_path);
     }

@@ -74,6 +74,8 @@ const EVENT_RING_CAPACITY: usize = 64;
 
 static RECEIVED_MESSAGES: Mutex<Vec<MossReceivedMessage>> = Mutex::new(Vec::new());
 static EVENT_LOG: Mutex<Vec<MossEvent>> = Mutex::new(Vec::new());
+#[cfg(test)]
+static TEST_PUBLISH_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
 /// Backing store for the Moss node identity. Implemented by the encrypted
 /// persistence layer; held in a process global because the C keystore callbacks
@@ -114,6 +116,7 @@ pub enum MossFfiError {
     InvalidCString(String),
     Operation { name: &'static str, code: i32 },
     DeliveryTimeout,
+    InjectedPublishFailure(String),
 }
 
 impl std::fmt::Display for MossFfiError {
@@ -124,6 +127,7 @@ impl std::fmt::Display for MossFfiError {
             Self::InvalidCString(value) => write!(formatter, "Moss string contains NUL: {value}"),
             Self::Operation { name, code } => write!(formatter, "Moss {name} failed: {code}"),
             Self::DeliveryTimeout => write!(formatter, "Moss delivery timed out"),
+            Self::InjectedPublishFailure(message) => write!(formatter, "{message}"),
         }
     }
 }
@@ -133,6 +137,26 @@ impl std::error::Error for MossFfiError {}
 impl From<MossRuntimeError> for MossFfiError {
     fn from(error: MossRuntimeError) -> Self {
         Self::Runtime(error)
+    }
+}
+
+#[cfg(test)]
+pub struct TestPublishFailureGuard;
+
+#[cfg(test)]
+pub fn fail_next_test_publish(message: &str) -> TestPublishFailureGuard {
+    *TEST_PUBLISH_FAILURE
+        .lock()
+        .expect("test publish failure lock poisoned") = Some(message.to_string());
+    TestPublishFailureGuard
+}
+
+#[cfg(test)]
+impl Drop for TestPublishFailureGuard {
+    fn drop(&mut self) {
+        *TEST_PUBLISH_FAILURE
+            .lock()
+            .expect("test publish failure lock poisoned") = None;
     }
 }
 
@@ -283,6 +307,15 @@ impl MossNode {
     }
 
     pub fn publish(&self, channel: &str, payload: &[u8]) -> Result<(), MossFfiError> {
+        #[cfg(test)]
+        if let Some(message) = TEST_PUBLISH_FAILURE
+            .lock()
+            .expect("test publish failure lock poisoned")
+            .take()
+        {
+            return Err(MossFfiError::InjectedPublishFailure(message));
+        }
+
         let channel = c_string(channel)?;
         let code = unsafe {
             (self.runtime.publish)(

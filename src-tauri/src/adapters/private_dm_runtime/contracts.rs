@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::attachment_runtime::VoiceMeta;
 use crate::adapters::mls_crypto::MlsCryptoError;
+pub use crate::adapters::outbound_delivery::MessageDeliveryStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartSessionRequest {
@@ -132,6 +133,14 @@ pub struct ChatMessage {
     pub attachment: Option<AttachmentDescriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_event: Option<CallEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_status: Option<MessageDeliveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -248,6 +257,11 @@ pub struct SendMessageResult {
     pub session_id: String,
     pub state: String,
     pub ciphertext_bytes: usize,
+    pub message_id: String,
+    pub sent_at_ms: u64,
+    pub delivery_status: MessageDeliveryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -258,6 +272,7 @@ pub enum PrivateDmRuntimeError {
     InvalidInvite(String),
     NotReady,
     MissingSession,
+    MissingMessage(String),
     DuplicateSession(String),
     Attachment(String),
     MissingAttachment(String),
@@ -272,6 +287,7 @@ impl std::fmt::Display for PrivateDmRuntimeError {
             Self::InvalidInvite(error) => write!(formatter, "invalid invite: {error}"),
             Self::NotReady => write!(formatter, "private DM session is not ready"),
             Self::MissingSession => write!(formatter, "private DM session is missing"),
+            Self::MissingMessage(id) => write!(formatter, "private DM message is missing: {id}"),
             Self::DuplicateSession(id) => {
                 write!(formatter, "private DM session already exists: {id}")
             }
@@ -355,6 +371,10 @@ mod tests {
                 duration_ms: 9000,
                 call_id: "c1".into(),
             }),
+            delivery_status: Some(MessageDeliveryStatus::Failed),
+            delivery_error: Some("publish failed".into()),
+            retryable: Some(true),
+            retry_count: Some(2),
         };
         let pm = PersistedMessage {
             conversation_id: "conv".into(),
@@ -368,5 +388,6 @@ mod tests {
         let ce = back.message.call_event.unwrap();
         assert_eq!(ce.kind, "completed");
         assert_eq!(ce.duration_ms, 9000);
+        assert_eq!(back.message.retry_count, Some(2));
     }
 }

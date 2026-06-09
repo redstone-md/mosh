@@ -66,6 +66,7 @@ const GROUP_MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("group
 const GROUPS: TableDefinition<&str, &[u8]> = TableDefinition::new("groups");
 const CHANNEL_MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("channel_messages");
 const CHANNELS: TableDefinition<&str, &[u8]> = TableDefinition::new("channels");
+const OUTBOUND_ATTEMPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("outbound_attempts");
 const MOSS_IDENTITY: TableDefinition<&str, &[u8]> = TableDefinition::new("moss_identity");
 // Single-row table: the device's stable Moss transport identity (libp2p key).
 const MOSS_IDENTITY_KEY: &str = "node-identity-v1";
@@ -130,6 +131,8 @@ impl Persistence {
             wtx.open_table(CHANNEL_MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(CHANNELS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(OUTBOUND_ATTEMPTS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -207,6 +210,36 @@ impl Persistence {
         Ok(out)
     }
 
+    fn delete_prefix(
+        &self,
+        wtx: &redb::WriteTransaction,
+        table: TableDefinition<&str, &[u8]>,
+        prefix: &str,
+    ) -> Result<(), PersistenceError> {
+        let lo = format!("{prefix}\u{0001}");
+        let hi = format!("{prefix}\u{0002}");
+        let mut rows = wtx
+            .open_table(table)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let keys: Vec<String> = rows
+            .range(lo.as_str()..hi.as_str())
+            .map_err(|e| PersistenceError::Db(e.to_string()))?
+            .map(|item| {
+                item.map(|(k, _)| k.value().to_string())
+                    .map_err(|e| PersistenceError::Db(e.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+        for key in keys {
+            rows.remove(key.as_str())
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn outbound_attempt_prefix(scope: &str, conversation_id: &str) -> String {
+        format!("{scope}\u{0001}{conversation_id}")
+    }
+
     pub fn put_mls_snapshot(
         &self,
         session_id: &str,
@@ -254,6 +287,69 @@ impl Persistence {
         self.range_prefix(MESSAGES, conversation_id)
     }
 
+    pub fn put_outbound_attempt(
+        &self,
+        scope: &str,
+        conversation_id: &str,
+        message_id: &str,
+        json: &[u8],
+    ) -> Result<(), PersistenceError> {
+        let key = format!(
+            "{}\u{0001}{message_id}",
+            Self::outbound_attempt_prefix(scope, conversation_id)
+        );
+        self.put(OUTBOUND_ATTEMPTS, &key, json)
+    }
+
+    pub fn get_outbound_attempt(
+        &self,
+        scope: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<Option<Vec<u8>>, PersistenceError> {
+        let key = format!(
+            "{}\u{0001}{message_id}",
+            Self::outbound_attempt_prefix(scope, conversation_id)
+        );
+        self.get(OUTBOUND_ATTEMPTS, &key)
+    }
+
+    pub fn list_outbound_attempts(
+        &self,
+        scope: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<Vec<u8>>, PersistenceError> {
+        self.range_prefix(
+            OUTBOUND_ATTEMPTS,
+            &Self::outbound_attempt_prefix(scope, conversation_id),
+        )
+    }
+
+    pub fn delete_outbound_attempt(
+        &self,
+        scope: &str,
+        conversation_id: &str,
+        message_id: &str,
+    ) -> Result<(), PersistenceError> {
+        let key = format!(
+            "{}\u{0001}{message_id}",
+            Self::outbound_attempt_prefix(scope, conversation_id)
+        );
+        let wtx = self
+            .db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        {
+            let mut rows = wtx
+                .open_table(OUTBOUND_ATTEMPTS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            rows.remove(key.as_str())
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))
+    }
+
     /// Permanently remove a conversation: its session record, MLS snapshot and
     /// every persisted message. Used when the user deletes a chat so it does
     /// not return on the next launch.
@@ -279,24 +375,14 @@ impl Persistence {
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         {
-            let lo = format!("{session_id}\u{0001}");
-            let hi = format!("{session_id}\u{0002}");
-            let mut messages = wtx
-                .open_table(MESSAGES)
-                .map_err(|e| PersistenceError::Db(e.to_string()))?;
-            let keys: Vec<String> = messages
-                .range(lo.as_str()..hi.as_str())
-                .map_err(|e| PersistenceError::Db(e.to_string()))?
-                .map(|item| {
-                    item.map(|(k, _)| k.value().to_string())
-                        .map_err(|e| PersistenceError::Db(e.to_string()))
-                })
-                .collect::<Result<_, _>>()?;
-            for key in keys {
-                messages
-                    .remove(key.as_str())
-                    .map_err(|e| PersistenceError::Db(e.to_string()))?;
-            }
+            self.delete_prefix(&wtx, MESSAGES, session_id)?;
+        }
+        {
+            self.delete_prefix(
+                &wtx,
+                OUTBOUND_ATTEMPTS,
+                &Self::outbound_attempt_prefix("private_dm", session_id),
+            )?;
         }
         wtx.commit()
             .map_err(|e| PersistenceError::Db(e.to_string()))
@@ -379,24 +465,14 @@ impl Persistence {
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         {
-            let lo = format!("{group_id}\u{0001}");
-            let hi = format!("{group_id}\u{0002}");
-            let mut messages = wtx
-                .open_table(GROUP_MESSAGES)
-                .map_err(|e| PersistenceError::Db(e.to_string()))?;
-            let keys: Vec<String> = messages
-                .range(lo.as_str()..hi.as_str())
-                .map_err(|e| PersistenceError::Db(e.to_string()))?
-                .map(|item| {
-                    item.map(|(k, _)| k.value().to_string())
-                        .map_err(|e| PersistenceError::Db(e.to_string()))
-                })
-                .collect::<Result<_, _>>()?;
-            for key in keys {
-                messages
-                    .remove(key.as_str())
-                    .map_err(|e| PersistenceError::Db(e.to_string()))?;
-            }
+            self.delete_prefix(&wtx, GROUP_MESSAGES, group_id)?;
+        }
+        {
+            self.delete_prefix(
+                &wtx,
+                OUTBOUND_ATTEMPTS,
+                &Self::outbound_attempt_prefix("private_group", group_id),
+            )?;
         }
         wtx.commit()
             .map_err(|e| PersistenceError::Db(e.to_string()))
@@ -454,24 +530,14 @@ impl Persistence {
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         {
-            let lo = format!("{name}\u{0001}");
-            let hi = format!("{name}\u{0002}");
-            let mut messages = wtx
-                .open_table(CHANNEL_MESSAGES)
-                .map_err(|e| PersistenceError::Db(e.to_string()))?;
-            let keys: Vec<String> = messages
-                .range(lo.as_str()..hi.as_str())
-                .map_err(|e| PersistenceError::Db(e.to_string()))?
-                .map(|item| {
-                    item.map(|(k, _)| k.value().to_string())
-                        .map_err(|e| PersistenceError::Db(e.to_string()))
-                })
-                .collect::<Result<_, _>>()?;
-            for key in keys {
-                messages
-                    .remove(key.as_str())
-                    .map_err(|e| PersistenceError::Db(e.to_string()))?;
-            }
+            self.delete_prefix(&wtx, CHANNEL_MESSAGES, name)?;
+        }
+        {
+            self.delete_prefix(
+                &wtx,
+                OUTBOUND_ATTEMPTS,
+                &Self::outbound_attempt_prefix("channel", name),
+            )?;
         }
         wtx.commit()
             .map_err(|e| PersistenceError::Db(e.to_string()))
@@ -530,6 +596,8 @@ impl Persistence {
             wtx.open_table(CHANNEL_MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(CHANNELS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(OUTBOUND_ATTEMPTS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -697,6 +765,54 @@ mod tests {
         p.delete_channel("general").unwrap();
         assert!(p.list_channels().unwrap().is_empty());
         assert!(p.list_channel_messages("general").unwrap().is_empty());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn outbound_attempts_round_trip_in_order_and_delete_with_conversation() {
+        let dir = std::env::temp_dir().join(format!("mosh-outbound-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("outbound.redb");
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [21u8; 32]).unwrap();
+
+        p.put_outbound_attempt("private_dm", "s1", "m2", br#"{"message_id":"m2"}"#)
+            .unwrap();
+        p.put_outbound_attempt("private_dm", "s1", "m1", br#"{"message_id":"m1"}"#)
+            .unwrap();
+        p.put_outbound_attempt("private_group", "g1", "gm1", br#"{"message_id":"gm1"}"#)
+            .unwrap();
+        p.put_outbound_attempt("channel", "general", "cm1", br#"{"message_id":"cm1"}"#)
+            .unwrap();
+
+        assert_eq!(
+            p.get_outbound_attempt("private_dm", "s1", "m1")
+                .unwrap()
+                .unwrap(),
+            br#"{"message_id":"m1"}"#
+        );
+        assert_eq!(
+            p.list_outbound_attempts("private_dm", "s1").unwrap(),
+            vec![
+                br#"{"message_id":"m1"}"#.to_vec(),
+                br#"{"message_id":"m2"}"#.to_vec()
+            ]
+        );
+
+        p.delete_session("s1").unwrap();
+        p.delete_group("g1").unwrap();
+        p.delete_channel("general").unwrap();
+
+        assert!(p.list_outbound_attempts("private_dm", "s1").unwrap().is_empty());
+        assert!(p
+            .list_outbound_attempts("private_group", "g1")
+            .unwrap()
+            .is_empty());
+        assert!(p
+            .list_outbound_attempts("channel", "general")
+            .unwrap()
+            .is_empty());
 
         std::fs::remove_file(&path).ok();
     }

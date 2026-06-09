@@ -13,6 +13,7 @@ use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
+use crate::adapters::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
 use crate::adapters::persistence::Persistence;
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
@@ -25,12 +26,25 @@ const MESH_PREFIX: &str = "channel/";
 const MAX_NAME_LEN: usize = 64;
 const MAX_BODY_LEN: usize = 4096;
 const DEDUP_BUFFER_CAP: usize = 4096;
+const OUTBOUND_SCOPE_CHANNEL: &str = "channel";
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn apply_delivery(
+    message: &mut ChannelMessage,
+    status: MessageDeliveryStatus,
+    error: Option<String>,
+    retry_count: u32,
+) {
+    message.delivery_status = Some(status);
+    message.delivery_error = error;
+    message.retry_count = Some(retry_count);
+    message.retryable = Some(matches!(status, MessageDeliveryStatus::Failed));
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +66,14 @@ pub struct ChannelMessage {
     pub sent_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_status: Option<MessageDeliveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +158,11 @@ pub struct ChannelListSnapshot {
 pub struct ChannelSendResult {
     pub name: String,
     pub bytes: usize,
+    pub message_id: String,
+    pub sent_at_ms: u64,
+    pub delivery_status: MessageDeliveryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +178,7 @@ pub enum ChannelRuntimeError {
     InvalidName(String),
     BodyTooLarge,
     MissingChannel(String),
+    MissingMessage(String),
     DuplicateChannel(String),
     Attachment(String),
     MissingAttachment(String),
@@ -164,6 +192,7 @@ impl std::fmt::Display for ChannelRuntimeError {
             Self::InvalidName(name) => write!(formatter, "invalid channel name: {name}"),
             Self::BodyTooLarge => write!(formatter, "channel message too large"),
             Self::MissingChannel(name) => write!(formatter, "channel not joined: {name}"),
+            Self::MissingMessage(id) => write!(formatter, "channel message missing: {id}"),
             Self::DuplicateChannel(name) => write!(formatter, "already joined channel: {name}"),
             Self::Attachment(error) => write!(formatter, "attachment error: {error}"),
             Self::MissingAttachment(id) => write!(formatter, "attachment not found: {id}"),
@@ -209,6 +238,7 @@ struct ChannelSession {
     attachment_store: Arc<AttachmentStore>,
     attachments: AttachmentRuntime,
     attachment_slots: HashMap<String, AttachmentSlot>,
+    outbound_attempts: HashMap<String, OutboundAttemptRecord>,
     dm_offers: Vec<DmOffer>,
 }
 
@@ -283,6 +313,7 @@ impl ChannelRuntime {
                 attachment_store: Arc::clone(&self.attachment_store),
                 attachments: AttachmentRuntime::new(),
                 attachment_slots: HashMap::new(),
+                outbound_attempts: HashMap::new(),
                 dm_offers: Vec::new(),
             };
             if let Ok(messages) = p.list_channel_messages(&rec.name) {
@@ -325,8 +356,35 @@ impl ChannelRuntime {
                                 }
                             }
                         }
-                        session.messages.push(message);
+                        session.upsert_message(message);
                     }
+                }
+            }
+            if let Ok(rows) = p.list_outbound_attempts(OUTBOUND_SCOPE_CHANNEL, &rec.name) {
+                for row in rows {
+                    let Ok(attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row) else {
+                        continue;
+                    };
+                    let Ok(mut message) = serde_json::from_str::<ChannelMessage>(&attempt.message_json)
+                    else {
+                        continue;
+                    };
+                    if message.message_id.is_none() {
+                        message.message_id = Some(attempt.message_id.clone());
+                    }
+                    if message.sent_at_ms.is_none() {
+                        message.sent_at_ms = Some(attempt.sent_at_ms);
+                    }
+                    apply_delivery(
+                        &mut message,
+                        attempt.delivery_status,
+                        attempt.delivery_error.clone(),
+                        attempt.retry_count,
+                    );
+                    session.upsert_message(message);
+                    session
+                        .outbound_attempts
+                        .insert(attempt.message_id.clone(), attempt);
                 }
             }
             self.persisted_counts
@@ -377,6 +435,7 @@ impl ChannelRuntime {
             attachment_store: Arc::clone(&self.attachment_store),
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            outbound_attempts: HashMap::new(),
             dm_offers: Vec::new(),
         };
 
@@ -454,32 +513,215 @@ impl ChannelRuntime {
         }
         self.drain_inbound()?;
         let normalized = normalize_name(name)?;
-        let result = {
+        let (channel_name, topic, message_id, sent_at_ms, payload_len, payload) = {
             let session = self
                 .channels
                 .get_mut(&normalized)
                 .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-            let envelope = session.stamp_message(ChannelMessage {
+            let mut message = session.stamp_message(ChannelMessage {
                 from_device: session.display_name.clone(),
                 from_fingerprint: session.device_fingerprint.clone(),
-                body: body.clone(),
+                body,
                 message_id: None,
                 sent_at_ms: None,
                 attachment: None,
+                delivery_status: Some(MessageDeliveryStatus::Pending),
+                delivery_error: None,
+                retryable: None,
+                retry_count: Some(0),
             });
-            let payload = serde_json::to_vec(&envelope)
+            let message_id = message.message_id.clone().unwrap_or_default();
+            let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+            message.message_id = Some(message_id.clone());
+            message.sent_at_ms = Some(sent_at_ms);
+            let payload = serde_json::to_vec(&session.publishable_message(&message))
                 .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
+            let attempt = OutboundAttemptRecord {
+                conversation_id: session.name.clone(),
+                message_id: message_id.clone(),
+                sent_at_ms,
+                ciphertext_bytes: payload.len(),
+                message_json: serde_json::to_string(&message)
+                    .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?,
+                publish_payload_b64: encode(&payload),
+                delivery_status: MessageDeliveryStatus::Pending,
+                delivery_error: None,
+                retry_count: 0,
+            };
+            session.upsert_message(message);
+            session.outbound_attempts.insert(message_id.clone(), attempt);
+            (
+                session.name.clone(),
+                session.topic.clone(),
+                message_id,
+                sent_at_ms,
+                payload.len(),
+                payload,
+            )
+        };
+        self.persist_outbound_state(&normalized, &message_id);
+        let publish = {
+            let session = self
+                .channels
+                .get(&normalized)
+                .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
             session
                 .node
-                .publish(&session.topic, &payload)
-                .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-            session.messages.push(envelope);
-
-            ChannelSendResult {
-                name: normalized,
-                bytes: payload.len(),
+                .publish(&topic, &payload)
+                .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))
+        };
+        let result = match publish {
+            Ok(()) => {
+                let session = self
+                    .channels
+                    .get_mut(&normalized)
+                    .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+                session.mark_delivery(&message_id, MessageDeliveryStatus::Sent, None, 0)?;
+                session.outbound_attempts.remove(&message_id);
+                ChannelSendResult {
+                    name: channel_name,
+                    bytes: payload_len,
+                    message_id: message_id.clone(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Sent,
+                    delivery_error: None,
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let session = self
+                    .channels
+                    .get_mut(&normalized)
+                    .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+                let retry_count = if let Some(attempt) = session.outbound_attempts.get_mut(&message_id)
+                {
+                    attempt.delivery_status = MessageDeliveryStatus::Failed;
+                    attempt.delivery_error = Some(error_text.clone());
+                    attempt.retry_count
+                } else {
+                    0
+                };
+                session.mark_delivery(
+                    &message_id,
+                    MessageDeliveryStatus::Failed,
+                    Some(error_text.clone()),
+                    retry_count,
+                )?;
+                session.sync_attempt_message_json(&message_id)?;
+                ChannelSendResult {
+                    name: channel_name,
+                    bytes: payload_len,
+                    message_id: message_id.clone(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Failed,
+                    delivery_error: Some(error_text),
+                }
             }
         };
+        self.persist_outbound_state(&normalized, &message_id);
+        self.persist_channel_tail();
+        Ok(result)
+    }
+
+    pub fn retry_message(
+        &mut self,
+        name: &str,
+        message_id: &str,
+    ) -> Result<ChannelSendResult, ChannelRuntimeError> {
+        self.drain_inbound()?;
+        let normalized = normalize_name(name)?;
+        let (channel_name, topic, sent_at_ms, payload_len, retry_count, payload) = {
+            let session = self
+                .channels
+                .get_mut(&normalized)
+                .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+            let (payload_b64, sent_at_ms, payload_len) = {
+                let attempt = session
+                    .outbound_attempts
+                    .get_mut(message_id)
+                    .ok_or_else(|| ChannelRuntimeError::MissingMessage(message_id.to_string()))?;
+                attempt.retry_count = attempt.retry_count.saturating_add(1);
+                attempt.delivery_status = MessageDeliveryStatus::Pending;
+                attempt.delivery_error = None;
+                (
+                    attempt.publish_payload_b64.clone(),
+                    attempt.sent_at_ms,
+                    attempt.ciphertext_bytes,
+                )
+            };
+            let payload = decode(&payload_b64)?;
+            let retry_count = session
+                .outbound_attempts
+                .get(message_id)
+                .map(|attempt| attempt.retry_count)
+                .unwrap_or(0);
+            session.mark_delivery(message_id, MessageDeliveryStatus::Pending, None, retry_count)?;
+            session.sync_attempt_message_json(message_id)?;
+            (
+                session.name.clone(),
+                session.topic.clone(),
+                sent_at_ms,
+                payload_len,
+                retry_count,
+                payload,
+            )
+        };
+        self.persist_outbound_state(&normalized, message_id);
+        let publish = {
+            let session = self
+                .channels
+                .get(&normalized)
+                .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+            session
+                .node
+                .publish(&topic, &payload)
+                .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))
+        };
+        let result = match publish {
+            Ok(()) => {
+                let session = self
+                    .channels
+                    .get_mut(&normalized)
+                    .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+                session.mark_delivery(message_id, MessageDeliveryStatus::Sent, None, retry_count)?;
+                session.outbound_attempts.remove(message_id);
+                ChannelSendResult {
+                    name: channel_name,
+                    bytes: payload_len,
+                    message_id: message_id.to_string(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Sent,
+                    delivery_error: None,
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let session = self
+                    .channels
+                    .get_mut(&normalized)
+                    .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
+                if let Some(attempt) = session.outbound_attempts.get_mut(message_id) {
+                    attempt.delivery_status = MessageDeliveryStatus::Failed;
+                    attempt.delivery_error = Some(error_text.clone());
+                }
+                session.mark_delivery(
+                    message_id,
+                    MessageDeliveryStatus::Failed,
+                    Some(error_text.clone()),
+                    retry_count,
+                )?;
+                session.sync_attempt_message_json(message_id)?;
+                ChannelSendResult {
+                    name: channel_name,
+                    bytes: payload_len,
+                    message_id: message_id.to_string(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Failed,
+                    delivery_error: Some(error_text),
+                }
+            }
+        };
+        self.persist_outbound_state(&normalized, message_id);
         self.persist_channel_tail();
         Ok(result)
     }
@@ -650,6 +892,53 @@ impl ChannelRuntime {
             self.persisted_counts.insert(name, count);
         }
     }
+
+    fn persist_outbound_state(&mut self, name: &str, message_id: &str) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let (channel_row, message_row, attempt_row, sent_at_ms) = {
+            let Some(session) = self.channels.get(name) else {
+                return;
+            };
+            let Some(message) = session
+                .messages
+                .iter()
+                .find(|message| message.message_id.as_deref() == Some(message_id))
+            else {
+                return;
+            };
+            let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+            let message_row = serde_json::to_vec(&PersistedChannelMessage {
+                conversation_id: session.name.clone(),
+                sent_at_ms,
+                message_id: message_id.to_string(),
+                message: message.clone(),
+            })
+            .ok();
+            let channel_row = serde_json::to_vec(&session.to_persisted_record()).ok();
+            let attempt_row = session
+                .outbound_attempts
+                .get(message_id)
+                .and_then(|attempt| serde_json::to_vec(attempt).ok());
+            (channel_row, message_row, attempt_row, sent_at_ms)
+        };
+
+        if let Some(row) = message_row {
+            let _ = p.append_channel_message(name, sent_at_ms, message_id, &row);
+        }
+        match attempt_row {
+            Some(row) => {
+                let _ = p.put_outbound_attempt(OUTBOUND_SCOPE_CHANNEL, name, message_id, &row);
+            }
+            None => {
+                let _ = p.delete_outbound_attempt(OUTBOUND_SCOPE_CHANNEL, name, message_id);
+            }
+        }
+        if let Some(row) = channel_row {
+            let _ = p.put_channel(name, &row);
+        }
+    }
 }
 
 impl ChannelSession {
@@ -660,6 +949,65 @@ impl ChannelSession {
             message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
         }
         message
+    }
+
+    fn publishable_message(&self, message: &ChannelMessage) -> ChannelMessage {
+        let mut publishable = message.clone();
+        publishable.delivery_status = None;
+        publishable.delivery_error = None;
+        publishable.retryable = None;
+        publishable.retry_count = None;
+        publishable
+    }
+
+    fn upsert_message(&mut self, message: ChannelMessage) {
+        if let Some(message_id) = message.message_id.as_deref() {
+            if let Some(existing) = self
+                .messages
+                .iter_mut()
+                .find(|existing| existing.message_id.as_deref() == Some(message_id))
+            {
+                *existing = message;
+                return;
+            }
+        }
+        self.messages.push(message);
+    }
+
+    fn find_message_mut(&mut self, message_id: &str) -> Option<&mut ChannelMessage> {
+        self.messages
+            .iter_mut()
+            .find(|message| message.message_id.as_deref() == Some(message_id))
+    }
+
+    fn mark_delivery(
+        &mut self,
+        message_id: &str,
+        status: MessageDeliveryStatus,
+        error: Option<String>,
+        retry_count: u32,
+    ) -> Result<(), ChannelRuntimeError> {
+        let message = self
+            .find_message_mut(message_id)
+            .ok_or_else(|| ChannelRuntimeError::MissingMessage(message_id.to_string()))?;
+        apply_delivery(message, status, error, retry_count);
+        Ok(())
+    }
+
+    fn sync_attempt_message_json(&mut self, message_id: &str) -> Result<(), ChannelRuntimeError> {
+        let message_json = self
+            .messages
+            .iter()
+            .find(|message| message.message_id.as_deref() == Some(message_id))
+            .ok_or_else(|| ChannelRuntimeError::MissingMessage(message_id.to_string()))
+            .and_then(|message| {
+                serde_json::to_string(message)
+                    .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))
+            })?;
+        if let Some(attempt) = self.outbound_attempts.get_mut(message_id) {
+            attempt.message_json = message_json;
+        }
+        Ok(())
     }
 
     fn to_persisted_record(&self) -> PersistedChannelSession {
@@ -806,6 +1154,10 @@ impl ChannelSession {
             message_id: None,
             sent_at_ms: None,
             attachment: Some(descriptor),
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
         self.messages.push(message);
         Ok(())
@@ -865,6 +1217,10 @@ impl ChannelSession {
             message_id: None,
             sent_at_ms: None,
             attachment: Some(descriptor),
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
         self.messages.push(message);
         Ok(AttachmentSendResult {
@@ -1071,6 +1427,15 @@ fn publish_json<T: Serialize>(
         .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))
 }
 
+fn encode(bytes: &[u8]) -> String {
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+}
+
+fn decode(encoded: &str) -> Result<Vec<u8>, ChannelRuntimeError> {
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+        .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))
+}
+
 fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
     AttachmentDescriptor {
         attachment_id: manifest.attachment_id.clone(),
@@ -1129,7 +1494,9 @@ impl AttachmentSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
+    use crate::adapters::moss_ffi::{
+        drain_received_messages, fail_next_test_publish, MossFfiRuntime, MOSS_TEST_LOCK,
+    };
     use crate::adapters::persistence::Persistence;
     use std::path::PathBuf;
 
@@ -1241,6 +1608,143 @@ mod tests {
             .filter(|message| message.body == "hello after channel restart")
             .count();
         assert_eq!(matching, 1, "persist tail duplicated the channel message");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn failed_send_rehydrates_as_retryable_message() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!(
+            "mosh-channel-failed-send-{}.redb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [17u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let message_id = {
+            let mut channels = ChannelRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            channels
+                .join(JoinChannelRequest {
+                    name: "retry-channel".to_string(),
+                    display_name: "Alice".to_string(),
+                    listen_port: 42341,
+                    static_peer: None,
+                })
+                .expect("channel should join");
+            let _publish_fail = fail_next_test_publish("simulated publish failure");
+            let result = channels
+                .send("retry-channel", "hello failed channel".to_string())
+                .expect("send should return failed result");
+            assert_eq!(result.delivery_status, MessageDeliveryStatus::Failed);
+            assert_eq!(
+                result.delivery_error.as_deref(),
+                Some("Moss error: simulated publish failure")
+            );
+
+            let live = channels
+                .poll("retry-channel")
+                .expect("poll should surface failed message");
+            let failed = live
+                .messages
+                .iter()
+                .find(|message| message.message_id.as_deref() == Some(result.message_id.as_str()))
+                .expect("failed message should be recorded");
+            assert_eq!(failed.delivery_status, Some(MessageDeliveryStatus::Failed));
+            assert_eq!(failed.retryable, Some(true));
+
+            result.message_id
+        };
+
+        let mut revived =
+            ChannelRuntime::from_shared(Arc::clone(&runtime), temp_store(), Some(persistence));
+        revived.rehydrate();
+        let listing = revived.list().expect("listing should pass");
+        let channel = listing
+            .channels
+            .iter()
+            .find(|channel| channel.name == "retry-channel")
+            .expect("rehydrated channel should be present");
+        let failed = channel
+            .messages
+            .iter()
+            .find(|message| message.message_id.as_deref() == Some(message_id.as_str()))
+            .expect("failed message should rehydrate");
+        assert_eq!(failed.delivery_status, Some(MessageDeliveryStatus::Failed));
+        assert_eq!(failed.retryable, Some(true));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn retry_message_reuses_message_id_and_clears_failed_attempt() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-channel-retry-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [18u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let failed_message_id = {
+            let mut channels = ChannelRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            channels
+                .join(JoinChannelRequest {
+                    name: "retry-channel".to_string(),
+                    display_name: "Alice".to_string(),
+                    listen_port: 42342,
+                    static_peer: None,
+                })
+                .expect("channel should join");
+            let _publish_fail = fail_next_test_publish("simulated publish failure");
+            let failed = channels
+                .send("retry-channel", "retry this channel message".to_string())
+                .expect("failed send should still return a result");
+
+            let retried = channels
+                .retry_message("retry-channel", &failed.message_id)
+                .expect("retry should succeed");
+            assert_eq!(retried.message_id, failed.message_id);
+            assert_eq!(retried.delivery_status, MessageDeliveryStatus::Sent);
+
+            let snapshot = channels.poll("retry-channel").expect("poll should pass");
+            let matching: Vec<&ChannelMessage> = snapshot
+                .messages
+                .iter()
+                .filter(|message| message.message_id.as_deref() == Some(failed.message_id.as_str()))
+                .collect();
+            assert_eq!(matching.len(), 1, "retry should update, not duplicate, the row");
+            assert_eq!(matching[0].delivery_status, Some(MessageDeliveryStatus::Sent));
+            assert_eq!(matching[0].retry_count, Some(1));
+
+            failed.message_id
+        };
+
+        let stored_attempt = persistence
+            .get_outbound_attempt("channel", "retry-channel", &failed_message_id)
+            .expect("lookup should pass");
+        assert!(stored_attempt.is_none());
 
         let _ = std::fs::remove_file(&db_path);
     }

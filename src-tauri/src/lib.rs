@@ -306,6 +306,19 @@ fn private_dm_send_message(
 }
 
 #[tauri::command]
+fn private_dm_retry_message(
+    state: tauri::State<'_, PrivateDmState>,
+    session_id: String,
+    message_id: String,
+) -> Result<SendMessageResult, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .retry_message(&session_id, &message_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
 fn private_dm_poll_session(
     state: tauri::State<'_, PrivateDmState>,
     session_id: String,
@@ -706,6 +719,19 @@ fn channel_send(
 }
 
 #[tauri::command]
+fn channel_retry_message(
+    state: tauri::State<'_, ChannelState>,
+    name: String,
+    message_id: String,
+) -> Result<ChannelSendResult, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .retry_message(&name, &message_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
 fn channel_poll(
     state: tauri::State<'_, ChannelState>,
     name: String,
@@ -830,6 +856,19 @@ fn private_group_send(
     state.with_runtime(|runtime| {
         runtime
             .send(&group_id, body)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn private_group_retry_message(
+    state: tauri::State<'_, PrivateGroupState>,
+    group_id: String,
+    message_id: String,
+) -> Result<GroupSendResult, String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .retry_message(&group_id, &message_id)
             .map_err(|error| error.to_string())
     })
 }
@@ -1051,6 +1090,7 @@ pub fn run() {
             private_dm_create_invite,
             private_dm_accept_invite,
             private_dm_send_message,
+            private_dm_retry_message,
             private_dm_poll_session,
             private_dm_list_sessions,
             private_dm_close_session,
@@ -1066,6 +1106,7 @@ pub fn run() {
             channel_join,
             channel_leave,
             channel_send,
+            channel_retry_message,
             channel_poll,
             channel_list,
             channel_send_attachment,
@@ -1076,6 +1117,7 @@ pub fn run() {
             private_group_create,
             private_group_join,
             private_group_send,
+            private_group_retry_message,
             private_group_poll,
             private_group_list,
             private_group_close,
