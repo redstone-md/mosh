@@ -10,6 +10,7 @@ import {
 import {
   cancelChatAttachment,
   downloadChatAttachment,
+  retryChatMessage,
   sameChatTarget,
   sendChatAttachment,
   sendChatText,
@@ -146,6 +147,20 @@ export function useChatOrchestration({
     }
     sendMessageBody(lastFailedSend.target, lastFailedSend.body);
   }, [active, lastFailedSend, sendMessageBody]);
+
+  const retryMessage = useCallback(
+    (messageId: string) => {
+      if (!active) {
+        return;
+      }
+      const target = active;
+      void run("message", async () => {
+        await retryChatMessage(gateway, target, messageId);
+        await refresh(true);
+      });
+    },
+    [active, gateway, refresh, run],
+  );
 
   const sendAttachment = useCallback(
     (file: File) => {
@@ -298,6 +313,7 @@ export function useChatOrchestration({
     attachmentApi,
     canRetrySend,
     clearFailedSend,
+    retryMessage,
     retryFailedSend,
     sendMessage,
     setViewer,

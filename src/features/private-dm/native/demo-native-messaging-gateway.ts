@@ -146,14 +146,25 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
   }
 
   async sendPrivateMessage(sessionId: string, body: string): Promise<SendMessageResult> {
+    let sentMessageId = "";
+    let sentAtMs = 0;
     this.state.updateSession(sessionId, (session) => ({
       ...session,
       messages: [
         ...session.messages,
-        this.state.stampMessage({
-          from_device: session.display_name || DEMO_DEVICE,
-          body,
-        }),
+        (() => {
+          const message = this.state.stampMessage({
+            from_device: session.display_name || DEMO_DEVICE,
+            body,
+            delivery_status: "sent",
+            delivery_error: null,
+            retryable: false,
+            retry_count: 0,
+          });
+          sentMessageId = message.message_id ?? "";
+          sentAtMs = message.sent_at_ms ?? Date.now();
+          return message;
+        })(),
       ],
     }));
     const session = this.state.sessionOrThrow(sessionId);
@@ -161,6 +172,44 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       session_id: sessionId,
       state: session.state,
       ciphertext_bytes: body.length + 96,
+      message_id: sentMessageId,
+      sent_at_ms: sentAtMs,
+      delivery_status: "sent",
+      delivery_error: null,
+    };
+  }
+
+  async retryPrivateMessage(
+    sessionId: string,
+    messageId: string,
+  ): Promise<SendMessageResult> {
+    let sentAtMs = 0;
+    this.state.updateSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((message) => {
+        if (message.message_id !== messageId) {
+          return message;
+        }
+        sentAtMs = Date.now();
+        return {
+          ...message,
+          sent_at_ms: sentAtMs,
+          delivery_status: "sent",
+          delivery_error: null,
+          retryable: false,
+          retry_count: (message.retry_count ?? 0) + 1,
+        };
+      }),
+    }));
+    const session = this.state.sessionOrThrow(sessionId);
+    return {
+      session_id: sessionId,
+      state: session.state,
+      ciphertext_bytes: 0,
+      message_id: messageId,
+      sent_at_ms: sentAtMs || Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
     };
   }
 
@@ -206,18 +255,69 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
 
   async sendChannelMessage(name: string, body: string): Promise<ChannelSendResult> {
     const normalized = normalizeChannel(name);
+    let sentMessageId = "";
+    let sentAtMs = 0;
     this.state.updateChannel(normalized, (channel) => ({
       ...channel,
       messages: [
         ...channel.messages,
-        this.state.stampMessage({
-          from_device: channel.display_name,
-          from_fingerprint: channel.device_fingerprint,
-          body,
-        }),
+        (() => {
+          const message = this.state.stampMessage({
+            from_device: channel.display_name,
+            from_fingerprint: channel.device_fingerprint,
+            body,
+            delivery_status: "sent",
+            delivery_error: null,
+            retryable: false,
+            retry_count: 0,
+          });
+          sentMessageId = message.message_id ?? "";
+          sentAtMs = message.sent_at_ms ?? Date.now();
+          return message;
+        })(),
       ],
     }));
-    return { name: normalized, bytes: body.length + 32 };
+    return {
+      name: normalized,
+      bytes: body.length + 32,
+      message_id: sentMessageId,
+      sent_at_ms: sentAtMs,
+      delivery_status: "sent",
+      delivery_error: null,
+    };
+  }
+
+  async retryChannelMessage(
+    name: string,
+    messageId: string,
+  ): Promise<ChannelSendResult> {
+    const normalized = normalizeChannel(name);
+    let sentAtMs = 0;
+    this.state.updateChannel(normalized, (channel) => ({
+      ...channel,
+      messages: channel.messages.map((message) => {
+        if (message.message_id !== messageId) {
+          return message;
+        }
+        sentAtMs = Date.now();
+        return {
+          ...message,
+          sent_at_ms: sentAtMs,
+          delivery_status: "sent",
+          delivery_error: null,
+          retryable: false,
+          retry_count: (message.retry_count ?? 0) + 1,
+        };
+      }),
+    }));
+    return {
+      name: normalized,
+      bytes: 0,
+      message_id: messageId,
+      sent_at_ms: sentAtMs || Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
+    };
   }
 
   async pollChannel(name: string): Promise<ChannelSnapshot> {
@@ -279,18 +379,68 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
   }
 
   async sendGroupMessage(groupId: string, body: string): Promise<GroupSendResult> {
+    let sentMessageId = "";
+    let sentAtMs = 0;
     this.state.updateGroup(groupId, (group) => ({
       ...group,
       messages: [
         ...group.messages,
-        this.state.stampMessage({
-          from_device: group.display_name,
-          from_fingerprint: group.device_fingerprint,
-          body,
-        }),
+        (() => {
+          const message = this.state.stampMessage({
+            from_device: group.display_name,
+            from_fingerprint: group.device_fingerprint,
+            body,
+            delivery_status: "sent",
+            delivery_error: null,
+            retryable: false,
+            retry_count: 0,
+          });
+          sentMessageId = message.message_id ?? "";
+          sentAtMs = message.sent_at_ms ?? Date.now();
+          return message;
+        })(),
       ],
     }));
-    return { group_id: groupId, bytes: body.length + 48 };
+    return {
+      group_id: groupId,
+      bytes: body.length + 48,
+      message_id: sentMessageId,
+      sent_at_ms: sentAtMs,
+      delivery_status: "sent",
+      delivery_error: null,
+    };
+  }
+
+  async retryGroupMessage(
+    groupId: string,
+    messageId: string,
+  ): Promise<GroupSendResult> {
+    let sentAtMs = 0;
+    this.state.updateGroup(groupId, (group) => ({
+      ...group,
+      messages: group.messages.map((message) => {
+        if (message.message_id !== messageId) {
+          return message;
+        }
+        sentAtMs = Date.now();
+        return {
+          ...message,
+          sent_at_ms: sentAtMs,
+          delivery_status: "sent",
+          delivery_error: null,
+          retryable: false,
+          retry_count: (message.retry_count ?? 0) + 1,
+        };
+      }),
+    }));
+    return {
+      group_id: groupId,
+      bytes: 0,
+      message_id: messageId,
+      sent_at_ms: sentAtMs || Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
+    };
   }
 
   async pollPrivateGroup(groupId: string): Promise<GroupSnapshot> {

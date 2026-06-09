@@ -1,9 +1,13 @@
 import { vi } from "vitest";
 import type {
+  ChannelMessage,
+  ChannelSendResult,
+  GroupSendResult,
   GroupSnapshot,
   MeshInfo,
   NativeMessagingGateway,
   NativeRuntimeStatus,
+  SendMessageResult,
   SessionListSnapshot,
   SessionSnapshot,
   SnapshotEvent,
@@ -124,7 +128,7 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
     mesh_id: string;
     display_name: string;
     device_fingerprint: string;
-    messages: Array<{ from_device: string; from_fingerprint: string; body: string }>;
+    messages: ChannelMessage[];
     attachments: never[];
     dm_offers: never[];
     mesh: typeof MESH_READY | null;
@@ -149,10 +153,23 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
       sessions = [...sessions, joined];
       return joined;
     }),
-    sendPrivateMessage: vi.fn(async () => ({
+    sendPrivateMessage: vi.fn(async (): Promise<SendMessageResult> => ({
       session_id: SESSION_ID,
       state: "ready",
       ciphertext_bytes: 128,
+      message_id: "message-sent-1",
+      sent_at_ms: Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
+    })),
+    retryPrivateMessage: vi.fn(async (sessionId, messageId): Promise<SendMessageResult> => ({
+      session_id: sessionId,
+      state: "ready",
+      ciphertext_bytes: 128,
+      message_id: messageId,
+      sent_at_ms: Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
     })),
     pollPrivateSession: vi.fn(async (sessionId: string) => {
       const found = sessions.find((session) => session.session_id === sessionId);
@@ -186,7 +203,22 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
       channels = channels.filter((channel) => channel.name !== name);
       return { name, closed: true };
     }),
-    sendChannelMessage: vi.fn(async (name, _body) => ({ name, bytes: 32 })),
+    sendChannelMessage: vi.fn(async (name, _body): Promise<ChannelSendResult> => ({
+      name,
+      bytes: 32,
+      message_id: "channel-message-1",
+      sent_at_ms: Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
+    })),
+    retryChannelMessage: vi.fn(async (name, messageId): Promise<ChannelSendResult> => ({
+      name,
+      bytes: 32,
+      message_id: messageId,
+      sent_at_ms: Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
+    })),
     pollChannel: vi.fn(async (name) => {
       const found = channels.find((channel) => channel.name === name);
       if (!found) {
@@ -219,7 +251,22 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
       mesh: MESH_READY,
       events: [],
     })),
-    sendGroupMessage: vi.fn(async (group_id) => ({ group_id, bytes: 64 })),
+    sendGroupMessage: vi.fn(async (group_id): Promise<GroupSendResult> => ({
+      group_id,
+      bytes: 64,
+      message_id: "group-message-1",
+      sent_at_ms: Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
+    })),
+    retryGroupMessage: vi.fn(async (group_id, messageId): Promise<GroupSendResult> => ({
+      group_id,
+      bytes: 64,
+      message_id: messageId,
+      sent_at_ms: Date.now(),
+      delivery_status: "sent",
+      delivery_error: null,
+    })),
     pollPrivateGroup: vi.fn(async () => ({
       group_id: "group-test",
       mesh_id: "groupmesh-test",

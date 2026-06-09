@@ -1,8 +1,18 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type {
+  ChannelListSnapshot,
+  SendMessageResult,
+} from "./native/native-messaging-gateway";
 import { describe, expect, it, vi } from "vitest";
 import { PrivateDmScreen } from "./private-dm-screen";
-import { createGateway, SESSION_ID, snapshot } from "./private-dm-test-utils";
+import {
+  createGateway,
+  groupSnapshot,
+  MESH_READY,
+  SESSION_ID,
+  snapshot,
+} from "./private-dm-test-utils";
 
 describe("PrivateDmScreen messaging", () => {
   it("sends through the gateway for the active session", async () => {
@@ -44,7 +54,11 @@ describe("PrivateDmScreen messaging", () => {
         session_id: SESSION_ID,
         state: "ready",
         ciphertext_bytes: 128,
-      });
+        message_id: "message-sent-2",
+        sent_at_ms: Date.now(),
+        delivery_status: "sent",
+        delivery_error: null,
+      } satisfies SendMessageResult);
     render(<PrivateDmScreen gateway={gateway} />);
 
     await screen.findByText("hello from moss");
@@ -57,6 +71,116 @@ describe("PrivateDmScreen messaging", () => {
     await waitFor(() => expect(gateway.sendPrivateMessage).toHaveBeenCalledTimes(2));
     expect(gateway.sendPrivateMessage).toHaveBeenLastCalledWith(SESSION_ID, "retry me");
     await waitFor(() => expect(composer).toHaveValue(""));
+  });
+
+  it("retries failed retryable DM rows by message id", async () => {
+    const gateway = createGateway([
+      snapshot({
+        display_name: "mosh-bob",
+        messages: [
+          {
+            from_device: "mosh-bob",
+            body: "needs resend",
+            message_id: "dm-failed-1",
+            sent_at_ms: Date.UTC(2026, 0, 1, 10, 0),
+            delivery_status: "failed",
+            delivery_error: "peer offline",
+            retryable: true,
+            retry_count: 1,
+          },
+        ],
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    const user = userEvent.setup();
+    expect(await screen.findByText("needs resend")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry failed message" }));
+
+    await waitFor(() =>
+      expect(gateway.retryPrivateMessage).toHaveBeenCalledWith(SESSION_ID, "dm-failed-1"),
+    );
+  });
+
+  it("retries failed retryable channel rows by message id", async () => {
+    const gateway = createGateway([]);
+    gateway.listChannels = vi.fn(async (): Promise<ChannelListSnapshot> => ({
+      channels: [
+        {
+          name: "design-lab",
+          topic: "public-channel/design-lab",
+          mesh_id: "channel/design-lab",
+          display_name: "mosh-test",
+          device_fingerprint: "abcdef0123456789",
+          messages: [
+            {
+              from_device: "mosh-test",
+              from_fingerprint: "abcdef0123456789",
+              body: "channel resend",
+              message_id: "channel-failed-1",
+              sent_at_ms: Date.UTC(2026, 0, 1, 10, 0),
+              delivery_status: "failed",
+              delivery_error: "tracker publish failed",
+              retryable: true,
+              retry_count: 2,
+            },
+          ],
+          attachments: [],
+          dm_offers: [],
+          mesh: MESH_READY,
+          events: [],
+        },
+      ],
+    }));
+    gateway.listPrivateGroups = vi.fn(async () => ({ groups: [] }));
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    const user = userEvent.setup();
+    expect(await screen.findByText("channel resend")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry failed message" }));
+
+    await waitFor(() =>
+      expect(gateway.retryChannelMessage).toHaveBeenCalledWith(
+        "design-lab",
+        "channel-failed-1",
+      ),
+    );
+  });
+
+  it("retries failed retryable group rows by message id", async () => {
+    const gateway = createGateway([]);
+    gateway.listChannels = vi.fn(async () => ({ channels: [] }));
+    gateway.listPrivateGroups = vi.fn(async () => ({
+      groups: [
+        groupSnapshot({
+          messages: [
+            {
+              from_device: "mosh-test",
+              from_fingerprint: "abcdef",
+              body: "group resend",
+              message_id: "group-failed-1",
+              sent_at_ms: Date.UTC(2026, 0, 1, 10, 0),
+              delivery_status: "failed",
+              delivery_error: "mesh fanout failed",
+              retryable: true,
+              retry_count: 1,
+            },
+          ],
+        }),
+      ],
+    }));
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    const user = userEvent.setup();
+    expect(await screen.findByText("group resend")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry failed message" }));
+
+    await waitFor(() =>
+      expect(gateway.retryGroupMessage).toHaveBeenCalledWith(
+        "group-test",
+        "group-failed-1",
+      ),
+    );
   });
 
   it("downloads voice attachments before playback", async () => {
