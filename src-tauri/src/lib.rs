@@ -134,9 +134,15 @@ struct ChannelState {
 }
 
 impl ChannelState {
-    fn ready(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
+    fn ready(
+        moss: Arc<MossFfiRuntime>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<adapters::persistence::Persistence>>,
+    ) -> Self {
+        let mut runtime = ChannelRuntime::from_shared(moss, attachment_store, persistence);
+        runtime.rehydrate();
         Self {
-            runtime: Mutex::new(Some(ChannelRuntime::from_shared(moss, attachment_store))),
+            runtime: Mutex::new(Some(runtime)),
             load_error: None,
             last_membership_op: Mutex::new(None),
         }
@@ -1018,6 +1024,7 @@ pub fn run() {
                     app.manage(ChannelState::ready(
                         Arc::clone(&moss),
                         Arc::clone(&attachment_store),
+                        persistence_load.persistence.clone(),
                     ));
                     app.manage(PrivateGroupState::ready(
                         moss,

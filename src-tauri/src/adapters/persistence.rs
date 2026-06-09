@@ -61,10 +61,11 @@ const DEK_KEY: &str = "history-dek-v1";
 const MLS_SNAPSHOT: TableDefinition<&str, &[u8]> = TableDefinition::new("mls_snapshot");
 const MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("messages");
 const SESSIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("sessions");
-const GROUP_MLS_SNAPSHOT: TableDefinition<&str, &[u8]> =
-    TableDefinition::new("group_mls_snapshot");
+const GROUP_MLS_SNAPSHOT: TableDefinition<&str, &[u8]> = TableDefinition::new("group_mls_snapshot");
 const GROUP_MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("group_messages");
 const GROUPS: TableDefinition<&str, &[u8]> = TableDefinition::new("groups");
+const CHANNEL_MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("channel_messages");
+const CHANNELS: TableDefinition<&str, &[u8]> = TableDefinition::new("channels");
 const MOSS_IDENTITY: TableDefinition<&str, &[u8]> = TableDefinition::new("moss_identity");
 // Single-row table: the device's stable Moss transport identity (libp2p key).
 const MOSS_IDENTITY_KEY: &str = "node-identity-v1";
@@ -125,6 +126,10 @@ impl Persistence {
             wtx.open_table(GROUP_MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(GROUPS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(CHANNEL_MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(CHANNELS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -397,6 +402,81 @@ impl Persistence {
             .map_err(|e| PersistenceError::Db(e.to_string()))
     }
 
+    pub fn put_channel(&self, name: &str, json: &[u8]) -> Result<(), PersistenceError> {
+        self.put(CHANNELS, name, json)
+    }
+
+    pub fn list_channels(&self) -> Result<Vec<Vec<u8>>, PersistenceError> {
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let t = rtx
+            .open_table(CHANNELS)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let mut out = Vec::new();
+        for item in t.iter().map_err(|e| PersistenceError::Db(e.to_string()))? {
+            let (k, v) = item.map_err(|e| PersistenceError::Db(e.to_string()))?;
+            match decrypt_blob(&self.dek, v.value()) {
+                Ok(plain) => out.push(plain),
+                Err(e) => eprintln!("skipping undecryptable channel row {}: {e}", k.value()),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn append_channel_message(
+        &self,
+        name: &str,
+        sent_at_ms: u64,
+        message_id: &str,
+        json: &[u8],
+    ) -> Result<(), PersistenceError> {
+        let key = format!("{name}\u{0001}{sent_at_ms:020}\u{0001}{message_id}");
+        self.put(CHANNEL_MESSAGES, &key, json)
+    }
+
+    pub fn list_channel_messages(&self, name: &str) -> Result<Vec<Vec<u8>>, PersistenceError> {
+        self.range_prefix(CHANNEL_MESSAGES, name)
+    }
+
+    pub fn delete_channel(&self, name: &str) -> Result<(), PersistenceError> {
+        let wtx = self
+            .db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        {
+            let mut channels = wtx
+                .open_table(CHANNELS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            channels
+                .remove(name)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        {
+            let lo = format!("{name}\u{0001}");
+            let hi = format!("{name}\u{0002}");
+            let mut messages = wtx
+                .open_table(CHANNEL_MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            let keys: Vec<String> = messages
+                .range(lo.as_str()..hi.as_str())
+                .map_err(|e| PersistenceError::Db(e.to_string()))?
+                .map(|item| {
+                    item.map(|(k, _)| k.value().to_string())
+                        .map_err(|e| PersistenceError::Db(e.to_string()))
+                })
+                .collect::<Result<_, _>>()?;
+            for key in keys {
+                messages
+                    .remove(key.as_str())
+                    .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            }
+        }
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))
+    }
+
     /// The device's stable Moss transport identity (encrypted like everything
     /// else). Persisting it keeps the node's peer-id constant across restarts,
     /// which is required for peers to re-establish a connection instead of
@@ -446,6 +526,10 @@ impl Persistence {
             wtx.open_table(GROUP_MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(GROUPS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(CHANNEL_MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(CHANNELS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -587,6 +671,32 @@ mod tests {
         assert!(p.list_groups().unwrap().is_empty());
         assert!(p.get_group_mls_snapshot("g1").unwrap().is_none());
         assert!(p.list_group_messages("g1").unwrap().is_empty());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn channel_records_and_messages_round_trip_then_delete() {
+        let dir = std::env::temp_dir().join(format!("mosh-channels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("channels.redb");
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [15u8; 32]).unwrap();
+
+        p.put_channel("general", br#"{"name":"general"}"#).unwrap();
+        p.append_channel_message("general", 20, "m2", br#"{"body":"second"}"#)
+            .unwrap();
+        p.append_channel_message("general", 10, "m1", br#"{"body":"first"}"#)
+            .unwrap();
+
+        assert_eq!(p.list_channels().unwrap().len(), 1);
+        let rows = p.list_channel_messages("general").unwrap();
+        assert_eq!(rows[0], br#"{"body":"first"}"#);
+        assert_eq!(rows[1], br#"{"body":"second"}"#);
+
+        p.delete_channel("general").unwrap();
+        assert!(p.list_channels().unwrap().is_empty());
+        assert!(p.list_channel_messages("general").unwrap().is_empty());
 
         std::fs::remove_file(&path).ok();
     }
