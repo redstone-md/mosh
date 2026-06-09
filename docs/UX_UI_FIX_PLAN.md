@@ -15,6 +15,7 @@
 - Move peer diagnostics into an on-demand drawer opened from the titlebar.
 - Add a browser demo gateway with seeded DM, group, channel, attachment, and
   call-event examples.
+- Show specific invite validation feedback and confirm group invite copy actions.
 
 ## Deferred
 
@@ -23,18 +24,14 @@
   problems came first.
 ## Next Pass Roadmap
 
-1. Improve invite UX.
-   - Map invite parser errors to specific inline copy.
-   - Add clearer copy feedback for copied group invites.
-   - Consider QR invite export once the text flow is solid.
-2. Improve message UX.
+1. Improve message UX.
    - Add timestamps once message snapshots expose stable time metadata.
    - Add sending/failed/retry states where gateway results can support it.
    - Group adjacent messages by sender/time after timestamp data exists.
-3. Add search and media filtering.
+2. Add search and media filtering.
    - Text search first.
    - Media/attachments filter second.
-4. Reduce `private-dm-screen.tsx` size.
+3. Reduce `private-dm-screen.tsx` size.
    - Extract onboarding, diagnostics, chat action orchestration, and message
      lists into focused modules.
    - Keep each new module under 500 lines.
