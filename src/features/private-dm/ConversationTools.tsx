@@ -1,4 +1,5 @@
-import { IconPaperclip, IconSearch } from "@tabler/icons-react";
+import { IconPaperclip, IconSearch, IconX } from "@tabler/icons-react";
+import { useEffect, useRef } from "react";
 import type { AttachmentDescriptor } from "./native/native-messaging-gateway";
 import { chatText } from "./private-dm.content";
 
@@ -19,7 +20,7 @@ type SearchableMessage = {
 
 export function ConversationTools({ tools }: { tools: ConversationToolsState }) {
   return (
-    <div className="conversation-tools">
+    <div className="conversation-tools conversation-tools-desktop">
       <label className="conversation-search">
         <IconSearch size={14} />
         <input
@@ -46,6 +47,68 @@ export function ConversationTools({ tools }: { tools: ConversationToolsState }) 
           {chatText.filterAttachments}
         </button>
       </div>
+    </div>
+  );
+}
+
+export function MobileConversationSearch({
+  tools,
+  onClose,
+}: {
+  tools: ConversationToolsState;
+  onClose: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  return (
+    <div className="mobile-conversation-search">
+      <label className="conversation-search">
+        <IconSearch size={14} />
+        <input
+          ref={inputRef}
+          aria-label={chatText.searchPlaceholder}
+          value={tools.search}
+          onChange={(event) => tools.onSearch(event.target.value)}
+          placeholder={chatText.searchPlaceholder}
+        />
+      </label>
+      <button
+        className="btn btn-ghost btn-icon mobile-search-close"
+        type="button"
+        aria-label="Close message search"
+        title="Close message search"
+        onClick={() => {
+          tools.onSearch("");
+          onClose();
+        }}
+      >
+        <IconX size={15} />
+      </button>
+    </div>
+  );
+}
+
+export function MobileConversationFilterNotice({
+  tools,
+}: {
+  tools: ConversationToolsState;
+}) {
+  if (tools.filter !== "attachments") {
+    return null;
+  }
+  return (
+    <div className="mobile-active-filter">
+      <span>
+        <IconPaperclip size={13} />
+        {chatText.filterAttachments}
+      </span>
+      <button type="button" onClick={() => tools.onFilter("all")}>
+        {chatText.filterAll}
+      </button>
     </div>
   );
 }
