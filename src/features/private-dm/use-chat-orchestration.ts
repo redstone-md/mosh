@@ -22,7 +22,7 @@ import {
   localFileSrc,
   readFileAsBase64,
   streamingMediaSrc,
-} from "./attachments";
+} from "./attachment-utils";
 import { readableError } from "./format";
 import type {
   AttachmentDescriptor,

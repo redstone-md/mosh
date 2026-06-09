@@ -1,6 +1,6 @@
 import { IconMessageCircle } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
-import { AttachmentCard } from "./attachments";
+import { AttachmentCard } from "./AttachmentCard";
 import { Avatar } from "./Avatar";
 import {
   filterMessages,
