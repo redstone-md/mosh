@@ -97,7 +97,28 @@ describe("PrivateDmScreen onboarding", () => {
     await user.type(screen.getByRole("textbox", { name: "Invite link" }), "mosh://invite?bad=1");
 
     expect(screen.getByText("Invite link is missing mesh=...")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Invite link is missing mesh=...",
+    );
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+  });
+
+  it("announces setup failures as onboarding alerts", async () => {
+    const user = userEvent.setup();
+    const gateway: NativeMessagingGateway = {
+      ...createGateway(),
+      createPrivateInvite: vi.fn(async () => {
+        throw new Error("Invite service offline");
+      }),
+    };
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await user.click(screen.getByRole("button", { name: /New private chat/ }));
+    await user.click(screen.getByRole("button", { name: "Create invite link" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Invite service offline",
+    );
   });
 
   it("confirms active group invite copies", async () => {
