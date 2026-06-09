@@ -1473,36 +1473,38 @@ function ActiveDmChat(props: {
               : `MLS ${props.session.state} · fingerprint unverified`}
           </p>
         </div>
-        <FingerprintBadge
-          fingerprint={props.session.fingerprint}
-          confirmed={props.confirmed}
-          onConfirm={props.onConfirm}
-        />
-        <button
-          className="btn btn-ghost btn-icon"
-          type="button"
-          aria-label="Start voice call"
-          title={
-            props.callSupported
-              ? "Start voice call"
-              : "Voice calls require a newer WebView"
-          }
-          disabled={
-            !props.callSupported || props.callBusy || props.busy || !ready
-          }
-          onClick={props.onStartCall}
-        >
-          <IconPhone size={16} />
-        </button>
-        <button
-          className="btn btn-ghost btn-icon"
-          type="button"
-          onClick={props.onClose}
-          aria-label={shellText.closeSession}
-          title={shellText.closeSession}
-        >
-          <IconX size={16} />
-        </button>
+        <div className="chat-header-actions">
+          <FingerprintBadge
+            fingerprint={props.session.fingerprint}
+            confirmed={props.confirmed}
+            onConfirm={props.onConfirm}
+          />
+          <button
+            className="btn btn-ghost btn-icon"
+            type="button"
+            aria-label="Start voice call"
+            title={
+              props.callSupported
+                ? "Start voice call"
+                : "Voice calls require a newer WebView"
+            }
+            disabled={
+              !props.callSupported || props.callBusy || props.busy || !ready
+            }
+            onClick={props.onStartCall}
+          >
+            <IconPhone size={16} />
+          </button>
+          <button
+            className="btn btn-ghost btn-icon"
+            type="button"
+            onClick={props.onClose}
+            aria-label={shellText.closeSession}
+            title={shellText.closeSession}
+          >
+            <IconX size={16} />
+          </button>
+        </div>
       </header>
 
       <CryptoNotice />
@@ -1551,15 +1553,17 @@ function ActiveChannelChat(props: {
           <h1 id="chat-title">{props.channel.name}</h1>
           <p>{channelText.subtitle}</p>
         </div>
-        <button
-          className="btn btn-ghost btn-icon"
-          type="button"
-          onClick={props.onClose}
-          aria-label={channelText.leaveLabel}
-          title={channelText.leaveLabel}
-        >
-          <IconLogout size={16} />
-        </button>
+        <div className="chat-header-actions">
+          <button
+            className="btn btn-ghost btn-icon"
+            type="button"
+            onClick={props.onClose}
+            aria-label={channelText.leaveLabel}
+            title={channelText.leaveLabel}
+          >
+            <IconLogout size={16} />
+          </button>
+        </div>
       </header>
 
       <PublicNotice />
@@ -1643,32 +1647,34 @@ function ActiveGroupChat(props: {
             }`}
           </p>
         </div>
-        {props.group.is_admin ? (
-          <span className="admin-pill" title={groupText.adminBadge}>
-            <IconCrown size={14} />
-            <span>{groupText.adminBadge}</span>
-          </span>
-        ) : null}
-        {inviteUri ? (
+        <div className="chat-header-actions">
+          {props.group.is_admin ? (
+            <span className="admin-pill" title={groupText.adminBadge}>
+              <IconCrown size={14} />
+              <span>{groupText.adminBadge}</span>
+            </span>
+          ) : null}
+          {inviteUri ? (
+            <button
+              className="btn btn-ghost btn-icon"
+              type="button"
+              onClick={copyGroupInvite}
+              aria-label={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
+              title={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
+            >
+              {inviteCopied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+            </button>
+          ) : null}
           <button
             className="btn btn-ghost btn-icon"
             type="button"
-            onClick={copyGroupInvite}
-            aria-label={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
-            title={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
+            onClick={props.onClose}
+            aria-label={groupText.leaveLabel}
+            title={groupText.leaveLabel}
           >
-            {inviteCopied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+            <IconLogout size={16} />
           </button>
-        ) : null}
-        <button
-          className="btn btn-ghost btn-icon"
-          type="button"
-          onClick={props.onClose}
-          aria-label={groupText.leaveLabel}
-          title={groupText.leaveLabel}
-        >
-          <IconLogout size={16} />
-        </button>
+        </div>
       </header>
 
       <GroupNotice />
