@@ -193,7 +193,8 @@ export function AttachmentPicker({
         ref={inputRef}
         type="file"
         className="attachment-file-input"
-        aria-hidden="true"
+        hidden
+        disabled={disabled}
         tabIndex={-1}
         onChange={(event) => {
           const file = event.target.files?.[0];
