@@ -86,6 +86,20 @@
   color: var(--fg-2);
 }
 
+@media (max-width: 580px) {
+  .diagnostics-drawer-backdrop {
+    inset: 0;
+    background: var(--bg-0);
+  }
+
+  .diagnostics-drawer {
+    width: 100vw;
+    border-left: 0;
+    box-shadow: none;
+    padding: 12px;
+  }
+}
+
 .diagnostic-group {
   display: flex;
   flex-direction: column;
