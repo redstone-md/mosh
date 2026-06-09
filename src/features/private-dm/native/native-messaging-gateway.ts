@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { UnavailableNativeMessagingGateway } from "./unavailable-native-messaging-gateway";
+import { DemoNativeMessagingGateway } from "./demo-native-messaging-gateway";
 
 const APP_DIAGNOSTICS_COMMAND = "app_diagnostics";
 const NATIVE_RUNTIME_STATUS_COMMAND = "native_runtime_status";
@@ -698,4 +698,4 @@ function isTauriRuntimeAvailable(): boolean {
 
 export const nativeMessagingGateway: NativeMessagingGateway = isTauriRuntimeAvailable()
   ? new TauriNativeMessagingGateway()
-  : new UnavailableNativeMessagingGateway();
+  : new DemoNativeMessagingGateway();
