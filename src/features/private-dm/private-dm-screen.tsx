@@ -10,13 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
-import { diffConversations, type ConversationCount } from "./notifications/unread";
+import { useUnreadNotifications } from "./notifications/use-unread-notifications";
 import {
   shellText,
   stateLabels,
@@ -112,15 +106,6 @@ function closeConfirmationFor(
   };
 }
 
-/** Window focus check that degrades to "focused" when the Tauri API is absent. */
-async function windowFocused(): Promise<boolean> {
-  try {
-    return await getCurrentWindow().isFocused();
-  } catch {
-    return true;
-  }
-}
-
 export function PrivateDmScreen({
   gateway = nativeMessagingGateway,
 }: {
@@ -144,10 +129,6 @@ export function PrivateDmScreen({
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
-  const [unread, setUnread] = useState<ReadonlyMap<string, number>>(new Map());
-  const lastSeenRef = useRef<Map<string, number>>(new Map());
-  const notifyReadyRef = useRef(false);
-  const notificationsReady = useCallback(() => notifyReadyRef.current, []);
   const refreshBusy = operationCounts.refresh > 0;
   const setupBusy = operationCounts.setup > 0;
   const messageBusy = operationCounts.message > 0;
@@ -242,96 +223,6 @@ export function PrivateDmScreen({
     return () => query.removeEventListener("change", sync);
   }, []);
 
-  // Ask for OS notification permission once on mount.
-  useEffect(() => {
-    void (async () => {
-      try {
-        let granted = await isPermissionGranted();
-        if (!granted) {
-          granted = (await requestPermission()) === "granted";
-        }
-        notifyReadyRef.current = granted;
-      } catch {
-        // No Tauri host (e.g. browser dev / tests): toasts stay disabled.
-        notifyReadyRef.current = false;
-      }
-    })();
-  }, []);
-
-  // Diff each poll's per-conversation message counts to drive unread badges
-  // and OS toasts. A first-seen conversation sets a baseline and never
-  // notifies. While the window is focused, the active conversation is kept
-  // clear; while unfocused, every new message raises a toast.
-  useEffect(() => {
-    const counts: ConversationCount[] = [
-      ...sessions.map((s) => ({
-        id: `dm:${s.session_id}`,
-        messageCount: s.messages.length,
-      })),
-      ...groups.map((g) => ({
-        id: `group:${g.group_id}`,
-        messageCount: g.messages.length,
-      })),
-      ...channels.map((c) => ({
-        id: `channel:${c.name}`,
-        messageCount: c.messages.length,
-      })),
-    ];
-    const activeKey = active ? conversationKey(active) : null;
-    let cancelled = false;
-    void (async () => {
-      const focused = await windowFocused();
-      if (cancelled) {
-        return;
-      }
-      const diff = diffConversations(
-        counts,
-        lastSeenRef.current,
-        activeKey,
-        !focused,
-      );
-      lastSeenRef.current = diff.nextLastSeen;
-      if (focused && activeKey) {
-        setUnread((current) => {
-          if (!current.has(activeKey)) {
-            return current;
-          }
-          const next = new Map(current);
-          next.delete(activeKey);
-          return next;
-        });
-      }
-      if (diff.newMessages.length === 0) {
-        return;
-      }
-      setUnread((current) => {
-        const next = new Map(current);
-        for (const { id, delta } of diff.newMessages) {
-          if (id === activeKey && focused) {
-            continue;
-          }
-          next.set(id, (next.get(id) ?? 0) + delta);
-        }
-        return next;
-      });
-      if (!focused && notifyReadyRef.current) {
-        try {
-          for (const { id } of diff.newMessages) {
-            const label = id.startsWith("channel:")
-              ? `#${id.slice("channel:".length)}`
-              : "New message";
-            sendNotification({ title: "Mosh", body: `${label} — new message` });
-          }
-        } catch {
-          // Notification host unavailable — unread badges still update.
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [sessions, channels, groups, active]);
-
   const activeSession =
     active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
   const activeChannel =
@@ -343,6 +234,13 @@ export function PrivateDmScreen({
     activeChannel?.attachments ??
     activeGroup?.attachments ??
     [];
+  const activeConversationKey = active ? conversationKey(active) : "";
+  const { unread, clearUnread, notificationsReady } = useUnreadNotifications({
+    sessions,
+    channels,
+    groups,
+    activeKey: activeConversationKey || null,
+  });
   const {
     attachmentApi,
     canRetrySend,
@@ -433,7 +331,6 @@ export function PrivateDmScreen({
     setConfirmedFingerprints((current) => new Set(current).add(sessionId));
 
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
-  const activeConversationKey = active ? conversationKey(active) : "";
   const conversationTools: ConversationToolsState = {
     search: conversationSearch,
     filter: conversationFilter,
@@ -528,15 +425,7 @@ export function PrivateDmScreen({
             if (railOverlay) {
               setRailExpanded(false);
             }
-            const key = conversationKey(item);
-            setUnread((current) => {
-              if (!current.has(key)) {
-                return current;
-              }
-              const next = new Map(current);
-              next.delete(key);
-              return next;
-            });
+            clearUnread(conversationKey(item));
           }}
           onAcceptOffer={dmOffers.acceptDmOffer}
           onDismissOffer={dmOffers.dismissDmOffer}

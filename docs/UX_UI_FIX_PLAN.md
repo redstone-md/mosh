@@ -38,6 +38,7 @@
   hook that owns audio, crypto frame polling, mute state, and call actions.
 - Collapse mobile chat actions into a Telegram-like topbar: search opens on
   demand, while files and delete/leave actions live in the three-dot menu.
+- Extract unread badge and OS notification effects into a focused hook.
 
 ## Deferred
 
@@ -50,8 +51,8 @@
 ## Next Pass Roadmap
 
 1. Continue reducing `private-dm-screen.tsx` size.
-   - Extract setup/onboarding orchestration, DM offer orchestration, unread
-     notification effects, and remaining titlebar/rail state into focused hooks.
+   - Extract setup/onboarding orchestration, DM offer orchestration, and
+     remaining titlebar/rail state into focused hooks.
    - Keep each new module under 500 lines.
 2. Review remaining dense technical surfaces.
    - Peer diagnostics content hierarchy and empty/error states.
