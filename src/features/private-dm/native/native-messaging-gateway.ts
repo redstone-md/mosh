@@ -159,6 +159,8 @@ export interface DmOffer {
 export interface ChatMessage {
   readonly from_device: string;
   readonly body: string;
+  readonly message_id?: string;
+  readonly sent_at_ms?: number;
   readonly attachment?: AttachmentDescriptor;
   readonly call_event?: CallEvent;
 }
@@ -264,6 +266,8 @@ export interface ChannelMessage {
   readonly from_device: string;
   readonly from_fingerprint: string;
   readonly body: string;
+  readonly message_id?: string;
+  readonly sent_at_ms?: number;
   readonly attachment?: AttachmentDescriptor;
 }
 
@@ -320,6 +324,8 @@ export interface GroupMessage {
   readonly from_device: string;
   readonly from_fingerprint: string;
   readonly body: string;
+  readonly message_id?: string;
+  readonly sent_at_ms?: number;
   readonly attachment?: AttachmentDescriptor;
 }
 

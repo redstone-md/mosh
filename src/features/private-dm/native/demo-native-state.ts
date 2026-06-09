@@ -2,7 +2,10 @@ import type {
   AttachmentDescriptor,
   AttachmentSendResult,
   AttachmentView,
+  ChannelMessage,
   ChannelSnapshot,
+  ChatMessage,
+  GroupMessage,
   GroupSnapshot,
   MeshInfo,
   SessionSnapshot,
@@ -17,6 +20,7 @@ export const DEMO_FINGERPRINT = "D3M0A11CE0000001";
 const PEER_FINGERPRINT = "51RA7E5EED000002";
 const GROUP_FINGERPRINT = "9R0UP5EED000003";
 const STARTED_AT = Date.now() - 1000 * 60 * 12;
+const MESSAGE_STEP_MS = 62_000;
 
 export class DemoNativeState {
   private sequence = 100;
@@ -150,6 +154,14 @@ export class DemoNativeState {
     return `${prefix}-${this.sequence}`;
   }
 
+  stampMessage<T extends MessageWithMetadata>(message: T): T {
+    return {
+      ...message,
+      message_id: message.message_id ?? this.next("demo-message"),
+      sent_at_ms: message.sent_at_ms ?? Date.now(),
+    };
+  }
+
   fingerprint(seed: string): string {
     return `${seed}${this.sequence}`.toUpperCase().padEnd(16, "0").slice(0, 16);
   }
@@ -256,6 +268,7 @@ export function seedGroup(): GroupSnapshot {
 }
 
 export function sessionSnapshot(overrides: Partial<SessionSnapshot>): SessionSnapshot {
+  const messages = stampSeedMessages(overrides.messages ?? [], "demo-dm-message");
   return {
     session_id: "",
     mesh_id: DEMO_MESH_ID,
@@ -265,31 +278,39 @@ export function sessionSnapshot(overrides: Partial<SessionSnapshot>): SessionSna
     state: "ready",
     invite_uri: null,
     fingerprint: PEER_FINGERPRINT,
-    messages: [],
     attachments: [],
     mesh: demoMesh(),
     events: demoEvents(),
     ...overrides,
+    messages,
   };
 }
 
 export function channelSnapshot(overrides: Partial<ChannelSnapshot>): ChannelSnapshot {
+  const messages = stampSeedMessages(
+    overrides.messages ?? [],
+    `demo-channel-${overrides.name ?? "design-lab"}-message`,
+  );
   return {
     name: "design-lab",
     topic: `public-channel/${overrides.name ?? "design-lab"}`,
     mesh_id: DEMO_MESH_ID,
     display_name: DEMO_DEVICE,
     device_fingerprint: DEMO_FINGERPRINT,
-    messages: [],
     attachments: [],
     dm_offers: [],
     mesh: demoMesh(["design-lab"]),
     events: demoEvents(),
     ...overrides,
+    messages,
   };
 }
 
 export function groupSnapshot(overrides: Partial<GroupSnapshot>): GroupSnapshot {
+  const messages = stampSeedMessages(
+    overrides.messages ?? [],
+    `demo-group-${overrides.group_id ?? "core"}-message`,
+  );
   return {
     group_id: "",
     mesh_id: DEMO_MESH_ID,
@@ -301,12 +322,12 @@ export function groupSnapshot(overrides: Partial<GroupSnapshot>): GroupSnapshot 
     state: "ready",
     member_count: 3,
     invite_uri: null,
-    messages: [],
     attachments: [],
     dm_offers: [],
     mesh: demoMesh(),
     events: demoEvents(),
     ...overrides,
+    messages,
   };
 }
 
@@ -415,6 +436,19 @@ function event(event_name: string, detail: Record<string, string>, epoch: number
     detail_json: JSON.stringify(detail),
     epoch_millis: epoch,
   };
+}
+
+type MessageWithMetadata = ChatMessage | ChannelMessage | GroupMessage;
+
+function stampSeedMessages<T extends MessageWithMetadata>(
+  messages: readonly T[],
+  prefix: string,
+): T[] {
+  return messages.map((message, index) => ({
+    ...message,
+    message_id: message.message_id ?? `${prefix}-${index + 1}`,
+    sent_at_ms: message.sent_at_ms ?? STARTED_AT + index * MESSAGE_STEP_MS,
+  }));
 }
 
 function cloneMesh(mesh: MeshInfo | null): MeshInfo | null {

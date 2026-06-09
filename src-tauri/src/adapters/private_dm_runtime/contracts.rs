@@ -125,6 +125,10 @@ pub struct ChatMessage {
     pub from_device: String,
     pub body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_event: Option<CallEvent>,
@@ -335,6 +339,8 @@ mod tests {
         let msg = ChatMessage {
             from_device: "alice".into(),
             body: String::new(),
+            message_id: Some("123-000000".into()),
+            sent_at_ms: Some(123),
             attachment: Some(AttachmentDescriptor {
                 attachment_id: "a1".into(),
                 content_hash: "abc123".into(),

@@ -25,6 +25,13 @@ const MAX_NAME_LEN: usize = 64;
 const MAX_BODY_LEN: usize = 4096;
 const DEDUP_BUFFER_CAP: usize = 4096;
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JoinChannelRequest {
     pub name: String,
@@ -38,6 +45,10 @@ pub struct ChannelMessage {
     pub from_device: String,
     pub from_fingerprint: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
 }
@@ -299,12 +310,14 @@ impl ChannelRuntime {
             .channels
             .get_mut(&normalized)
             .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-        let envelope = ChannelMessage {
+        let envelope = session.stamp_message(ChannelMessage {
             from_device: session.display_name.clone(),
             from_fingerprint: session.device_fingerprint.clone(),
             body: body.clone(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: None,
-        };
+        });
         let payload = serde_json::to_vec(&envelope)
             .map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
         session
@@ -437,6 +450,15 @@ impl ChannelRuntime {
 }
 
 impl ChannelSession {
+    fn stamp_message(&self, mut message: ChannelMessage) -> ChannelMessage {
+        let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+        message.sent_at_ms = Some(sent_at_ms);
+        if message.message_id.as_deref().unwrap_or_default().is_empty() {
+            message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
+        }
+        message
+    }
+
     fn handle_message(&mut self, message: MossReceivedMessage) -> Result<(), ChannelRuntimeError> {
         if self.has_seen(&message) {
             return Ok(());
@@ -447,7 +469,7 @@ impl ChannelSession {
             if envelope.from_fingerprint == self.device_fingerprint {
                 return Ok(());
             }
-            self.messages.push(envelope);
+            self.messages.push(self.stamp_message(envelope));
             Ok(())
         } else if message.channel == self.blob_topic {
             self.handle_blob(message.payload)
@@ -558,12 +580,15 @@ impl ChannelSession {
                 cancelled: false,
             },
         );
-        self.messages.push(ChannelMessage {
+        let message = self.stamp_message(ChannelMessage {
             from_device,
             from_fingerprint,
             body: String::new(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: Some(descriptor),
         });
+        self.messages.push(message);
         Ok(())
     }
 
@@ -614,12 +639,15 @@ impl ChannelSession {
                 cancelled: false,
             },
         );
-        self.messages.push(ChannelMessage {
+        let message = self.stamp_message(ChannelMessage {
             from_device: self.display_name.clone(),
             from_fingerprint: self.device_fingerprint.clone(),
             body: String::new(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: Some(descriptor),
         });
+        self.messages.push(message);
         Ok(AttachmentSendResult {
             session_id: self.name.clone(),
             attachment_id,

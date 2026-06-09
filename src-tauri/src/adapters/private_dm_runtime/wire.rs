@@ -95,6 +95,10 @@ pub struct DataEnvelope {
     pub session_id: String,
     pub participant_id: String,
     pub from_device: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at_ms: Option<u64>,
     pub ciphertext_b64: String,
 }
 

@@ -27,6 +27,13 @@ const MAX_BODY_LEN: usize = 4096;
 const DEDUP_BUFFER_CAP: usize = 4096;
 const INVITE_FINGERPRINT_LEN: usize = 32;
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateGroupRequest {
     pub label: Option<String>,
@@ -57,6 +64,10 @@ pub struct GroupMessage {
     pub from_device: String,
     pub from_fingerprint: String,
     pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<AttachmentDescriptor>,
 }
@@ -204,6 +215,10 @@ struct DataEnvelope {
     participant_id: String,
     from_device: String,
     from_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sent_at_ms: Option<u64>,
     ciphertext_b64: String,
 }
 
@@ -530,20 +545,25 @@ impl PrivateGroupRuntime {
             return Err(PrivateGroupError::NotReady);
         }
         let ciphertext = session.crypto.encrypt(body.as_bytes())?;
+        let message = session.stamp_message(GroupMessage {
+            from_device: session.display_name.clone(),
+            from_fingerprint: session.device_fingerprint.clone(),
+            body,
+            message_id: None,
+            sent_at_ms: None,
+            attachment: None,
+        });
         let envelope = DataEnvelope {
             group_id: session.group_id.clone(),
             participant_id: session.participant_id.clone(),
             from_device: session.display_name.clone(),
             from_fingerprint: session.device_fingerprint.clone(),
+            message_id: message.message_id.clone(),
+            sent_at_ms: message.sent_at_ms,
             ciphertext_b64: encode(&ciphertext),
         };
         publish_json(&session.node, &session.data_channel, &envelope)?;
-        session.messages.push(GroupMessage {
-            from_device: session.display_name.clone(),
-            from_fingerprint: session.device_fingerprint.clone(),
-            body,
-            attachment: None,
-        });
+        session.messages.push(message);
         Ok(GroupSendResult {
             group_id: session.group_id.clone(),
             bytes: ciphertext.len(),
@@ -642,6 +662,15 @@ impl PrivateGroupRuntime {
 }
 
 impl GroupSession {
+    fn stamp_message(&self, mut message: GroupMessage) -> GroupMessage {
+        let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+        message.sent_at_ms = Some(sent_at_ms);
+        if message.message_id.as_deref().unwrap_or_default().is_empty() {
+            message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
+        }
+        message
+    }
+
     fn handle_moss_message(
         &mut self,
         message: MossReceivedMessage,
@@ -830,12 +859,15 @@ impl GroupSession {
             return Ok(());
         }
         let plaintext = self.crypto.decrypt(&decode(&envelope.ciphertext_b64)?)?;
-        self.messages.push(GroupMessage {
+        let message = self.stamp_message(GroupMessage {
             from_device: envelope.from_device,
             from_fingerprint: envelope.from_fingerprint,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
+            message_id: envelope.message_id,
+            sent_at_ms: envelope.sent_at_ms,
             attachment: None,
         });
+        self.messages.push(message);
         Ok(())
     }
 
@@ -922,12 +954,15 @@ impl GroupSession {
                 cancelled: false,
             },
         );
-        self.messages.push(GroupMessage {
+        let message = self.stamp_message(GroupMessage {
             from_device,
             from_fingerprint,
             body: String::new(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: Some(descriptor),
         });
+        self.messages.push(message);
         Ok(())
     }
 
@@ -981,12 +1016,15 @@ impl GroupSession {
                 cancelled: false,
             },
         );
-        self.messages.push(GroupMessage {
+        let message = self.stamp_message(GroupMessage {
             from_device: self.display_name.clone(),
             from_fingerprint: self.device_fingerprint.clone(),
             body: String::new(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: Some(descriptor),
         });
+        self.messages.push(message);
         Ok(AttachmentSendResult {
             session_id: self.group_id.clone(),
             attachment_id,
