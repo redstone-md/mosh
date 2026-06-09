@@ -32,6 +32,8 @@
 - Reduce repeated message security chrome to a compact MLS badge.
 - Stabilize mobile chat header/topbar ordering.
 - Make the mobile diagnostics drawer a full-screen dialog.
+- Make the conversation rail fully hidden on mobile until opened as a drawer,
+  and expandable on desktop for readable conversation names.
 
 ## Deferred
 

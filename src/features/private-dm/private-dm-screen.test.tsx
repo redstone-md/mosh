@@ -351,6 +351,22 @@ describe("PrivateDmScreen", () => {
     expect(await screen.findByText("yo from charlie")).toBeInTheDocument();
   });
 
+  it("toggles the conversation rail between compact and expanded states", async () => {
+    const user = userEvent.setup();
+    render(<PrivateDmScreen gateway={createGateway([snapshot()])} />);
+
+    const toggle = await screen.findByRole("button", { name: "Open conversations" });
+    const rail = await screen.findByRole("complementary", { name: "Active sessions" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(rail).not.toHaveClass("session-rail-expanded");
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(rail).toHaveClass("session-rail-expanded");
+    expect(screen.getByRole("button", { name: "Close conversations" })).toBeInTheDocument();
+  });
+
   it("filters active messages by text and attachments", async () => {
     const user = userEvent.setup();
     const gateway = createGateway([

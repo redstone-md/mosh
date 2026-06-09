@@ -23,6 +23,7 @@ export type PendingDmOffer = DmOffer & {
 };
 
 export function SessionRail({
+  expanded,
   sessions,
   channels,
   groups,
@@ -34,7 +35,9 @@ export function SessionRail({
   onAcceptOffer,
   onDismissOffer,
   onNew,
+  onToggle,
 }: {
+  expanded: boolean;
   sessions: readonly SessionSnapshot[];
   channels: readonly ChannelSnapshot[];
   groups: readonly GroupSnapshot[];
@@ -46,57 +49,73 @@ export function SessionRail({
   onAcceptOffer: (offer: PendingDmOffer) => void;
   onDismissOffer: (offer: PendingDmOffer) => void;
   onNew: () => void;
+  onToggle: () => void;
 }) {
   return (
-    <aside className="session-rail" aria-label="Active sessions">
-      <button className="rail-new" type="button" onClick={onNew} aria-label={shellText.newSession}>
-        <IconPlus size={18} />
-      </button>
-      <div className="rail-divider" />
-      <div className="rail-list">
-        {offers.map((offer) => (
-          <OfferRailItem
-            key={`offer-${offer.offer_id}`}
-            offer={offer}
-            onAccept={() => onAcceptOffer(offer)}
-            onDismiss={() => onDismissOffer(offer)}
-          />
-        ))}
-        {offers.length > 0 ? <div className="rail-divider" /> : null}
-        {sessions.map((session) => (
-          <SessionRailItem
-            key={`dm-${session.session_id}`}
-            session={session}
-            label={sessionLabel(session)}
-            active={active?.type === "dm" && active.id === session.session_id}
-            unreadCount={unread.get(`dm:${session.session_id}`) ?? 0}
-            onClick={() => onSelect({ type: "dm", id: session.session_id })}
-          />
-        ))}
-        {groups.length > 0 && sessions.length > 0 ? <div className="rail-divider" /> : null}
-        {groups.map((group) => (
-          <GroupRailItem
-            key={`gr-${group.group_id}`}
-            group={group}
-            active={active?.type === "group" && active.id === group.group_id}
-            unreadCount={unread.get(`group:${group.group_id}`) ?? 0}
-            onClick={() => onSelect({ type: "group", id: group.group_id })}
-          />
-        ))}
-        {channels.length > 0 && (sessions.length > 0 || groups.length > 0) ? (
-          <div className="rail-divider" />
-        ) : null}
-        {channels.map((channel) => (
-          <ChannelRailItem
-            key={`ch-${channel.name}`}
-            channel={channel}
-            active={active?.type === "channel" && active.name === channel.name}
-            unreadCount={unread.get(`channel:${channel.name}`) ?? 0}
-            onClick={() => onSelect({ type: "channel", name: channel.name })}
-          />
-        ))}
-      </div>
-    </aside>
+    <>
+      {expanded ? (
+        <button
+          className="rail-backdrop"
+          type="button"
+          aria-label="Close conversations"
+          onClick={onToggle}
+        />
+      ) : null}
+      <aside
+        id="conversation-rail"
+        className={`session-rail${expanded ? " session-rail-expanded" : ""}`}
+        aria-label="Active sessions"
+      >
+        <button className="rail-new" type="button" onClick={onNew} aria-label={shellText.newSession}>
+          <IconPlus size={18} />
+          <span className="rail-new-label">New chat</span>
+        </button>
+        <div className="rail-divider" />
+        <div className="rail-list">
+          {offers.map((offer) => (
+            <OfferRailItem
+              key={`offer-${offer.offer_id}`}
+              offer={offer}
+              onAccept={() => onAcceptOffer(offer)}
+              onDismiss={() => onDismissOffer(offer)}
+            />
+          ))}
+          {offers.length > 0 ? <div className="rail-divider" /> : null}
+          {sessions.map((session) => (
+            <SessionRailItem
+              key={`dm-${session.session_id}`}
+              session={session}
+              label={sessionLabel(session)}
+              active={active?.type === "dm" && active.id === session.session_id}
+              unreadCount={unread.get(`dm:${session.session_id}`) ?? 0}
+              onClick={() => onSelect({ type: "dm", id: session.session_id })}
+            />
+          ))}
+          {groups.length > 0 && sessions.length > 0 ? <div className="rail-divider" /> : null}
+          {groups.map((group) => (
+            <GroupRailItem
+              key={`gr-${group.group_id}`}
+              group={group}
+              active={active?.type === "group" && active.id === group.group_id}
+              unreadCount={unread.get(`group:${group.group_id}`) ?? 0}
+              onClick={() => onSelect({ type: "group", id: group.group_id })}
+            />
+          ))}
+          {channels.length > 0 && (sessions.length > 0 || groups.length > 0) ? (
+            <div className="rail-divider" />
+          ) : null}
+          {channels.map((channel) => (
+            <ChannelRailItem
+              key={`ch-${channel.name}`}
+              channel={channel}
+              active={active?.type === "channel" && active.name === channel.name}
+              unreadCount={unread.get(`channel:${channel.name}`) ?? 0}
+              onClick={() => onSelect({ type: "channel", name: channel.name })}
+            />
+          ))}
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -119,6 +138,10 @@ function OfferRailItem({
         aria-label={`Accept chat invite from ${offer.from_device}`}
       >
         <Avatar name={offer.from_device} />
+        <span className="rail-text">
+          <strong>{offer.from_device}</strong>
+          <small>{offer.kind === "channel" ? `#${offer.host}` : "group invite"}</small>
+        </span>
         <span className="rail-offer-badge" aria-hidden="true">
           <IconMessageCircle size={10} />
         </span>
@@ -169,6 +192,10 @@ function SessionRailItem({
       aria-label={`Open session with ${label}`}
     >
       <Avatar name={label} />
+      <span className="rail-text">
+        <strong>{label}</strong>
+        <small>{stateLabels[session.state] ?? session.state}</small>
+      </span>
       <span className={`rail-dot rail-dot-${session.state}`} />
       <UnreadBadge count={unreadCount} />
     </button>
@@ -195,6 +222,10 @@ function ChannelRailItem({
       aria-label={`Open channel ${channel.name}`}
     >
       <IconHash size={18} />
+      <span className="rail-text">
+        <strong>#{channel.name}</strong>
+        <small>{channel.topic}</small>
+      </span>
       <UnreadBadge count={unreadCount} />
     </button>
   );
@@ -221,6 +252,10 @@ function GroupRailItem({
       aria-label={`Open group ${label}`}
     >
       <IconUsers size={18} />
+      <span className="rail-text">
+        <strong>{label}</strong>
+        <small>{group.member_count} members</small>
+      </span>
       {group.is_admin ? (
         <span className="rail-admin-crown" title={groupText.adminBadge}>
           <IconCrown size={11} />
