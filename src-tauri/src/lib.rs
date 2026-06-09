@@ -191,12 +191,15 @@ struct PrivateGroupState {
 }
 
 impl PrivateGroupState {
-    fn ready(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
+    fn ready(
+        moss: Arc<MossFfiRuntime>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<adapters::persistence::Persistence>>,
+    ) -> Self {
+        let mut runtime = PrivateGroupRuntime::from_shared(moss, attachment_store, persistence);
+        runtime.rehydrate();
         Self {
-            runtime: Mutex::new(Some(PrivateGroupRuntime::from_shared(
-                moss,
-                attachment_store,
-            ))),
+            runtime: Mutex::new(Some(runtime)),
             load_error: None,
         }
     }
@@ -242,17 +245,21 @@ fn app_diagnostics() -> AppDiagnostics {
     current_diagnostics()
 }
 
+fn build_native_runtime_status(persistence: PersistenceRuntimeStatus) -> NativeRuntimeStatus {
+    NativeRuntimeStatus {
+        moss: MossDynamicRuntime::from_default_candidates().status(),
+        secure_storage: OsSecureSecretStore::status(),
+        persistence,
+        openmls_smoke: run_openmls_smoke_test().map_err(|error| error.to_string()),
+        openmls_roundtrip: run_openmls_alice_bob_roundtrip().map_err(|error| error.to_string()),
+    }
+}
+
 #[tauri::command]
 fn native_runtime_status(
     persistence: tauri::State<'_, PersistenceStatusState>,
 ) -> NativeRuntimeStatus {
-    NativeRuntimeStatus {
-        moss: MossDynamicRuntime::from_default_candidates().status(),
-        secure_storage: OsSecureSecretStore::status(),
-        persistence: persistence.0.clone(),
-        openmls_smoke: run_openmls_smoke_test().map_err(|error| error.to_string()),
-        openmls_roundtrip: run_openmls_alice_bob_roundtrip().map_err(|error| error.to_string()),
-    }
+    build_native_runtime_status(persistence.0.clone())
 }
 
 #[tauri::command]
@@ -1012,7 +1019,11 @@ pub fn run() {
                         Arc::clone(&moss),
                         Arc::clone(&attachment_store),
                     ));
-                    app.manage(PrivateGroupState::ready(moss, attachment_store));
+                    app.manage(PrivateGroupState::ready(
+                        moss,
+                        attachment_store,
+                        persistence_load.persistence.clone(),
+                    ));
                 }
                 Err(error) => {
                     let message = error.to_string();
@@ -1087,10 +1098,17 @@ mod tests {
 
     #[test]
     fn runtime_status_checks_native_adapters() {
-        let status = native_runtime_status();
+        let status = build_native_runtime_status(PersistenceRuntimeStatus {
+            backend: "test",
+            database: "test.redb".into(),
+            available: true,
+            encrypted_at_rest: true,
+            error: None,
+        });
 
         assert_eq!(status.moss.link_mode, MOSS_LINK_MODE);
         assert_eq!(status.secure_storage.backend, "os-keychain");
+        assert!(status.persistence.available);
         assert!(status.openmls_smoke.is_ok());
         assert!(status.openmls_roundtrip.is_ok());
     }

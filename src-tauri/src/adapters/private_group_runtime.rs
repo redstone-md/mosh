@@ -13,6 +13,7 @@ use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
+use crate::adapters::persistence::Persistence;
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
@@ -59,7 +60,7 @@ pub struct GroupCreated {
     pub label: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMessage {
     pub from_device: String,
     pub from_fingerprint: String,
@@ -252,9 +253,39 @@ struct AttachmentSlot {
     cancelled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedGroupMessage {
+    conversation_id: String,
+    sent_at_ms: u64,
+    message_id: String,
+    message: GroupMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedGroupSession {
+    group_id: String,
+    mesh_id: String,
+    label: Option<String>,
+    display_name: String,
+    participant_id: String,
+    device_fingerprint: String,
+    creator_fingerprint: String,
+    current_admin_fingerprint: String,
+    is_admin: bool,
+    invite_uri: Option<String>,
+    joined: bool,
+    signer_public: Vec<u8>,
+    mls_group_id: Vec<u8>,
+    listen_port: u16,
+    static_peer: Option<String>,
+}
+
 pub struct PrivateGroupRuntime {
     moss: Arc<MossFfiRuntime>,
     attachment_store: Arc<AttachmentStore>,
+    persistence: Option<Arc<Persistence>>,
+    persisted_counts: HashMap<String, usize>,
+    finalized_group_records: HashSet<String>,
     groups: HashMap<String, GroupSession>,
 }
 
@@ -270,6 +301,8 @@ struct GroupSession {
     is_admin: bool,
     invite_uri: Option<String>,
     joined: bool,
+    listen_port: u16,
+    static_peer: Option<String>,
     node: MossNode,
     crypto: MlsSessionCrypto,
     messages: Vec<GroupMessage>,
@@ -286,14 +319,158 @@ struct GroupSession {
 
 impl PrivateGroupRuntime {
     pub fn new(moss: MossFfiRuntime, attachment_store: Arc<AttachmentStore>) -> Self {
-        Self::from_shared(Arc::new(moss), attachment_store)
+        Self::from_shared(Arc::new(moss), attachment_store, None)
     }
 
-    pub fn from_shared(moss: Arc<MossFfiRuntime>, attachment_store: Arc<AttachmentStore>) -> Self {
+    pub fn from_shared(
+        moss: Arc<MossFfiRuntime>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<Persistence>>,
+    ) -> Self {
         Self {
             moss,
             attachment_store,
+            persistence,
+            persisted_counts: HashMap::new(),
+            finalized_group_records: HashSet::new(),
             groups: HashMap::new(),
+        }
+    }
+
+    /// Rebuild private groups + history from the encrypted store. Best-effort:
+    /// a corrupt group row is skipped so one bad record does not block startup.
+    pub fn rehydrate(&mut self) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let rows = match p.list_groups() {
+            Ok(rows) => rows,
+            Err(_) => return,
+        };
+        for row in rows {
+            let rec: PersistedGroupSession = match serde_json::from_slice(&row) {
+                Ok(record) => record,
+                Err(error) => {
+                    eprintln!("group rehydrate: bad group row: {error}");
+                    continue;
+                }
+            };
+            let snapshot = match p.get_group_mls_snapshot(&rec.group_id) {
+                Ok(Some(snapshot)) => snapshot,
+                _ => {
+                    eprintln!("group rehydrate: missing MLS snapshot for {}", rec.group_id);
+                    continue;
+                }
+            };
+            let crypto = match MlsSessionCrypto::restore(
+                &rec.display_name,
+                &rec.signer_public,
+                &snapshot,
+                &rec.mls_group_id,
+            ) {
+                Ok(crypto) => crypto,
+                Err(error) => {
+                    eprintln!(
+                        "group rehydrate: crypto restore failed for {}: {error}",
+                        rec.group_id
+                    );
+                    continue;
+                }
+            };
+            let node = match start_node(
+                &self.moss,
+                &rec.mesh_id,
+                &rec.group_id,
+                rec.listen_port,
+                rec.static_peer.clone(),
+            ) {
+                Ok(node) => node,
+                Err(error) => {
+                    eprintln!(
+                        "group rehydrate: node start failed for {}: {error}",
+                        rec.group_id
+                    );
+                    continue;
+                }
+            };
+            let mut session = GroupSession {
+                group_id: rec.group_id.clone(),
+                mesh_id: rec.mesh_id.clone(),
+                label: rec.label.clone(),
+                display_name: rec.display_name.clone(),
+                participant_id: rec.participant_id.clone(),
+                device_fingerprint: node
+                    .public_key_hex()
+                    .unwrap_or_else(|| rec.device_fingerprint.clone()),
+                creator_fingerprint: rec.creator_fingerprint.clone(),
+                current_admin_fingerprint: rec.current_admin_fingerprint.clone(),
+                is_admin: rec.is_admin,
+                invite_uri: rec.invite_uri.clone(),
+                joined: rec.joined,
+                listen_port: rec.listen_port,
+                static_peer: rec.static_peer.clone(),
+                node,
+                crypto,
+                messages: Vec::new(),
+                seen_set: HashSet::new(),
+                seen_order: VecDeque::new(),
+                control_channel: format!("{CONTROL_CHANNEL_PREFIX}{}", rec.group_id),
+                data_channel: format!("{DATA_CHANNEL_PREFIX}{}", rec.group_id),
+                blob_channel: format!("{BLOB_CHANNEL_PREFIX}{}", rec.group_id),
+                attachment_store: Arc::clone(&self.attachment_store),
+                attachments: AttachmentRuntime::new(),
+                attachment_slots: HashMap::new(),
+                dm_offers: Vec::new(),
+            };
+            if let Ok(messages) = p.list_group_messages(&rec.group_id) {
+                for row in messages {
+                    if let Ok(persisted) = serde_json::from_slice::<PersistedGroupMessage>(&row) {
+                        let mut message = persisted.message;
+                        if message.message_id.is_none() {
+                            message.message_id = Some(persisted.message_id.clone());
+                        }
+                        if message.sent_at_ms.is_none() {
+                            message.sent_at_ms = Some(persisted.sent_at_ms);
+                        }
+                        if let Some(desc) = message.attachment.as_ref() {
+                            if self
+                                .attachment_store
+                                .exists(&desc.content_hash, &desc.file_name)
+                                .unwrap_or(false)
+                            {
+                                if let Ok(path) = self
+                                    .attachment_store
+                                    .path_for(&desc.content_hash, &desc.file_name)
+                                {
+                                    let direction = if message.from_fingerprint
+                                        == rec.device_fingerprint
+                                    {
+                                        AttachmentDirection::Outgoing
+                                    } else {
+                                        AttachmentDirection::Incoming
+                                    };
+                                    session.attachment_slots.insert(
+                                        desc.attachment_id.clone(),
+                                        AttachmentSlot {
+                                            descriptor: desc.clone(),
+                                            direction,
+                                            local_path: Some(path.to_string_lossy().into_owned()),
+                                            download_requested: false,
+                                            failed: false,
+                                            cancelled: false,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        session.messages.push(message);
+                    }
+                }
+            }
+            self.persisted_counts
+                .insert(rec.group_id.clone(), session.messages.len());
+            self.finalized_group_records.insert(rec.group_id.clone());
+            self.groups.insert(rec.group_id, session);
         }
     }
 
@@ -302,6 +479,8 @@ impl PrivateGroupRuntime {
         request: CreateGroupRequest,
     ) -> Result<GroupCreated, PrivateGroupError> {
         let label = sanitize_label(request.label)?;
+        let listen_port = request.listen_port;
+        let static_peer = request.static_peer.clone();
         let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
         crypto.create_group()?;
         let group_id = crypto.random_token("group")?;
@@ -312,8 +491,8 @@ impl PrivateGroupRuntime {
             &self.moss,
             &mesh_id,
             &group_id,
-            request.listen_port,
-            request.static_peer,
+            listen_port,
+            static_peer.clone(),
         )?;
         let device_fingerprint = node
             .public_key_hex()
@@ -332,6 +511,8 @@ impl PrivateGroupRuntime {
             is_admin: true,
             invite_uri: Some(invite_uri.clone()),
             joined: true,
+            listen_port,
+            static_peer,
             node,
             crypto,
             messages: Vec::new(),
@@ -347,6 +528,7 @@ impl PrivateGroupRuntime {
         };
 
         self.groups.insert(group_id.clone(), session);
+        self.persist_group_tail();
         Ok(GroupCreated {
             group_id,
             mesh_id,
@@ -364,6 +546,8 @@ impl PrivateGroupRuntime {
         if self.groups.contains_key(&invite.group_id) {
             return Err(PrivateGroupError::DuplicateGroup(invite.group_id));
         }
+        let listen_port = request.listen_port;
+        let static_peer = request.static_peer.clone();
         let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
         let participant_id = crypto.random_token("participant")?;
         let key_package = crypto.key_package_bytes()?;
@@ -371,8 +555,8 @@ impl PrivateGroupRuntime {
             &self.moss,
             &invite.mesh_id,
             &invite.group_id,
-            request.listen_port,
-            request.static_peer,
+            listen_port,
+            static_peer.clone(),
         )?;
         let device_fingerprint = node
             .public_key_hex()
@@ -398,6 +582,8 @@ impl PrivateGroupRuntime {
             is_admin: false,
             invite_uri: Some(request.invite_uri),
             joined: false,
+            listen_port,
+            static_peer,
             node,
             crypto,
             messages: Vec::new(),
@@ -431,7 +617,9 @@ impl PrivateGroupRuntime {
             .groups
             .get_mut(group_id)
             .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
-        session.send_attachment(file_name, mime, bytes, thumbnail, voice)
+        let result = session.send_attachment(file_name, mime, bytes, thumbnail, voice)?;
+        self.persist_group_tail();
+        Ok(result)
     }
 
     pub fn download_attachment(
@@ -537,41 +725,46 @@ impl PrivateGroupRuntime {
             return Err(PrivateGroupError::BodyTooLarge);
         }
         self.drain_inbound()?;
-        let session = self
-            .groups
-            .get_mut(group_id)
-            .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
-        if !session.joined {
-            return Err(PrivateGroupError::NotReady);
-        }
-        let ciphertext = session.crypto.encrypt(body.as_bytes())?;
-        let message = session.stamp_message(GroupMessage {
-            from_device: session.display_name.clone(),
-            from_fingerprint: session.device_fingerprint.clone(),
-            body,
-            message_id: None,
-            sent_at_ms: None,
-            attachment: None,
-        });
-        let envelope = DataEnvelope {
-            group_id: session.group_id.clone(),
-            participant_id: session.participant_id.clone(),
-            from_device: session.display_name.clone(),
-            from_fingerprint: session.device_fingerprint.clone(),
-            message_id: message.message_id.clone(),
-            sent_at_ms: message.sent_at_ms,
-            ciphertext_b64: encode(&ciphertext),
+        let result = {
+            let session = self
+                .groups
+                .get_mut(group_id)
+                .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
+            if !session.joined {
+                return Err(PrivateGroupError::NotReady);
+            }
+            let ciphertext = session.crypto.encrypt(body.as_bytes())?;
+            let message = session.stamp_message(GroupMessage {
+                from_device: session.display_name.clone(),
+                from_fingerprint: session.device_fingerprint.clone(),
+                body,
+                message_id: None,
+                sent_at_ms: None,
+                attachment: None,
+            });
+            let envelope = DataEnvelope {
+                group_id: session.group_id.clone(),
+                participant_id: session.participant_id.clone(),
+                from_device: session.display_name.clone(),
+                from_fingerprint: session.device_fingerprint.clone(),
+                message_id: message.message_id.clone(),
+                sent_at_ms: message.sent_at_ms,
+                ciphertext_b64: encode(&ciphertext),
+            };
+            publish_json(&session.node, &session.data_channel, &envelope)?;
+            session.messages.push(message);
+            GroupSendResult {
+                group_id: session.group_id.clone(),
+                bytes: ciphertext.len(),
+            }
         };
-        publish_json(&session.node, &session.data_channel, &envelope)?;
-        session.messages.push(message);
-        Ok(GroupSendResult {
-            group_id: session.group_id.clone(),
-            bytes: ciphertext.len(),
-        })
+        self.persist_group_tail();
+        Ok(result)
     }
 
     pub fn poll(&mut self, group_id: &str) -> Result<GroupSnapshot, PrivateGroupError> {
         self.drain_inbound()?;
+        self.persist_group_tail();
         let session = self
             .groups
             .get(group_id)
@@ -581,6 +774,7 @@ impl PrivateGroupRuntime {
 
     pub fn list(&mut self) -> Result<GroupListSnapshot, PrivateGroupError> {
         self.drain_inbound()?;
+        self.persist_group_tail();
         let mut groups: Vec<GroupSnapshot> =
             self.groups.values().map(GroupSession::snapshot).collect();
         groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
@@ -633,6 +827,13 @@ impl PrivateGroupRuntime {
         }
 
         self.groups.remove(group_id);
+        self.persisted_counts.remove(group_id);
+        self.finalized_group_records.remove(group_id);
+        if let Some(p) = self.persistence.as_ref() {
+            if let Err(error) = p.delete_group(group_id) {
+                eprintln!("failed to delete persisted group {group_id}: {error}");
+            }
+        }
         Ok(GroupLeaveResult {
             group_id: group_id.to_string(),
             closed: true,
@@ -659,6 +860,71 @@ impl PrivateGroupRuntime {
         }
         Ok(())
     }
+
+    fn persist_group_tail(&mut self) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let mut pending_records: Vec<(String, Vec<u8>)> = Vec::new();
+        for session in self.groups.values() {
+            let start = self
+                .persisted_counts
+                .get(&session.group_id)
+                .copied()
+                .unwrap_or(0);
+            let has_new_messages = session.messages.len() > start;
+            for (idx, msg) in session.messages.iter().enumerate().skip(start) {
+                let sent_at_ms = msg.sent_at_ms.unwrap_or_else(now_ms);
+                let message_id = msg
+                    .message_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{sent_at_ms}-{idx:06}"));
+                let mut message = msg.clone();
+                if message.sent_at_ms.is_none() {
+                    message.sent_at_ms = Some(sent_at_ms);
+                }
+                if message.message_id.is_none() {
+                    message.message_id = Some(message_id.clone());
+                }
+                let record = PersistedGroupMessage {
+                    conversation_id: session.group_id.clone(),
+                    sent_at_ms,
+                    message_id: message_id.clone(),
+                    message,
+                };
+                if let Ok(json) = serde_json::to_vec(&record) {
+                    let _ =
+                        p.append_group_message(&session.group_id, sent_at_ms, &message_id, &json);
+                }
+            }
+
+            let needs_record_refresh =
+                !self.finalized_group_records.contains(&session.group_id)
+                    && session.crypto.group_id_bytes().is_some();
+
+            if has_new_messages || needs_record_refresh {
+                let _ = p.put_group_mls_snapshot(&session.group_id, &session.crypto.snapshot());
+            }
+
+            if needs_record_refresh {
+                if let Ok(json) = serde_json::to_vec(&session.to_persisted_record()) {
+                    pending_records.push((session.group_id.clone(), json));
+                }
+            }
+        }
+        for (group_id, json) in pending_records {
+            let _ = p.put_group(&group_id, &json);
+            self.finalized_group_records.insert(group_id);
+        }
+        let new_counts: Vec<(String, usize)> = self
+            .groups
+            .values()
+            .map(|group| (group.group_id.clone(), group.messages.len()))
+            .collect();
+        for (group_id, count) in new_counts {
+            self.persisted_counts.insert(group_id, count);
+        }
+    }
 }
 
 impl GroupSession {
@@ -669,6 +935,26 @@ impl GroupSession {
             message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
         }
         message
+    }
+
+    fn to_persisted_record(&self) -> PersistedGroupSession {
+        PersistedGroupSession {
+            group_id: self.group_id.clone(),
+            mesh_id: self.mesh_id.clone(),
+            label: self.label.clone(),
+            display_name: self.display_name.clone(),
+            participant_id: self.participant_id.clone(),
+            device_fingerprint: self.device_fingerprint.clone(),
+            creator_fingerprint: self.creator_fingerprint.clone(),
+            current_admin_fingerprint: self.current_admin_fingerprint.clone(),
+            is_admin: self.is_admin,
+            invite_uri: self.invite_uri.clone(),
+            joined: self.joined,
+            signer_public: self.crypto.signer_public(),
+            mls_group_id: self.crypto.group_id_bytes().unwrap_or_default(),
+            listen_port: self.listen_port,
+            static_peer: self.static_peer.clone(),
+        }
     }
 
     fn handle_moss_message(
@@ -1349,6 +1635,22 @@ fn optional_query(url: &url::Url, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
+    use crate::adapters::persistence::Persistence;
+    use std::path::PathBuf;
+
+    fn temp_store() -> Arc<AttachmentStore> {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "mosh-group-attachments-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        Arc::new(AttachmentStore::new(&path).expect("attachment store should init"))
+    }
 
     #[test]
     fn invite_uri_round_trips() {
@@ -1394,5 +1696,79 @@ mod tests {
         assert_eq!(channel_group_id("group-control/g-1"), Some("g-1"));
         assert_eq!(channel_group_id("group-data/g-1"), Some("g-1"));
         assert_eq!(channel_group_id("public-channel/x"), None);
+    }
+
+    #[test]
+    fn group_history_and_session_survive_restart() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-group-rehydrate-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [13u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let group_id = {
+            let mut groups = PrivateGroupRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let created = groups
+                .create_group(CreateGroupRequest {
+                    label: Some("Restart Club".to_string()),
+                    display_name: "Alice".to_string(),
+                    listen_port: 42240,
+                    static_peer: None,
+                })
+                .expect("group should be created");
+            groups
+                .send(&created.group_id, "hello after group restart".to_string())
+                .expect("group message should send");
+            created.group_id
+        };
+
+        let mut revived = PrivateGroupRuntime::from_shared(
+            Arc::clone(&runtime),
+            temp_store(),
+            Some(persistence.clone()),
+        );
+        revived.rehydrate();
+
+        let listing = revived.list().expect("listing should pass");
+        let group = listing
+            .groups
+            .iter()
+            .find(|group| group.group_id == group_id)
+            .expect("rehydrated group should be present");
+        assert_eq!(group.label.as_deref(), Some("Restart Club"));
+        assert!(
+            group
+                .messages
+                .iter()
+                .any(|message| message.body == "hello after group restart"),
+            "rehydrated group message missing: {:?}",
+            group.messages
+        );
+
+        let listing2 = revived.list().expect("second listing should pass");
+        let group2 = listing2
+            .groups
+            .iter()
+            .find(|group| group.group_id == group_id)
+            .expect("group should still be present");
+        let matching = group2
+            .messages
+            .iter()
+            .filter(|message| message.body == "hello after group restart")
+            .count();
+        assert_eq!(matching, 1, "persist tail duplicated the group message");
+
+        let _ = std::fs::remove_file(&db_path);
     }
 }
