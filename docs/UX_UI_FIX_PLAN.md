@@ -34,6 +34,8 @@
 - Make the mobile diagnostics drawer a full-screen dialog.
 - Make the conversation rail fully hidden on mobile until opened as a drawer,
   and expandable on desktop for readable conversation names.
+- Extract voice-call orchestration from `private-dm-screen.tsx` into a focused
+  hook that owns audio, crypto frame polling, mute state, and call actions.
 
 ## Deferred
 
@@ -47,7 +49,7 @@
 
 1. Continue reducing `private-dm-screen.tsx` size.
    - Extract setup/onboarding orchestration, DM offer orchestration, unread
-     notification effects, and voice call orchestration into focused hooks.
+     notification effects, and remaining titlebar/rail state into focused hooks.
    - Keep each new module under 500 lines.
 2. Review remaining dense technical surfaces.
    - Peer diagnostics content hierarchy and empty/error states.

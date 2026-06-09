@@ -367,6 +367,26 @@ describe("PrivateDmScreen", () => {
     expect(screen.getByRole("button", { name: "Close conversations" })).toBeInTheDocument();
   });
 
+  it("accepts an incoming voice call from the modal", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway([
+      snapshot({
+        pending_call: {
+          call_id: "call-incoming",
+          from_device: "Alice phone",
+        },
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    expect(await screen.findByRole("dialog", { name: "Incoming call" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Accept call" }));
+
+    await waitFor(() =>
+      expect(gateway.callAccept).toHaveBeenCalledWith(SESSION_ID, "call-incoming"),
+    );
+  });
+
   it("filters active messages by text and attachments", async () => {
     const user = userEvent.setup();
     const gateway = createGateway([

@@ -53,26 +53,8 @@ import { MediaViewer } from "./attachments";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
 import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
+import { useVoiceCallOrchestration } from "./voice-call/use-voice-call-orchestration";
 import { NewSessionPanel } from "./NewSessionPanel";
-import {
-  CALLEE_DIRECTION_BIT,
-  CALLER_DIRECTION_BIT,
-  bytesFromBase64,
-  bytesToBase64,
-  importCallKey,
-  openFrame,
-  sealFrame,
-} from "./voice-call/frame-crypto";
-import { JitterBuffer } from "./voice-call/jitter-buffer";
-import {
-  isCallAudioSupported,
-  startVoiceCapture,
-  type VoiceCaptureHandle,
-} from "./voice-call/audio-capture";
-import {
-  startVoicePlayback,
-  type VoicePlaybackHandle,
-} from "./voice-call/audio-playback";
 
 const AUTO_POLL_MS = 1000;
 const READY_STATE = "ready";
@@ -165,14 +147,7 @@ export function PrivateDmScreen({
   const [unread, setUnread] = useState<ReadonlyMap<string, number>>(new Map());
   const lastSeenRef = useRef<Map<string, number>>(new Map());
   const notifyReadyRef = useRef(false);
-  const callCaptureRef = useRef<VoiceCaptureHandle | null>(null);
-  const callPlaybackRef = useRef<VoicePlaybackHandle | null>(null);
-  const callKeyRef = useRef<CryptoKey | null>(null);
-  const callSeqRef = useRef<bigint>(0n);
-  const callJitterRef = useRef<JitterBuffer | null>(null);
-  const callPollRef = useRef<number | undefined>(undefined);
-  const callMutedRef = useRef(false);
-  const [callMuted, setCallMuted] = useState(false);
+  const notificationsReady = useCallback(() => notifyReadyRef.current, []);
   const refreshBusy = operationCounts.refresh > 0;
   const setupBusy = operationCounts.setup > 0;
   const messageBusy = operationCounts.message > 0;
@@ -457,47 +432,6 @@ export function PrivateDmScreen({
   const confirmFingerprint = (sessionId: string) =>
     setConfirmedFingerprints((current) => new Set(current).add(sessionId));
 
-  const startCall = useCallback(
-    (sessionId: string) => {
-      void (async () => {
-        try {
-          await gateway.callStart(sessionId);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Could not start call");
-        }
-      })();
-    },
-    [gateway],
-  );
-  const acceptCall = useCallback(
-    (sessionId: string, callId: string) => {
-      void (async () => {
-        try {
-          await gateway.callAccept(sessionId, callId);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Could not accept call");
-        }
-      })();
-    },
-    [gateway],
-  );
-  const declineCall = useCallback(
-    (sessionId: string, callId: string, reason: string) => {
-      void gateway.callDecline(sessionId, callId, reason).catch((err) => {
-        setError(err instanceof Error ? err.message : "Could not decline call");
-      });
-    },
-    [gateway],
-  );
-  const endCall = useCallback(
-    (sessionId: string, callId: string, reason: string) => {
-      void gateway.callEnd(sessionId, callId, reason).catch((err) => {
-        setError(err instanceof Error ? err.message : "Could not end call");
-      });
-    },
-    [gateway],
-  );
-
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
   const activeConversationKey = active ? conversationKey(active) : "";
   const conversationTools: ConversationToolsState = {
@@ -512,151 +446,25 @@ export function PrivateDmScreen({
     setConversationFilter("all");
   }, [activeConversationKey]);
 
-  const pendingCallSession = sessions.find((session) => session.pending_call);
-  const activeDmSession = activeSession;
-  const activeCall = activeDmSession?.active_call ?? null;
-  const activeCallSessionId = activeDmSession?.session_id ?? null;
-  const callSupported = isCallAudioSupported();
-  const activeCallId = activeCall?.call_id ?? null;
-  const activeCallKey = activeCall?.key_b64 ?? null;
-  const activeCallNoncePrefix = activeCall?.nonce_prefix_b64 ?? null;
-  const activeCallDirection = activeCall?.direction ?? null;
-
-  useEffect(() => {
-    if (
-      !activeCallSessionId ||
-      !activeCallId ||
-      !activeCallKey ||
-      !activeCallNoncePrefix ||
-      !activeCallDirection
-    ) {
-      return;
-    }
-    let cancelled = false;
-    const direction =
-      activeCallDirection === "caller"
-        ? CALLER_DIRECTION_BIT
-        : CALLEE_DIRECTION_BIT;
-    const sessionId = activeCallSessionId;
-    const callId = activeCallId;
-    const noncePrefix = activeCallNoncePrefix;
-    void (async () => {
-      try {
-        callKeyRef.current = await importCallKey(activeCallKey);
-        callSeqRef.current = 0n;
-        callJitterRef.current = new JitterBuffer();
-        callPlaybackRef.current = await startVoicePlayback();
-        callCaptureRef.current = await startVoiceCapture((frame) => {
-          if (cancelled || !callKeyRef.current || callMutedRef.current) {
-            return;
-          }
-          void (async () => {
-            const seal = await sealFrame(
-              callKeyRef.current!,
-              noncePrefix,
-              callSeqRef.current,
-              direction,
-              frame,
-            );
-            callSeqRef.current += 1n;
-            try {
-              await gateway.callSendFrame(
-                sessionId,
-                callId,
-                bytesToBase64(seal),
-              );
-            } catch (err) {
-              console.warn("[voice-call] send failed", err);
-            }
-          })();
-        });
-        callPollRef.current = window.setInterval(() => {
-          void (async () => {
-            try {
-              const frames = await gateway.callDrainFrames(sessionId, callId);
-              if (frames.length === 0 || !callKeyRef.current) {
-                return;
-              }
-              for (const frameB64 of frames) {
-                const opened = await openFrame(
-                  callKeyRef.current,
-                  noncePrefix,
-                  bytesFromBase64(frameB64),
-                );
-                if (opened) {
-                  callJitterRef.current?.push({
-                    seq: opened.seq,
-                    payload: opened.payload,
-                  });
-                }
-              }
-              const ready = callJitterRef.current?.drainReady() ?? [];
-              for (const buffered of ready) {
-                callPlaybackRef.current?.pushFrame(buffered.payload);
-              }
-            } catch (err) {
-              console.warn("[voice-call] poll failed", err);
-            }
-          })();
-        }, 20);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Voice call setup failed");
-        endCall(sessionId, callId, "setup_failed");
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (callPollRef.current !== undefined) {
-        window.clearInterval(callPollRef.current);
-        callPollRef.current = undefined;
-      }
-      void callCaptureRef.current?.stop();
-      void callPlaybackRef.current?.stop();
-      callCaptureRef.current = null;
-      callPlaybackRef.current = null;
-      callKeyRef.current = null;
-      callJitterRef.current = null;
-      setCallMuted(false);
-      callMutedRef.current = false;
-    };
-  }, [
+  const {
+    pendingCallSession,
+    activeCall,
     activeCallSessionId,
-    activeCallId,
-    activeCallKey,
-    activeCallNoncePrefix,
-    activeCallDirection,
+    callSupported,
+    callMuted,
+    startCall,
+    acceptCall,
+    declineCall,
     endCall,
+    toggleMute,
+  } = useVoiceCallOrchestration({
     gateway,
-  ]);
-
-  useEffect(() => {
-    if (!pendingCallSession?.pending_call) {
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const focused = await getCurrentWindow().isFocused();
-        if (cancelled || focused || !notifyReadyRef.current) {
-          return;
-        }
-        sendNotification({
-          title: "Mosh",
-          body: `Incoming call from ${pendingCallSession.display_name}`,
-        });
-      } catch {
-        // Notification host unavailable; the in-app modal is the user's signal.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    pendingCallSession?.session_id,
-    pendingCallSession?.pending_call?.call_id,
-    pendingCallSession?.display_name,
-  ]);
+    sessions,
+    activeSession,
+    notificationsReady,
+    onError: setError,
+  });
+  const activeDmSession = activeSession;
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
@@ -898,11 +706,7 @@ export function PrivateDmScreen({
           active={activeCall}
           peerLabel={activeDmSession.peer_display_name || "Peer"}
           muted={callMuted}
-          onToggleMute={() => {
-            const next = !callMuted;
-            setCallMuted(next);
-            callMutedRef.current = next;
-          }}
+          onToggleMute={toggleMute}
           onHangUp={() =>
             endCall(activeCallSessionId, activeCall.call_id, "hangup")
           }
