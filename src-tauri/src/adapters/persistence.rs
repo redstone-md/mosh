@@ -61,6 +61,10 @@ const DEK_KEY: &str = "history-dek-v1";
 const MLS_SNAPSHOT: TableDefinition<&str, &[u8]> = TableDefinition::new("mls_snapshot");
 const MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("messages");
 const SESSIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("sessions");
+const GROUP_MLS_SNAPSHOT: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("group_mls_snapshot");
+const GROUP_MESSAGES: TableDefinition<&str, &[u8]> = TableDefinition::new("group_messages");
+const GROUPS: TableDefinition<&str, &[u8]> = TableDefinition::new("groups");
 const MOSS_IDENTITY: TableDefinition<&str, &[u8]> = TableDefinition::new("moss_identity");
 // Single-row table: the device's stable Moss transport identity (libp2p key).
 const MOSS_IDENTITY_KEY: &str = "node-identity-v1";
@@ -115,6 +119,12 @@ impl Persistence {
             wtx.open_table(MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(SESSIONS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUP_MLS_SNAPSHOT)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUP_MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUPS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -287,6 +297,106 @@ impl Persistence {
             .map_err(|e| PersistenceError::Db(e.to_string()))
     }
 
+    pub fn put_group_mls_snapshot(
+        &self,
+        group_id: &str,
+        snapshot: &[u8],
+    ) -> Result<(), PersistenceError> {
+        self.put(GROUP_MLS_SNAPSHOT, group_id, snapshot)
+    }
+
+    pub fn get_group_mls_snapshot(
+        &self,
+        group_id: &str,
+    ) -> Result<Option<Vec<u8>>, PersistenceError> {
+        self.get(GROUP_MLS_SNAPSHOT, group_id)
+    }
+
+    pub fn put_group(&self, group_id: &str, json: &[u8]) -> Result<(), PersistenceError> {
+        self.put(GROUPS, group_id, json)
+    }
+
+    pub fn list_groups(&self) -> Result<Vec<Vec<u8>>, PersistenceError> {
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let t = rtx
+            .open_table(GROUPS)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let mut out = Vec::new();
+        for item in t.iter().map_err(|e| PersistenceError::Db(e.to_string()))? {
+            let (k, v) = item.map_err(|e| PersistenceError::Db(e.to_string()))?;
+            match decrypt_blob(&self.dek, v.value()) {
+                Ok(plain) => out.push(plain),
+                Err(e) => eprintln!("skipping undecryptable group row {}: {e}", k.value()),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn append_group_message(
+        &self,
+        group_id: &str,
+        sent_at_ms: u64,
+        message_id: &str,
+        json: &[u8],
+    ) -> Result<(), PersistenceError> {
+        let key = format!("{group_id}\u{0001}{sent_at_ms:020}\u{0001}{message_id}");
+        self.put(GROUP_MESSAGES, &key, json)
+    }
+
+    pub fn list_group_messages(&self, group_id: &str) -> Result<Vec<Vec<u8>>, PersistenceError> {
+        self.range_prefix(GROUP_MESSAGES, group_id)
+    }
+
+    /// Permanently remove a private group: its group record, MLS snapshot and
+    /// every persisted message.
+    pub fn delete_group(&self, group_id: &str) -> Result<(), PersistenceError> {
+        let wtx = self
+            .db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        {
+            let mut groups = wtx
+                .open_table(GROUPS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            groups
+                .remove(group_id)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        {
+            let mut snapshot = wtx
+                .open_table(GROUP_MLS_SNAPSHOT)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            snapshot
+                .remove(group_id)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        {
+            let lo = format!("{group_id}\u{0001}");
+            let hi = format!("{group_id}\u{0002}");
+            let mut messages = wtx
+                .open_table(GROUP_MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            let keys: Vec<String> = messages
+                .range(lo.as_str()..hi.as_str())
+                .map_err(|e| PersistenceError::Db(e.to_string()))?
+                .map(|item| {
+                    item.map(|(k, _)| k.value().to_string())
+                        .map_err(|e| PersistenceError::Db(e.to_string()))
+                })
+                .collect::<Result<_, _>>()?;
+            for key in keys {
+                messages
+                    .remove(key.as_str())
+                    .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            }
+        }
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))
+    }
+
     /// The device's stable Moss transport identity (encrypted like everything
     /// else). Persisting it keeps the node's peer-id constant across restarts,
     /// which is required for peers to re-establish a connection instead of
@@ -330,6 +440,12 @@ impl Persistence {
             wtx.open_table(MESSAGES)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(SESSIONS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUP_MLS_SNAPSHOT)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUP_MESSAGES)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUPS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -440,6 +556,38 @@ mod tests {
             .collect();
         let want: Vec<String> = (0..12).map(|i| format!("m{i}")).collect();
         assert_eq!(got, want, "same-ms messages must come back in index order");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn group_records_messages_and_snapshot_round_trip_then_delete() {
+        let dir = std::env::temp_dir().join(format!("mosh-groups-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("groups.redb");
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [11u8; 32]).unwrap();
+
+        p.put_group("g1", br#"{"group_id":"g1"}"#).unwrap();
+        p.put_group_mls_snapshot("g1", b"group-snapshot").unwrap();
+        p.append_group_message("g1", 20, "m2", br#"{"body":"second"}"#)
+            .unwrap();
+        p.append_group_message("g1", 10, "m1", br#"{"body":"first"}"#)
+            .unwrap();
+
+        assert_eq!(p.list_groups().unwrap().len(), 1);
+        assert_eq!(
+            p.get_group_mls_snapshot("g1").unwrap().unwrap(),
+            b"group-snapshot"
+        );
+        let rows = p.list_group_messages("g1").unwrap();
+        assert_eq!(rows[0], br#"{"body":"first"}"#);
+        assert_eq!(rows[1], br#"{"body":"second"}"#);
+
+        p.delete_group("g1").unwrap();
+        assert!(p.list_groups().unwrap().is_empty());
+        assert!(p.get_group_mls_snapshot("g1").unwrap().is_none());
+        assert!(p.list_group_messages("g1").unwrap().is_empty());
+
         std::fs::remove_file(&path).ok();
     }
 }
