@@ -351,6 +351,43 @@ describe("PrivateDmScreen", () => {
     expect(await screen.findByText("yo from charlie")).toBeInTheDocument();
   });
 
+  it("filters active messages by text and attachments", async () => {
+    const user = userEvent.setup();
+    const gateway = createGateway([
+      snapshot({
+        messages: [
+          { from_device: "Alice", body: "hello from moss" },
+          { from_device: "Bob", body: "release notes are ready" },
+          {
+            from_device: "Alice",
+            body: "",
+            attachment: {
+              attachment_id: "notes-file",
+              content_hash: "1".repeat(64),
+              file_name: "handshake-notes.txt",
+              mime: "text/plain",
+              total_size: 1200,
+            },
+          },
+        ],
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await screen.findByText("release notes are ready");
+    const search = screen.getByRole("textbox", { name: "Search messages" });
+    await user.type(search, "release");
+
+    expect(screen.getByText("release notes are ready")).toBeInTheDocument();
+    expect(screen.queryByText("hello from moss")).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.click(screen.getByRole("button", { name: "Files" }));
+
+    expect(screen.getByText("handshake-notes.txt")).toBeInTheDocument();
+    expect(screen.queryByText("release notes are ready")).not.toBeInTheDocument();
+  });
+
   it("closes the active session and returns to the empty state", async () => {
     const gateway = createGateway([snapshot()]);
     render(<PrivateDmScreen gateway={gateway} />);

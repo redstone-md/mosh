@@ -12,10 +12,12 @@ import {
   IconLockOpen,
   IconLogout,
   IconMessageCircle,
+  IconPaperclip,
   IconPencil,
   IconPhone,
   IconPlugConnected,
   IconPlus,
+  IconSearch,
   IconSend,
   IconShieldCheck,
   IconSettings,
@@ -113,6 +115,15 @@ interface AttachmentApi {
   readonly onDownload: (attachmentId: string) => void;
   readonly onCancel: (attachmentId: string) => void;
   readonly onOpen: (descriptor: AttachmentDescriptor) => void;
+}
+
+type ConversationFilter = "all" | "attachments";
+
+interface ConversationToolsState {
+  readonly search: string;
+  readonly filter: ConversationFilter;
+  readonly onSearch: (value: string) => void;
+  readonly onFilter: (value: ConversationFilter) => void;
 }
 
 type PendingDmOffer = DmOffer & {
@@ -237,6 +248,8 @@ export function PrivateDmScreen({
   const [groups, setGroups] = useState<readonly GroupSnapshot[]>([]);
   const [active, setActive] = useState<ActiveItem | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
   const [pendingClose, setPendingClose] = useState<PendingCloseConfirmation | null>(null);
   const [confirmedFingerprints, setConfirmedFingerprints] = useState<Set<string>>(new Set());
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
@@ -827,6 +840,18 @@ export function PrivateDmScreen({
   const activeGroup =
     active?.type === "group" ? groups.find((g) => g.group_id === active.id) ?? null : null;
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
+  const activeConversationKey = active ? conversationKey(active) : "";
+  const conversationTools: ConversationToolsState = {
+    search: conversationSearch,
+    filter: conversationFilter,
+    onSearch: setConversationSearch,
+    onFilter: setConversationFilter,
+  };
+
+  useEffect(() => {
+    setConversationSearch("");
+    setConversationFilter("all");
+  }, [activeConversationKey]);
 
   const pendingCallSession = sessions.find((session) => session.pending_call);
   const activeDmSession = activeSession;
@@ -1130,6 +1155,7 @@ export function PrivateDmScreen({
               confirmed={confirmedFingerprints.has(activeSession.session_id)}
               busy={chatBusy}
               attachments={attachmentApi}
+              tools={conversationTools}
               onComposer={setComposer}
               onSend={sendMessage}
               onConfirm={() => confirmFingerprint(activeSession.session_id)}
@@ -1144,6 +1170,7 @@ export function PrivateDmScreen({
               composer={composer}
               busy={chatBusy}
               attachments={attachmentApi}
+              tools={conversationTools}
               peer={{
                 ownFingerprint: activeChannel.device_fingerprint,
                 offered: offeredFingerprints,
@@ -1160,6 +1187,7 @@ export function PrivateDmScreen({
               composer={composer}
               busy={chatBusy}
               attachments={attachmentApi}
+              tools={conversationTools}
               peer={{
                 ownFingerprint: activeGroup.device_fingerprint,
                 offered: offeredFingerprints,
@@ -1897,6 +1925,7 @@ function ActiveDmChat(props: {
   confirmed: boolean;
   busy: boolean;
   attachments: AttachmentApi;
+  tools: ConversationToolsState;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onConfirm: () => void;
@@ -1952,9 +1981,14 @@ function ActiveDmChat(props: {
       </header>
 
       <CryptoNotice />
+      <ConversationTools tools={props.tools} />
 
       <ChatDropZone disabled={!ready || props.busy} onAttach={props.attachments.onSend}>
-        <DmChatList messages={props.session.messages} attachments={props.attachments} />
+        <DmChatList
+          messages={props.session.messages}
+          attachments={props.attachments}
+          tools={props.tools}
+        />
       </ChatDropZone>
 
       <Composer
@@ -1976,6 +2010,7 @@ function ActiveChannelChat(props: {
   composer: string;
   busy: boolean;
   attachments: AttachmentApi;
+  tools: ConversationToolsState;
   peer: PeerActions;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
@@ -2003,11 +2038,13 @@ function ActiveChannelChat(props: {
       </header>
 
       <PublicNotice />
+      <ConversationTools tools={props.tools} />
 
       <ChatDropZone disabled={props.busy} onAttach={props.attachments.onSend}>
         <ChannelChatList
           messages={props.channel.messages}
           attachments={props.attachments}
+          tools={props.tools}
           peer={props.peer}
         />
       </ChatDropZone>
@@ -2031,6 +2068,7 @@ function ActiveGroupChat(props: {
   composer: string;
   busy: boolean;
   attachments: AttachmentApi;
+  tools: ConversationToolsState;
   peer: PeerActions;
   onComposer: (value: string) => void;
   onSend: (event: FormEvent) => void;
@@ -2109,11 +2147,13 @@ function ActiveGroupChat(props: {
       </header>
 
       <GroupNotice />
+      <ConversationTools tools={props.tools} />
 
       <ChatDropZone disabled={!ready || props.busy} onAttach={props.attachments.onSend}>
         <GroupChatList
           messages={props.group.messages}
           attachments={props.attachments}
+          tools={props.tools}
           peer={props.peer}
         />
       </ChatDropZone>
@@ -2129,6 +2169,39 @@ function ActiveGroupChat(props: {
         sending={props.busy}
       />
     </>
+  );
+}
+
+function ConversationTools({ tools }: { tools: ConversationToolsState }) {
+  return (
+    <div className="conversation-tools">
+      <label className="conversation-search">
+        <IconSearch size={14} />
+        <input
+          aria-label={chatText.searchPlaceholder}
+          value={tools.search}
+          onChange={(event) => tools.onSearch(event.target.value)}
+          placeholder={chatText.searchPlaceholder}
+        />
+      </label>
+      <div className="conversation-filter" aria-label="Message filter">
+        <button
+          type="button"
+          className={tools.filter === "all" ? "conversation-filter-active" : ""}
+          onClick={() => tools.onFilter("all")}
+        >
+          {chatText.filterAll}
+        </button>
+        <button
+          type="button"
+          className={tools.filter === "attachments" ? "conversation-filter-active" : ""}
+          onClick={() => tools.onFilter("attachments")}
+        >
+          <IconPaperclip size={13} />
+          {chatText.filterAttachments}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -2238,16 +2311,67 @@ function PeerNickname({
   );
 }
 
+type SearchableMessage = {
+  readonly from_device: string;
+  readonly body: string;
+  readonly attachment?: AttachmentDescriptor;
+};
+
+function filterMessages<T extends SearchableMessage>(
+  messages: readonly T[],
+  search: string,
+  filter: ConversationFilter,
+): readonly T[] {
+  const query = search.trim().toLowerCase();
+  return messages.filter((message) => {
+    if (filter === "attachments" && !message.attachment) {
+      return false;
+    }
+    if (!query) {
+      return true;
+    }
+    return messageSearchText(message).includes(query);
+  });
+}
+
+function messageSearchText(message: SearchableMessage): string {
+  return [
+    message.from_device,
+    message.body,
+    message.attachment?.file_name,
+    message.attachment?.mime,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function SearchEmpty({ filter }: { filter: ConversationFilter }) {
+  return (
+    <div className="chat-empty">
+      <strong>{chatText.searchEmptyTitle}</strong>
+      <p>
+        {filter === "attachments"
+          ? chatText.attachmentEmptyBody
+          : chatText.searchEmptyBody}
+      </p>
+    </div>
+  );
+}
+
 function GroupChatList({
   messages,
   attachments,
+  tools,
   peer,
 }: {
   messages: readonly GroupMessage[];
   attachments: AttachmentApi;
+  tools: ConversationToolsState;
   peer: PeerActions;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
+  const visibleMessages = filterMessages(messages, tools.search, tools.filter);
 
   useEffect(() => {
     anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
@@ -2261,9 +2385,12 @@ function GroupChatList({
       </div>
     );
   }
+  if (visibleMessages.length === 0) {
+    return <SearchEmpty filter={tools.filter} />;
+  }
   return (
     <div className="message-stack">
-      {messages.map((message, index) => (
+      {visibleMessages.map((message, index) => (
         <GroupMessageRow
           message={message}
           attachments={attachments}
@@ -2366,11 +2493,14 @@ function FingerprintBadge({
 function DmChatList({
   messages,
   attachments,
+  tools,
 }: {
   messages: readonly ChatMessage[];
   attachments: AttachmentApi;
+  tools: ConversationToolsState;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
+  const visibleMessages = filterMessages(messages, tools.search, tools.filter);
 
   useEffect(() => {
     anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
@@ -2384,9 +2514,12 @@ function DmChatList({
       </div>
     );
   }
+  if (visibleMessages.length === 0) {
+    return <SearchEmpty filter={tools.filter} />;
+  }
   return (
     <div className="message-stack">
-      {messages.map((message, index) => (
+      {visibleMessages.map((message, index) => (
         <DmMessageRow
           message={message}
           attachments={attachments}
@@ -2437,13 +2570,16 @@ function DmMessageRow({
 function ChannelChatList({
   messages,
   attachments,
+  tools,
   peer,
 }: {
   messages: readonly ChannelMessage[];
   attachments: AttachmentApi;
+  tools: ConversationToolsState;
   peer: PeerActions;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
+  const visibleMessages = filterMessages(messages, tools.search, tools.filter);
 
   useEffect(() => {
     anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
@@ -2457,9 +2593,12 @@ function ChannelChatList({
       </div>
     );
   }
+  if (visibleMessages.length === 0) {
+    return <SearchEmpty filter={tools.filter} />;
+  }
   return (
     <div className="message-stack">
-      {messages.map((message, index) => (
+      {visibleMessages.map((message, index) => (
         <ChannelMessageRow
           message={message}
           attachments={attachments}
