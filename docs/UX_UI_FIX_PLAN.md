@@ -18,6 +18,8 @@
 - Show specific invite validation feedback and confirm group invite copy actions.
 - Surface active-chat send failures inline and show an explicit sending state in
   the composer.
+- Add active conversation text search and an attachments-only filter.
+- Extract conversation search/filter controls out of `private-dm-screen.tsx`.
 
 ## Deferred
 
@@ -29,10 +31,7 @@
 
 ## Next Pass Roadmap
 
-1. Add search and media filtering.
-   - Text search first.
-   - Media/attachments filter second.
-2. Reduce `private-dm-screen.tsx` size.
+1. Continue reducing `private-dm-screen.tsx` size.
    - Extract onboarding, diagnostics, chat action orchestration, and message
      lists into focused modules.
    - Keep each new module under 500 lines.
