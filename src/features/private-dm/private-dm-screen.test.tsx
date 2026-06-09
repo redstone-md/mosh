@@ -548,6 +548,19 @@ describe("PrivateDmScreen", () => {
     );
   });
 
+  it("does not show the encryption explainer inside active DM chats", async () => {
+    render(<PrivateDmScreen gateway={createGateway([snapshot()])} />);
+
+    await screen.findByText("hello from moss");
+
+    expect(
+      screen.queryByRole("region", { name: "End-to-end encrypted" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/peer discovery metadata is NOT hidden/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not overclaim tracker privacy", async () => {
     const user = userEvent.setup();
     render(<PrivateDmScreen gateway={createGateway()} />);

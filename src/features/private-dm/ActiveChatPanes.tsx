@@ -35,7 +35,6 @@ import type {
 import {
   channelText,
   chatText,
-  cryptoNotice,
   groupText,
   inviteText,
   shellText,
@@ -107,7 +106,6 @@ export function ActiveDmChat(props: {
         </div>
       </header>
 
-      <CryptoNotice />
       <ConversationTools tools={props.tools} />
 
       <ChatDropZone disabled={!props.ready || props.busy} onAttach={props.attachments.onSend}>
@@ -358,20 +356,6 @@ function FingerprintBadge({
       <IconShieldCheck size={12} />
       <code>{display}</code>
     </button>
-  );
-}
-
-function CryptoNotice() {
-  return (
-    <section className="crypto-banner" aria-label={cryptoNotice.title}>
-      <div className="crypto-icon">
-        <IconShieldCheck size={18} />
-      </div>
-      <div>
-        <strong>{cryptoNotice.title}</strong>
-        <p>{cryptoNotice.body}</p>
-      </div>
-    </section>
   );
 }
 
