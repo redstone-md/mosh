@@ -9,7 +9,7 @@
 }
 
 .diagnostics-drawer {
-  width: min(360px, calc(100vw - 24px));
+  width: min(392px, calc(100vw - 24px));
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -70,20 +70,197 @@
   background: var(--fg-3);
 }
 
-.diagnostics-drawer header {
+.diagnostics-drawer > header {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--fg-2);
 }
 
-.diagnostics-drawer h2 {
+.diagnostics-drawer > header h2 {
   flex: 1;
   margin: 0;
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--fg-2);
+}
+
+.diagnostic-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-0));
+}
+
+.diagnostic-summary-ready {
+  border-color: rgba(183, 216, 74, 0.24);
+}
+
+.diagnostic-summary-waiting {
+  border-color: rgba(232, 182, 90, 0.24);
+}
+
+.diagnostic-summary-error {
+  border-color: rgba(232, 106, 90, 0.28);
+}
+
+.diagnostic-summary-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.diagnostic-summary-heading > div {
+  min-width: 0;
+}
+
+.diagnostic-kicker {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--fg-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.diagnostic-summary-heading strong {
+  display: block;
+  color: var(--fg-1);
+  font-size: 15px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-summary p {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.diagnostic-status-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.diagnostic-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+
+.diagnostic-summary-ready .diagnostic-status-badge {
+  color: var(--moss);
+  border-color: rgba(183, 216, 74, 0.24);
+  background: var(--moss-glow);
+}
+
+.diagnostic-summary-ready .diagnostic-status-dot {
+  background: var(--moss);
+  box-shadow: 0 0 8px var(--moss);
+}
+
+.diagnostic-summary-waiting .diagnostic-status-badge {
+  color: var(--warn);
+  border-color: rgba(232, 182, 90, 0.24);
+}
+
+.diagnostic-summary-waiting .diagnostic-status-dot {
+  background: var(--warn);
+}
+
+.diagnostic-summary-error .diagnostic-status-badge {
+  color: var(--danger);
+  border-color: rgba(232, 106, 90, 0.28);
+  background: rgba(232, 106, 90, 0.06);
+}
+
+.diagnostic-summary-error .diagnostic-status-dot {
+  background: var(--danger);
+}
+
+.diagnostic-summary-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+}
+
+.diagnostic-summary-fact {
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-2);
+}
+
+.diagnostic-summary-fact span,
+.diagnostic-metric span {
+  display: block;
+  color: var(--fg-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.diagnostic-summary-fact strong,
+.diagnostic-metric strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--fg-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-runtime-error {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 1px solid rgba(232, 106, 90, 0.32);
+  border-radius: 8px;
+  background: rgba(232, 106, 90, 0.06);
+  color: var(--danger);
+}
+
+.diagnostic-runtime-error span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--danger);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.diagnostic-runtime-error strong {
+  display: block;
+  color: var(--fg-1);
+  font-size: 11px;
+  line-height: 1.45;
+  font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 580px) {
@@ -104,7 +281,7 @@
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--bg-2);
   overflow: hidden;
 }
@@ -123,6 +300,7 @@
 .diagnostic-row {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 10px;
   padding: 5px 10px;
   border-bottom: 1px solid var(--line);
@@ -131,11 +309,13 @@
 
 .diagnostic-row:last-child { border-bottom: 0; }
 
-.diagnostic-row span {
+.diagnostic-row > span {
+  flex: 0 0 auto;
   color: var(--fg-3);
 }
 
-.diagnostic-row strong {
+.diagnostic-row > strong {
+  min-width: 0;
   color: var(--fg-1);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -144,15 +324,50 @@
   font-weight: 500;
 }
 
-.diagnostic-error {
-  border: 1px solid rgba(232,106,90,0.4);
-  background: rgba(232,106,90,0.06);
-  border-radius: 10px;
+.diagnostic-mesh-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 9px;
+  border-bottom: 1px solid var(--line);
 }
 
-.diagnostic-error strong {
-  color: var(--danger);
-  font-family: inherit;
+.diagnostic-metric {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg-1);
+}
+
+.diagnostic-metric small {
+  display: block;
+  margin-top: 3px;
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 13px 10px;
+  color: var(--fg-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.diagnostic-empty-state strong {
+  color: var(--fg-2);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.diagnostic-empty-state span {
+  color: var(--fg-3);
 }
 
 .event-row {
@@ -198,7 +413,7 @@
 .event-tracker_announce .event-name { color: var(--info); }
 .event-tracker_failure .event-name { color: var(--danger); }
 .event-supernode_promoted .event-name { color: var(--moss); }
-.event-empty strong { color: var(--fg-4); font-family: inherit; }
+.event-empty strong { color: var(--fg-2); font-family: inherit; }
 
 .btn {
   height: 32px;
