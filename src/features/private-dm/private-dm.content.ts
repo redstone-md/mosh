@@ -3,8 +3,6 @@ export const shellText = {
   windowSubtitle: "Private DM · OpenMLS over Moss",
   newSession: "New",
   closeSession: "Close session",
-  closeSessionConfirm:
-    "Delete this conversation? Its saved history is permanently removed and cannot be undone.",
   noActive: "No active session",
 } as const;
 

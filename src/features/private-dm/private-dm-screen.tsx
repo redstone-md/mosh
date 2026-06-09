@@ -51,6 +51,7 @@ import {
   channelText,
   groupText,
 } from "./private-dm.content";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { type OperationKind, useOperationBusy } from "./use-operation-busy";
 import {
   AttachmentView,
@@ -137,11 +138,67 @@ type ActiveItem =
   | { readonly type: "channel"; readonly name: string }
   | { readonly type: "group"; readonly id: string };
 
+interface PendingCloseConfirmation {
+  readonly item: ActiveItem;
+  readonly title: string;
+  readonly body: string;
+  readonly confirmLabel: string;
+}
+
 /** Stable per-conversation key used for unread tracking and notifications. */
 function conversationKey(item: ActiveItem): string {
   return item.type === "channel"
     ? `channel:${item.name}`
     : `${item.type}:${item.id}`;
+}
+
+function sameActiveItem(left: ActiveItem, right: ActiveItem): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+  if (left.type === "channel" && right.type === "channel") {
+    return left.name === right.name;
+  }
+  return "id" in left && "id" in right && left.id === right.id;
+}
+
+function closeConfirmationFor(
+  item: ActiveItem,
+  sessions: readonly SessionSnapshot[],
+  channels: readonly ChannelSnapshot[],
+  groups: readonly GroupSnapshot[],
+): PendingCloseConfirmation {
+  if (item.type === "dm") {
+    const session = sessions.find((candidate) => candidate.session_id === item.id);
+    const label = session ? peerLabel(session) : "this private chat";
+    return {
+      item,
+      title: `Delete chat with ${label}?`,
+      body:
+        "Saved history for this private chat will be removed from this device. You cannot undo this.",
+      confirmLabel: "Delete chat",
+    };
+  }
+  if (item.type === "channel") {
+    const channel = channels.find((candidate) => candidate.name === item.name);
+    const label = channel?.name ?? item.name;
+    return {
+      item,
+      title: `Leave #${label}?`,
+      body:
+        "You will stop receiving new messages from this public channel until you join it again.",
+      confirmLabel: "Leave channel",
+    };
+  }
+  const group = groups.find((candidate) => candidate.group_id === item.id);
+  const label = group?.label ?? (group ? shorten(group.group_id, 6) : "this group");
+  return {
+    item,
+    title: `Leave ${label}?`,
+    body:
+      "Saved group history will be removed from this device. You will need a new invite to rejoin.",
+    confirmLabel: "Leave group",
+  };
 }
 
 /** Window focus check that degrades to "focused" when the Tauri API is absent. */
@@ -181,6 +238,7 @@ export function PrivateDmScreen({
   const [channels, setChannels] = useState<readonly ChannelSnapshot[]>([]);
   const [groups, setGroups] = useState<readonly GroupSnapshot[]>([]);
   const [active, setActive] = useState<ActiveItem | null>(null);
+  const [pendingClose, setPendingClose] = useState<PendingCloseConfirmation | null>(null);
   const [confirmedFingerprints, setConfirmedFingerprints] = useState<Set<string>>(new Set());
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
   const [groupCreateState, setGroupCreateState] = useState<GroupCreateState>({ copied: false });
@@ -503,24 +561,31 @@ export function PrivateDmScreen({
     if (!active) {
       return;
     }
-    // Deleting a conversation purges its persisted history — confirm first.
-    if (!window.confirm(shellText.closeSessionConfirm)) {
+    setPendingClose(closeConfirmationFor(active, sessions, channels, groups));
+  };
+
+  const confirmCloseActive = () => {
+    const target = pendingClose?.item;
+    if (!target) {
       return;
     }
+    setPendingClose(null);
     void run("session", async () => {
-      if (active.type === "dm") {
-        await gateway.closePrivateSession(active.id);
+      if (target.type === "dm") {
+        await gateway.closePrivateSession(target.id);
         setConfirmedFingerprints((current) => {
           const next = new Set(current);
-          next.delete(active.id);
+          next.delete(target.id);
           return next;
         });
-      } else if (active.type === "channel") {
-        await gateway.leaveChannel(active.name);
+      } else if (target.type === "channel") {
+        await gateway.leaveChannel(target.name);
       } else {
-        await gateway.closePrivateGroup(active.id);
+        await gateway.closePrivateGroup(target.id);
       }
-      setActive(null);
+      setActive((current) =>
+        current && sameActiveItem(current, target) ? null : current,
+      );
       await refresh(true);
     });
   };
@@ -1148,6 +1213,16 @@ export function PrivateDmScreen({
           descriptor={viewer.descriptor}
           src={viewer.src}
           onClose={() => setViewer(null)}
+        />
+      ) : null}
+
+      {pendingClose ? (
+        <ConfirmDialog
+          title={pendingClose.title}
+          body={pendingClose.body}
+          confirmLabel={pendingClose.confirmLabel}
+          onCancel={() => setPendingClose(null)}
+          onConfirm={confirmCloseActive}
         />
       ) : null}
 

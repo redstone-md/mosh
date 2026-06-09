@@ -314,12 +314,13 @@ describe("PrivateDmScreen", () => {
     render(<PrivateDmScreen gateway={gateway} />);
 
     await screen.findByText("hello from moss");
-    // Closing now prompts for confirmation (deletes persisted history).
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Close session" }));
+    expect(
+      screen.getByRole("dialog", { name: "Delete chat with Alice?" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete chat" }));
 
-    expect(window.confirm).toHaveBeenCalled();
     expect(gateway.closePrivateSession).toHaveBeenCalledWith(SESSION_ID);
     await waitFor(() =>
       expect(screen.queryByText("hello from moss")).not.toBeInTheDocument(),
