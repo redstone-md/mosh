@@ -383,7 +383,9 @@
 .composer-box {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
+  min-height: 46px;
   padding: 6px 6px 6px 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -406,17 +408,25 @@
 
 .send-button {
   width: 32px;
+  min-width: 32px;
   height: 32px;
+  flex: 0 0 32px;
   display: grid;
   place-items: center;
   border: 0;
   border-radius: 8px;
+  padding: 0;
   background: var(--moss);
   color: var(--moss-ink);
+  cursor: pointer;
   transition: background 0.12s ease;
 }
 
-.send-button:disabled { background: var(--bg-3); color: var(--fg-4); }
+.send-button:disabled {
+  background: var(--bg-3);
+  color: var(--fg-4);
+  cursor: default;
+}
 .send-button:hover:not(:disabled) { background: var(--moss-300); }
 
 .send-button-busy svg {
@@ -591,14 +601,17 @@
 
 .composer-attach {
   width: 32px;
+  min-width: 32px;
   height: 32px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
   border: 0;
   border-radius: 8px;
+  padding: 0;
   background: transparent;
   color: var(--fg-3);
+  cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
@@ -607,7 +620,38 @@
   color: var(--fg-1);
 }
 
-.composer-attach:disabled { color: var(--fg-4); }
+.composer-attach:disabled {
+  color: var(--fg-4);
+  cursor: default;
+}
+
+@media (max-width: 640px) {
+  .composer {
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .composer-box {
+    gap: 4px;
+    min-height: 42px;
+    padding: 4px;
+    border-radius: 9px;
+    overflow: hidden;
+  }
+
+  .composer input {
+    height: 32px;
+    min-width: 0;
+    padding: 0 4px;
+  }
+
+  .composer-attach,
+  .send-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
+}
 
 .chat-scroll {
   position: relative;
