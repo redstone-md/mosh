@@ -1,0 +1,249 @@
+import { vi } from "vitest";
+import type {
+  GroupSnapshot,
+  MeshInfo,
+  NativeMessagingGateway,
+  SessionListSnapshot,
+  SessionSnapshot,
+  SnapshotEvent,
+} from "./native/native-messaging-gateway";
+
+export const FINGERPRINT = "AABBCCDDEEFF0011";
+export const SESSION_ID = "session-one";
+export const INVITE = `mosh://invite?mesh=mesh-one&session=${SESSION_ID}#fp=${FINGERPRINT}`;
+
+export const MESH_READY: MeshInfo = {
+  mesh_id: "mesh-one",
+  listen_port: 42130,
+  advertised_addr: "203.0.113.7:42130",
+  peer_count: 1,
+  direct_peer_count: 1,
+  relayed_peer_count: 0,
+  relay_capable_peer_count: 0,
+  relay_session_count: 0,
+  relay_route_count: 0,
+  known_peer_count: 1,
+  channels: ["mls-control/session-one", "mls-data/session-one"],
+  nat_type: "endpoint-independent",
+  supernode_ready: false,
+  public_key: "abcdef0123456789",
+};
+
+export const EVENTS: SnapshotEvent[] = [
+  {
+    event_type: 1,
+    event_name: "peer_joined",
+    detail_json: '{"peer_id":"abc123"}',
+    epoch_millis: Date.now() - 1000,
+  },
+];
+
+export function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return {
+    session_id: SESSION_ID,
+    mesh_id: "mesh-one",
+    role: "bob",
+    display_name: "mosh-bob",
+    peer_display_name: "Alice",
+    state: "ready",
+    invite_uri: INVITE,
+    fingerprint: FINGERPRINT,
+    messages: [{ from_device: "Alice", body: "hello from moss" }],
+    attachments: [],
+    mesh: MESH_READY,
+    events: EVENTS,
+    ...overrides,
+  };
+}
+
+export function groupSnapshot(overrides: Partial<GroupSnapshot> = {}): GroupSnapshot {
+  return {
+    group_id: "group-test",
+    mesh_id: "groupmesh-test",
+    label: "Friends",
+    display_name: "mosh-test",
+    device_fingerprint: "abcdef",
+    creator_fingerprint: "AABB",
+    is_admin: true,
+    state: "ready",
+    member_count: 2,
+    invite_uri:
+      "mosh://group?mesh=groupmesh-test&group=group-test#fp=AABBCCDDEEFF00112233445566778899",
+    messages: [],
+    attachments: [],
+    dm_offers: [],
+    mesh: MESH_READY,
+    events: [],
+    ...overrides,
+  };
+}
+
+export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway {
+  let sessions: SessionSnapshot[] = initial;
+  let channels: Array<{
+    name: string;
+    topic: string;
+    mesh_id: string;
+    display_name: string;
+    device_fingerprint: string;
+    messages: Array<{ from_device: string; from_fingerprint: string; body: string }>;
+    attachments: never[];
+    dm_offers: never[];
+    mesh: typeof MESH_READY | null;
+    events: SnapshotEvent[];
+  }> = [];
+  return {
+    getDiagnostics: vi.fn(),
+    getNativeRuntimeStatus: vi.fn(),
+    createPrivateInvite: vi.fn(async (_request) => {
+      const created = snapshot({ role: "alice", state: "waiting", messages: [] });
+      sessions = [...sessions, created];
+      return {
+        invite_uri: INVITE,
+        session_id: created.session_id,
+        mesh_id: created.mesh_id,
+        fingerprint: created.fingerprint,
+        listen_address: "default-public-trackers",
+      };
+    }),
+    acceptPrivateInvite: vi.fn(async () => {
+      const joined = snapshot();
+      sessions = [...sessions, joined];
+      return joined;
+    }),
+    sendPrivateMessage: vi.fn(async () => ({
+      session_id: SESSION_ID,
+      state: "ready",
+      ciphertext_bytes: 128,
+    })),
+    pollPrivateSession: vi.fn(async (sessionId: string) => {
+      const found = sessions.find((session) => session.session_id === sessionId);
+      if (!found) {
+        throw new Error("missing");
+      }
+      return found;
+    }),
+    listPrivateSessions: vi.fn(async (): Promise<SessionListSnapshot> => ({ sessions })),
+    closePrivateSession: vi.fn(async (sessionId: string) => {
+      sessions = sessions.filter((session) => session.session_id !== sessionId);
+      return { session_id: sessionId, closed: true };
+    }),
+    joinChannel: vi.fn(async (request) => {
+      const channel = {
+        name: request.name.toLowerCase().replace(/^[@#]/, ""),
+        topic: `public-channel/${request.name.toLowerCase().replace(/^[@#]/, "")}`,
+        mesh_id: `channel/${request.name.toLowerCase().replace(/^[@#]/, "")}`,
+        display_name: request.display_name,
+        device_fingerprint: "abcdef0123456789",
+        messages: [],
+        attachments: [],
+        dm_offers: [],
+        mesh: MESH_READY,
+        events: [],
+      };
+      channels = [...channels, channel];
+      return channel;
+    }),
+    leaveChannel: vi.fn(async (name) => {
+      channels = channels.filter((channel) => channel.name !== name);
+      return { name, closed: true };
+    }),
+    sendChannelMessage: vi.fn(async (name, _body) => ({ name, bytes: 32 })),
+    pollChannel: vi.fn(async (name) => {
+      const found = channels.find((channel) => channel.name === name);
+      if (!found) {
+        throw new Error("missing");
+      }
+      return found;
+    }),
+    listChannels: vi.fn(async () => ({ channels })),
+    createPrivateGroup: vi.fn(async (_request) => ({
+      group_id: "group-test",
+      mesh_id: "groupmesh-test",
+      invite_uri: "mosh://group?mesh=groupmesh-test&group=group-test#fp=AABB",
+      fingerprint: "AABB",
+      label: _request.label ?? null,
+    })),
+    joinPrivateGroup: vi.fn(async () => ({
+      group_id: "group-test",
+      mesh_id: "groupmesh-test",
+      label: "Friends",
+      display_name: "mosh-test",
+      device_fingerprint: "abcdef",
+      creator_fingerprint: "AABB",
+      is_admin: false,
+      state: "ready",
+      member_count: 2,
+      invite_uri: null,
+      messages: [],
+      attachments: [],
+      dm_offers: [],
+      mesh: MESH_READY,
+      events: [],
+    })),
+    sendGroupMessage: vi.fn(async (group_id) => ({ group_id, bytes: 64 })),
+    pollPrivateGroup: vi.fn(async () => ({
+      group_id: "group-test",
+      mesh_id: "groupmesh-test",
+      label: "Friends",
+      display_name: "mosh-test",
+      device_fingerprint: "abcdef",
+      creator_fingerprint: "AABB",
+      is_admin: false,
+      state: "ready",
+      member_count: 2,
+      invite_uri: null,
+      messages: [],
+      attachments: [],
+      dm_offers: [],
+      mesh: MESH_READY,
+      events: [],
+    })),
+    listPrivateGroups: vi.fn(async () => ({ groups: [] })),
+    closePrivateGroup: vi.fn(async (group_id) => ({ group_id, closed: true })),
+    sendPrivateAttachment: vi.fn(async (session_id, _file, _mime, _data) => ({
+      session_id,
+      attachment_id: "attachment-test",
+      content_hash: "0".repeat(64),
+    })),
+    downloadPrivateAttachment: vi.fn(async () => {}),
+    cancelPrivateAttachment: vi.fn(async () => {}),
+    sendGroupAttachment: vi.fn(async (group_id, _file, _mime, _data) => ({
+      session_id: group_id,
+      attachment_id: "attachment-test",
+      content_hash: "0".repeat(64),
+    })),
+    downloadGroupAttachment: vi.fn(async () => {}),
+    cancelGroupAttachment: vi.fn(async () => {}),
+    sendChannelAttachment: vi.fn(async (name, _file, _mime, _data) => ({
+      session_id: name,
+      attachment_id: "attachment-test",
+      content_hash: "0".repeat(64),
+    })),
+    downloadChannelAttachment: vi.fn(async () => {}),
+    cancelChannelAttachment: vi.fn(async () => {}),
+    sendChannelDmOffer: vi.fn(async () => {}),
+    dismissChannelDmOffer: vi.fn(async () => {}),
+    sendGroupDmOffer: vi.fn(async () => {}),
+    dismissGroupDmOffer: vi.fn(async () => {}),
+    callStart: vi.fn(async (sessionId: string) => ({
+      session_id: sessionId,
+      call_id: "call-test",
+      key_b64: "",
+      nonce_prefix_b64: "",
+    })),
+    callAccept: vi.fn(async () => {}),
+    callDecline: vi.fn(async () => {}),
+    callEnd: vi.fn(async () => {}),
+    callSendFrame: vi.fn(async () => {}),
+    callDrainFrames: vi.fn(async () => [] as readonly string[]),
+    listNetworkInterfaces: vi.fn(async () => []),
+    detectVpn: vi.fn(async () => ({
+      vpn_likely: false,
+      suspect_interfaces: [],
+      vpn_owns_default_route: false,
+    })),
+    setBindInterface: vi.fn(async () => {}),
+    getBindInterface: vi.fn(async () => null),
+  };
+}
