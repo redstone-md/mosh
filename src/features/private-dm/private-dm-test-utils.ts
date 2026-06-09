@@ -3,6 +3,7 @@ import type {
   GroupSnapshot,
   MeshInfo,
   NativeMessagingGateway,
+  NativeRuntimeStatus,
   SessionListSnapshot,
   SessionSnapshot,
   SnapshotEvent,
@@ -37,6 +38,43 @@ export const EVENTS: SnapshotEvent[] = [
     epoch_millis: Date.now() - 1000,
   },
 ];
+
+export const RUNTIME_STATUS_READY: NativeRuntimeStatus = {
+  moss: {
+    link_mode: "dynamic",
+    library_name: "moss",
+    required_symbols: [],
+    available: true,
+    checked_paths: [],
+  },
+  secure_storage: {
+    backend: "os-keychain",
+    service: "app.mosh.desktop",
+    available: true,
+  },
+  persistence: {
+    backend: "redb+aes-256-gcm+os-keychain",
+    database: "test-history.redb",
+    available: true,
+    encrypted_at_rest: true,
+    error: null,
+  },
+  openmls_smoke: {
+    Ok: {
+      provider: "openmls_rust_crypto",
+      ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      protected_message_created: true,
+    },
+  },
+  openmls_roundtrip: {
+    Ok: {
+      provider: "openmls_rust_crypto",
+      ciphersuite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+      welcome_joined: true,
+      plaintext_roundtrip: true,
+    },
+  },
+};
 
 export function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
@@ -94,7 +132,7 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
   }> = [];
   return {
     getDiagnostics: vi.fn(),
-    getNativeRuntimeStatus: vi.fn(),
+    getNativeRuntimeStatus: vi.fn(async () => RUNTIME_STATUS_READY),
     createPrivateInvite: vi.fn(async (_request) => {
       const created = snapshot({ role: "alice", state: "waiting", messages: [] });
       sessions = [...sessions, created];

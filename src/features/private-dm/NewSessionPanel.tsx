@@ -1,4 +1,5 @@
 import {
+  IconAlertTriangle,
   IconArrowLeft,
   IconCheck,
   IconChevronDown,
@@ -23,6 +24,7 @@ import {
 } from "./private-dm.content";
 import { BindInterfaceField } from "./vpn/BindInterfaceField";
 import { VpnBanner } from "./vpn/VpnBanner";
+import type { PersistenceWarning } from "./use-runtime-persistence-status";
 
 type OnboardStep = "menu" | "chat" | "group" | "join" | "channel";
 
@@ -39,6 +41,7 @@ export function NewSessionPanel(props: {
   createState: InviteCreateState;
   groupCreateState: InviteCreateState;
   error?: string;
+  persistenceWarning?: PersistenceWarning | null;
   gateway: NativeMessagingGateway;
   onDisplayName: (value: string) => void;
   onStaticPeer: (value: string) => void;
@@ -60,6 +63,9 @@ export function NewSessionPanel(props: {
     <div className="onboard scroll">
       <div className="onboard-shell">
         <VpnBanner gateway={props.gateway} />
+        {props.persistenceWarning ? (
+          <PersistenceWarningBanner warning={props.persistenceWarning} />
+        ) : null}
         {step === "menu" ? (
           <OnboardMenu
             displayName={props.displayName}
@@ -162,6 +168,24 @@ export function NewSessionPanel(props: {
         )}
 
         {props.error ? <div className="inline-error">{props.error}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function PersistenceWarningBanner({
+  warning,
+}: {
+  warning: PersistenceWarning;
+}) {
+  return (
+    <div className="persistence-warning" role="status">
+      <span className="persistence-warning-icon" aria-hidden="true">
+        <IconAlertTriangle size={15} />
+      </span>
+      <div>
+        <strong>{warning.title}</strong>
+        <span>{warning.body}</span>
       </div>
     </div>
   );
