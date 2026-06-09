@@ -53,6 +53,7 @@ export function ActiveDmChat(props: {
   attachments: AttachmentApi;
   tools: ConversationToolsState;
   onComposer: (value: string) => void;
+  onRetryMessage: (messageId: string) => void;
   onSend: (event: FormEvent) => void;
   onConfirm: () => void;
   onClose: () => void;
@@ -135,6 +136,8 @@ export function ActiveDmChat(props: {
         <DmChatList
           messages={props.session.messages}
           attachments={props.attachments}
+          ownDeviceName={props.session.display_name}
+          onRetryMessage={props.onRetryMessage}
           tools={props.tools}
         />
       </ChatDropZone>
@@ -161,6 +164,7 @@ export function ActiveChannelChat(props: {
   tools: ConversationToolsState;
   peer: PeerActions;
   onComposer: (value: string) => void;
+  onRetryMessage: (messageId: string) => void;
   onSend: (event: FormEvent) => void;
   onClose: () => void;
 }) {
@@ -204,6 +208,7 @@ export function ActiveChannelChat(props: {
         <ChannelChatList
           messages={props.channel.messages}
           attachments={props.attachments}
+          onRetryMessage={props.onRetryMessage}
           tools={props.tools}
           peer={props.peer}
         />
@@ -232,6 +237,7 @@ export function ActiveGroupChat(props: {
   tools: ConversationToolsState;
   peer: PeerActions;
   onComposer: (value: string) => void;
+  onRetryMessage: (messageId: string) => void;
   onSend: (event: FormEvent) => void;
   onClose: () => void;
 }) {
@@ -342,6 +348,7 @@ export function ActiveGroupChat(props: {
         <GroupChatList
           messages={props.group.messages}
           attachments={props.attachments}
+          onRetryMessage={props.onRetryMessage}
           tools={props.tools}
           peer={props.peer}
         />

@@ -6,17 +6,20 @@ const NATIVE_RUNTIME_STATUS_COMMAND = "native_runtime_status";
 const PRIVATE_DM_CREATE_INVITE_COMMAND = "private_dm_create_invite";
 const PRIVATE_DM_ACCEPT_INVITE_COMMAND = "private_dm_accept_invite";
 const PRIVATE_DM_SEND_MESSAGE_COMMAND = "private_dm_send_message";
+const PRIVATE_DM_RETRY_MESSAGE_COMMAND = "private_dm_retry_message";
 const PRIVATE_DM_POLL_SESSION_COMMAND = "private_dm_poll_session";
 const PRIVATE_DM_LIST_SESSIONS_COMMAND = "private_dm_list_sessions";
 const PRIVATE_DM_CLOSE_SESSION_COMMAND = "private_dm_close_session";
 const CHANNEL_JOIN_COMMAND = "channel_join";
 const CHANNEL_LEAVE_COMMAND = "channel_leave";
 const CHANNEL_SEND_COMMAND = "channel_send";
+const CHANNEL_RETRY_MESSAGE_COMMAND = "channel_retry_message";
 const CHANNEL_POLL_COMMAND = "channel_poll";
 const CHANNEL_LIST_COMMAND = "channel_list";
 const PRIVATE_GROUP_CREATE_COMMAND = "private_group_create";
 const PRIVATE_GROUP_JOIN_COMMAND = "private_group_join";
 const PRIVATE_GROUP_SEND_COMMAND = "private_group_send";
+const PRIVATE_GROUP_RETRY_MESSAGE_COMMAND = "private_group_retry_message";
 const PRIVATE_GROUP_POLL_COMMAND = "private_group_poll";
 const PRIVATE_GROUP_LIST_COMMAND = "private_group_list";
 const PRIVATE_GROUP_CLOSE_COMMAND = "private_group_close";
@@ -168,6 +171,10 @@ export interface ChatMessage {
   readonly body: string;
   readonly message_id?: string;
   readonly sent_at_ms?: number;
+  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_error?: string | null;
+  readonly retryable?: boolean;
+  readonly retry_count?: number;
   readonly attachment?: AttachmentDescriptor;
   readonly call_event?: CallEvent;
 }
@@ -255,6 +262,10 @@ export interface SendMessageResult {
   readonly session_id: string;
   readonly state: string;
   readonly ciphertext_bytes: number;
+  readonly message_id: string;
+  readonly sent_at_ms: number;
+  readonly delivery_status: "pending" | "sent" | "failed";
+  readonly delivery_error?: string | null;
 }
 
 export interface CloseSessionResult {
@@ -275,6 +286,10 @@ export interface ChannelMessage {
   readonly body: string;
   readonly message_id?: string;
   readonly sent_at_ms?: number;
+  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_error?: string | null;
+  readonly retryable?: boolean;
+  readonly retry_count?: number;
   readonly attachment?: AttachmentDescriptor;
 }
 
@@ -298,6 +313,10 @@ export interface ChannelListSnapshot {
 export interface ChannelSendResult {
   readonly name: string;
   readonly bytes: number;
+  readonly message_id: string;
+  readonly sent_at_ms: number;
+  readonly delivery_status: "pending" | "sent" | "failed";
+  readonly delivery_error?: string | null;
 }
 
 export interface ChannelLeaveResult {
@@ -333,6 +352,10 @@ export interface GroupMessage {
   readonly body: string;
   readonly message_id?: string;
   readonly sent_at_ms?: number;
+  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_error?: string | null;
+  readonly retryable?: boolean;
+  readonly retry_count?: number;
   readonly attachment?: AttachmentDescriptor;
 }
 
@@ -361,6 +384,10 @@ export interface GroupListSnapshot {
 export interface GroupSendResult {
   readonly group_id: string;
   readonly bytes: number;
+  readonly message_id: string;
+  readonly sent_at_ms: number;
+  readonly delivery_status: "pending" | "sent" | "failed";
+  readonly delivery_error?: string | null;
 }
 
 export interface GroupLeaveResult {
@@ -374,17 +401,20 @@ export interface NativeMessagingGateway {
   createPrivateInvite(request: StartSessionRequest): Promise<InviteCreated>;
   acceptPrivateInvite(request: AcceptInviteRequest): Promise<SessionSnapshot>;
   sendPrivateMessage(sessionId: string, body: string): Promise<SendMessageResult>;
+  retryPrivateMessage(sessionId: string, messageId: string): Promise<SendMessageResult>;
   pollPrivateSession(sessionId: string): Promise<SessionSnapshot>;
   listPrivateSessions(): Promise<SessionListSnapshot>;
   closePrivateSession(sessionId: string): Promise<CloseSessionResult>;
   joinChannel(request: JoinChannelRequest): Promise<ChannelSnapshot>;
   leaveChannel(name: string): Promise<ChannelLeaveResult>;
   sendChannelMessage(name: string, body: string): Promise<ChannelSendResult>;
+  retryChannelMessage(name: string, messageId: string): Promise<ChannelSendResult>;
   pollChannel(name: string): Promise<ChannelSnapshot>;
   listChannels(): Promise<ChannelListSnapshot>;
   createPrivateGroup(request: CreateGroupRequest): Promise<GroupCreated>;
   joinPrivateGroup(request: JoinGroupRequest): Promise<GroupSnapshot>;
   sendGroupMessage(groupId: string, body: string): Promise<GroupSendResult>;
+  retryGroupMessage(groupId: string, messageId: string): Promise<GroupSendResult>;
   pollPrivateGroup(groupId: string): Promise<GroupSnapshot>;
   listPrivateGroups(): Promise<GroupListSnapshot>;
   closePrivateGroup(groupId: string): Promise<GroupLeaveResult>;
@@ -484,6 +514,16 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     });
   }
 
+  async retryPrivateMessage(
+    sessionId: string,
+    messageId: string,
+  ): Promise<SendMessageResult> {
+    return invoke<SendMessageResult>(PRIVATE_DM_RETRY_MESSAGE_COMMAND, {
+      sessionId,
+      messageId,
+    });
+  }
+
   async pollPrivateSession(sessionId: string): Promise<SessionSnapshot> {
     return invoke<SessionSnapshot>(PRIVATE_DM_POLL_SESSION_COMMAND, { sessionId });
   }
@@ -508,6 +548,13 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     return invoke<ChannelSendResult>(CHANNEL_SEND_COMMAND, { name, body });
   }
 
+  async retryChannelMessage(
+    name: string,
+    messageId: string,
+  ): Promise<ChannelSendResult> {
+    return invoke<ChannelSendResult>(CHANNEL_RETRY_MESSAGE_COMMAND, { name, messageId });
+  }
+
   async pollChannel(name: string): Promise<ChannelSnapshot> {
     return invoke<ChannelSnapshot>(CHANNEL_POLL_COMMAND, { name });
   }
@@ -526,6 +573,16 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
 
   async sendGroupMessage(groupId: string, body: string): Promise<GroupSendResult> {
     return invoke<GroupSendResult>(PRIVATE_GROUP_SEND_COMMAND, { groupId, body });
+  }
+
+  async retryGroupMessage(
+    groupId: string,
+    messageId: string,
+  ): Promise<GroupSendResult> {
+    return invoke<GroupSendResult>(PRIVATE_GROUP_RETRY_MESSAGE_COMMAND, {
+      groupId,
+      messageId,
+    });
   }
 
   async pollPrivateGroup(groupId: string): Promise<GroupSnapshot> {

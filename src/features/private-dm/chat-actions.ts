@@ -39,6 +39,22 @@ export async function sendChatText(
   await gateway.sendGroupMessage(target.id, body);
 }
 
+export async function retryChatMessage(
+  gateway: NativeMessagingGateway,
+  target: ChatTarget,
+  messageId: string,
+): Promise<void> {
+  if (target.type === "dm") {
+    await gateway.retryPrivateMessage(target.id, messageId);
+    return;
+  }
+  if (target.type === "channel") {
+    await gateway.retryChannelMessage(target.name, messageId);
+    return;
+  }
+  await gateway.retryGroupMessage(target.id, messageId);
+}
+
 export async function sendChatAttachment(
   gateway: NativeMessagingGateway,
   target: ChatTarget,

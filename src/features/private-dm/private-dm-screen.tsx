@@ -108,6 +108,7 @@ export function PrivateDmScreen({
     attachmentApi,
     canRetrySend,
     clearFailedSend,
+    retryMessage,
     retryFailedSend,
     sendMessage,
     setViewer,
@@ -318,6 +319,7 @@ export function PrivateDmScreen({
               attachments={attachmentApi}
               tools={conversationTools}
               onComposer={setComposer}
+              onRetryMessage={retryMessage}
               onSend={sendMessage}
               onConfirm={() => closeFlow.confirmFingerprint(activeSession.session_id)}
               onClose={closeFlow.closeActive}
@@ -339,6 +341,7 @@ export function PrivateDmScreen({
                 onMessage: dmOffers.offerDm,
               }}
               onComposer={setComposer}
+              onRetryMessage={retryMessage}
               onSend={sendMessage}
               onClose={closeFlow.closeActive}
             />
@@ -357,6 +360,7 @@ export function PrivateDmScreen({
                 onMessage: dmOffers.offerDm,
               }}
               onComposer={setComposer}
+              onRetryMessage={retryMessage}
               onSend={sendMessage}
               onClose={closeFlow.closeActive}
             />

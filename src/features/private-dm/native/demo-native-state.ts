@@ -154,7 +154,9 @@ export class DemoNativeState {
     return `${prefix}-${this.sequence}`;
   }
 
-  stampMessage<T extends MessageWithMetadata>(message: T): T {
+  stampMessage<T extends MessageWithMetadata>(
+    message: T,
+  ): T & { readonly message_id: string; readonly sent_at_ms: number } {
     return {
       ...message,
       message_id: message.message_id ?? this.next("demo-message"),
@@ -439,11 +441,15 @@ function event(event_name: string, detail: Record<string, string>, epoch: number
 }
 
 type MessageWithMetadata = ChatMessage | ChannelMessage | GroupMessage;
+type StampedMessage<T extends MessageWithMetadata> = T & {
+  readonly message_id: string;
+  readonly sent_at_ms: number;
+};
 
 function stampSeedMessages<T extends MessageWithMetadata>(
   messages: readonly T[],
   prefix: string,
-): T[] {
+): StampedMessage<T>[] {
   return messages.map((message, index) => ({
     ...message,
     message_id: message.message_id ?? `${prefix}-${index + 1}`,

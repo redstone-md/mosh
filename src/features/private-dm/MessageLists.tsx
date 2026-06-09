@@ -38,6 +38,10 @@ export interface PeerActions {
 interface MessageMetadata {
   readonly message_id?: string;
   readonly sent_at_ms?: number;
+  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_error?: string | null;
+  readonly retryable?: boolean;
+  readonly retry_count?: number;
 }
 
 interface MessageRenderItem<T extends MessageMetadata> {
@@ -49,11 +53,13 @@ interface MessageRenderItem<T extends MessageMetadata> {
 export function GroupChatList({
   messages,
   attachments,
+  onRetryMessage,
   tools,
   peer,
 }: {
   messages: readonly GroupMessage[];
   attachments: MessageAttachmentApi;
+  onRetryMessage: (messageId: string) => void;
   tools: ConversationToolsState;
   peer: PeerActions;
 }) {
@@ -82,6 +88,7 @@ export function GroupChatList({
           message={item.message}
           grouped={item.grouped}
           attachments={attachments}
+          onRetryMessage={onRetryMessage}
           peer={peer}
           key={item.key}
         />
@@ -94,10 +101,14 @@ export function GroupChatList({
 export function DmChatList({
   messages,
   attachments,
+  ownDeviceName,
+  onRetryMessage,
   tools,
 }: {
   messages: readonly ChatMessage[];
   attachments: MessageAttachmentApi;
+  ownDeviceName: string;
+  onRetryMessage: (messageId: string) => void;
   tools: ConversationToolsState;
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -125,6 +136,8 @@ export function DmChatList({
           message={item.message}
           grouped={item.grouped}
           attachments={attachments}
+          ownDeviceName={ownDeviceName}
+          onRetryMessage={onRetryMessage}
           key={item.key}
         />
       ))}
@@ -136,11 +149,13 @@ export function DmChatList({
 export function ChannelChatList({
   messages,
   attachments,
+  onRetryMessage,
   tools,
   peer,
 }: {
   messages: readonly ChannelMessage[];
   attachments: MessageAttachmentApi;
+  onRetryMessage: (messageId: string) => void;
   tools: ConversationToolsState;
   peer: PeerActions;
 }) {
@@ -169,6 +184,7 @@ export function ChannelChatList({
           message={item.message}
           grouped={item.grouped}
           attachments={attachments}
+          onRetryMessage={onRetryMessage}
           peer={peer}
           key={item.key}
         />
@@ -234,11 +250,13 @@ function GroupMessageRow({
   message,
   grouped,
   attachments,
+  onRetryMessage,
   peer,
 }: {
   message: GroupMessage;
   grouped: boolean;
   attachments: MessageAttachmentApi;
+  onRetryMessage: (messageId: string) => void;
   peer: PeerActions;
 }) {
   return (
@@ -272,6 +290,11 @@ function GroupMessageRow({
             onOpen={attachments.onOpen}
           />
         ) : null}
+        <FailedMessageRetry
+          message={message}
+          outbound={message.from_fingerprint === peer.ownFingerprint}
+          onRetryMessage={onRetryMessage}
+        />
       </div>
     </article>
   );
@@ -281,10 +304,14 @@ function DmMessageRow({
   message,
   grouped,
   attachments,
+  ownDeviceName,
+  onRetryMessage,
 }: {
   message: ChatMessage;
   grouped: boolean;
   attachments: MessageAttachmentApi;
+  ownDeviceName: string;
+  onRetryMessage: (messageId: string) => void;
 }) {
   return (
     <article className={`message-row${grouped ? " message-row-grouped" : ""}`}>
@@ -313,6 +340,11 @@ function DmMessageRow({
           />
         ) : null}
         {message.call_event ? <CallLogEntry event={message.call_event} /> : null}
+        <FailedMessageRetry
+          message={message}
+          outbound={message.from_device === ownDeviceName}
+          onRetryMessage={onRetryMessage}
+        />
       </div>
     </article>
   );
@@ -322,11 +354,13 @@ function ChannelMessageRow({
   message,
   grouped,
   attachments,
+  onRetryMessage,
   peer,
 }: {
   message: ChannelMessage;
   grouped: boolean;
   attachments: MessageAttachmentApi;
+  onRetryMessage: (messageId: string) => void;
   peer: PeerActions;
 }) {
   return (
@@ -359,8 +393,49 @@ function ChannelMessageRow({
             onOpen={attachments.onOpen}
           />
         ) : null}
+        <FailedMessageRetry
+          message={message}
+          outbound={message.from_fingerprint === peer.ownFingerprint}
+          onRetryMessage={onRetryMessage}
+        />
       </div>
     </article>
+  );
+}
+
+function FailedMessageRetry({
+  message,
+  outbound,
+  onRetryMessage,
+}: {
+  message: MessageMetadata;
+  outbound: boolean;
+  onRetryMessage: (messageId: string) => void;
+}) {
+  if (
+    !outbound ||
+    message.delivery_status !== "failed" ||
+    !message.retryable ||
+    !message.message_id
+  ) {
+    return null;
+  }
+  return (
+    <div
+      className="message-meta"
+      role="status"
+      aria-label={message.delivery_error ? `Failed: ${message.delivery_error}` : "Failed to send"}
+    >
+      <span>{message.delivery_error?.trim() || "Failed to send"}</span>
+      <button
+        type="button"
+        className="chat-error-retry"
+        aria-label="Retry failed message"
+        onClick={() => onRetryMessage(message.message_id!)}
+      >
+        Retry
+      </button>
+    </div>
   );
 }
 
