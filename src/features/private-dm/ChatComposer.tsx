@@ -5,7 +5,7 @@ import {
   type ReactNode,
   useState,
 } from "react";
-import { AttachmentPicker } from "./attachments";
+import { AttachmentPicker } from "./AttachmentPicker";
 import { chatText } from "./private-dm.content";
 import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
 

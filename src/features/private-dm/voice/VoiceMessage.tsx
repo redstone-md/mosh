@@ -1,6 +1,6 @@
 import { IconPlayerPauseFilled, IconPlayerPlayFilled } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
-import { localFileSrc } from "../attachments";
+import { localFileSrc } from "../attachment-utils";
 import type {
   AttachmentDescriptor,
   AttachmentView,

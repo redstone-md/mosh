@@ -103,4 +103,39 @@ describe("PrivateDmScreen messaging", () => {
       ),
     );
   });
+
+  it("labels failed attachment transfers with retry affordance", async () => {
+    const gateway = createGateway([
+      snapshot({
+        messages: [
+          {
+            from_device: "Alice",
+            body: "",
+            attachment: {
+              attachment_id: "failed-file",
+              content_hash: "1".repeat(64),
+              file_name: "brief.pdf",
+              mime: "application/pdf",
+              total_size: 2048,
+            },
+          },
+        ],
+        attachments: [
+          {
+            attachment_id: "failed-file",
+            direction: "incoming",
+            state: "failed",
+            completed_chunks: 0,
+            chunk_count: 2,
+          },
+        ],
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    expect(
+      await screen.findByRole("status", { name: "Transfer failed for brief.pdf" }),
+    ).toHaveTextContent("2.0 KB · Transfer failed");
+    expect(screen.getByRole("button", { name: "Retry brief.pdf" })).toBeEnabled();
+  });
 });

@@ -41,7 +41,7 @@ import {
   SessionSnapshot,
   nativeMessagingGateway,
 } from "./native/native-messaging-gateway";
-import { MediaViewer } from "./attachments";
+import { MediaViewer } from "./MediaViewer";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
 import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
