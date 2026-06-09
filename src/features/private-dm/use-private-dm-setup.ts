@@ -8,6 +8,12 @@ interface InviteCreateState {
   readonly copied: boolean;
 }
 
+export interface PrivateDmRequestBase {
+  readonly display_name: string;
+  readonly listen_port: number;
+  readonly static_peer: string | null;
+}
+
 type RunSetupOperation = (
   kind: "setup",
   action: () => Promise<void>,
@@ -41,7 +47,7 @@ export function usePrivateDmSetup({
     copied: false,
   });
 
-  const requestBase = useMemo(
+  const requestBase = useMemo<PrivateDmRequestBase>(
     () => ({
       display_name: displayName.trim() || defaultDisplayName(),
       listen_port: Number.isFinite(listenPort) ? listenPort : DEFAULT_LISTEN_PORT,
