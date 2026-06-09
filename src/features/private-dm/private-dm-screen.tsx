@@ -10,6 +10,7 @@ import {
   IconPhone,
   IconPlugConnected,
   IconPlus,
+  IconRefresh,
   IconSend,
   IconShieldCheck,
   IconUsers,
@@ -43,6 +44,15 @@ import {
   groupText,
 } from "./private-dm.content";
 import { ConfirmDialog } from "./ConfirmDialog";
+import {
+  cancelChatAttachment,
+  closeChatTarget,
+  downloadChatAttachment,
+  sameChatTarget,
+  sendChatAttachment,
+  sendChatText,
+  type ChatTarget,
+} from "./chat-actions";
 import {
   ConversationTools,
   type ConversationFilter,
@@ -121,37 +131,22 @@ const AUTO_POLL_MS = 1000;
 const READY_STATE = "ready";
 const DEFAULT_LISTEN_PORT = 0;
 
-type ActiveItem =
-  | { readonly type: "dm"; readonly id: string }
-  | { readonly type: "channel"; readonly name: string }
-  | { readonly type: "group"; readonly id: string };
-
 interface PendingCloseConfirmation {
-  readonly item: ActiveItem;
+  readonly item: ChatTarget;
   readonly title: string;
   readonly body: string;
   readonly confirmLabel: string;
 }
 
 /** Stable per-conversation key used for unread tracking and notifications. */
-function conversationKey(item: ActiveItem): string {
+function conversationKey(item: ChatTarget): string {
   return item.type === "channel"
     ? `channel:${item.name}`
     : `${item.type}:${item.id}`;
 }
 
-function sameActiveItem(left: ActiveItem, right: ActiveItem): boolean {
-  if (left.type !== right.type) {
-    return false;
-  }
-  if (left.type === "channel" && right.type === "channel") {
-    return left.name === right.name;
-  }
-  return "id" in left && "id" in right && left.id === right.id;
-}
-
 function closeConfirmationFor(
-  item: ActiveItem,
+  item: ChatTarget,
   sessions: readonly SessionSnapshot[],
   channels: readonly ChannelSnapshot[],
   groups: readonly GroupSnapshot[],
@@ -213,6 +208,11 @@ interface CreateState {
   readonly copied: boolean;
 }
 
+interface FailedSend {
+  readonly target: ChatTarget;
+  readonly body: string;
+}
+
 export function PrivateDmScreen({
   gateway = nativeMessagingGateway,
 }: {
@@ -225,7 +225,7 @@ export function PrivateDmScreen({
   const [sessions, setSessions] = useState<readonly SessionSnapshot[]>([]);
   const [channels, setChannels] = useState<readonly ChannelSnapshot[]>([]);
   const [groups, setGroups] = useState<readonly GroupSnapshot[]>([]);
-  const [active, setActive] = useState<ActiveItem | null>(null);
+  const [active, setActive] = useState<ChatTarget | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
@@ -234,6 +234,7 @@ export function PrivateDmScreen({
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
   const [groupCreateState, setGroupCreateState] = useState<GroupCreateState>({ copied: false });
   const [error, setError] = useState<string | undefined>(undefined);
+  const [lastFailedSend, setLastFailedSend] = useState<FailedSend | null>(null);
   const { counts: operationCounts, runOperation } = useOperationBusy();
   const [showSetup, setShowSetup] = useState(false);
   const [viewer, setViewer] = useState<
@@ -434,12 +435,21 @@ export function PrivateDmScreen({
     };
   }, [sessions, channels, groups, active]);
 
-  const run = async (kind: OperationKind, action: () => Promise<void>) => {
+  const run = async (
+    kind: OperationKind,
+    action: () => Promise<void>,
+    onError?: (message: string) => void,
+  ) => {
     setError(undefined);
+    if (kind !== "message") {
+      setLastFailedSend(null);
+    }
     try {
       await runOperation(kind, action);
     } catch (err) {
-      setError(readableError(err));
+      const message = readableError(err);
+      setError(message);
+      onError?.(message);
     }
   };
 
@@ -529,23 +539,33 @@ export function PrivateDmScreen({
     setCreateState((state) => ({ ...state, copied: true }));
   };
 
+  const sendMessageBody = (target: ChatTarget, body: string) => {
+    void run(
+      "message",
+      async () => {
+        await sendChatText(gateway, target, body);
+        setLastFailedSend(null);
+        setComposer((current) => (current.trim() === body ? "" : current));
+        await refresh(true);
+      },
+      () => setLastFailedSend({ target, body }),
+    );
+  };
+
   const sendMessage = (event: FormEvent) => {
     event.preventDefault();
     const body = composer.trim();
     if (!body || !active) {
       return;
     }
-    void run("message", async () => {
-      if (active.type === "dm") {
-        await gateway.sendPrivateMessage(active.id, body);
-      } else if (active.type === "channel") {
-        await gateway.sendChannelMessage(active.name, body);
-      } else {
-        await gateway.sendGroupMessage(active.id, body);
-      }
-      setComposer("");
-      await refresh(true);
-    });
+    sendMessageBody(active, body);
+  };
+
+  const retryFailedSend = () => {
+    if (!active || !lastFailedSend || !sameChatTarget(active, lastFailedSend.target)) {
+      return;
+    }
+    sendMessageBody(lastFailedSend.target, lastFailedSend.body);
   };
 
   const closeActive = () => {
@@ -562,20 +582,16 @@ export function PrivateDmScreen({
     }
     setPendingClose(null);
     void run("session", async () => {
+      await closeChatTarget(gateway, target);
       if (target.type === "dm") {
-        await gateway.closePrivateSession(target.id);
         setConfirmedFingerprints((current) => {
           const next = new Set(current);
           next.delete(target.id);
           return next;
         });
-      } else if (target.type === "channel") {
-        await gateway.leaveChannel(target.name);
-      } else {
-        await gateway.closePrivateGroup(target.id);
       }
       setActive((current) =>
-        current && sameActiveItem(current, target) ? null : current,
+        current && sameChatTarget(current, target) ? null : current,
       );
       await refresh(true);
     });
@@ -597,31 +613,12 @@ export function PrivateDmScreen({
       const dataBase64 = await readFileAsBase64(file);
       const thumbnail = await createThumbnail(file);
       const mime = file.type ?? "";
-      if (target.type === "dm") {
-        await gateway.sendPrivateAttachment(
-          target.id,
-          file.name,
-          mime,
-          dataBase64,
-          thumbnail,
-        );
-      } else if (target.type === "channel") {
-        await gateway.sendChannelAttachment(
-          target.name,
-          file.name,
-          mime,
-          dataBase64,
-          thumbnail,
-        );
-      } else {
-        await gateway.sendGroupAttachment(
-          target.id,
-          file.name,
-          mime,
-          dataBase64,
-          thumbnail,
-        );
-      }
+      await sendChatAttachment(gateway, target, {
+        fileName: file.name,
+        mime,
+        dataBase64,
+        thumbnail,
+      });
       await refresh(true);
     });
   };
@@ -639,34 +636,12 @@ export function PrivateDmScreen({
       const dataBase64 = await readFileAsBase64(
         new File([voice.blob], fileName, { type: voice.mime }),
       );
-      if (target.type === "dm") {
-        await gateway.sendPrivateAttachment(
-          target.id,
-          fileName,
-          voice.mime,
-          dataBase64,
-          undefined,
-          meta,
-        );
-      } else if (target.type === "channel") {
-        await gateway.sendChannelAttachment(
-          target.name,
-          fileName,
-          voice.mime,
-          dataBase64,
-          undefined,
-          meta,
-        );
-      } else {
-        await gateway.sendGroupAttachment(
-          target.id,
-          fileName,
-          voice.mime,
-          dataBase64,
-          undefined,
-          meta,
-        );
-      }
+      await sendChatAttachment(gateway, target, {
+        fileName,
+        mime: voice.mime,
+        dataBase64,
+        voice: meta,
+      });
       await refresh(true);
     });
   };
@@ -677,13 +652,7 @@ export function PrivateDmScreen({
     }
     const target = active;
     void run("transfer", async () => {
-      if (target.type === "dm") {
-        await gateway.downloadPrivateAttachment(target.id, attachmentId);
-      } else if (target.type === "channel") {
-        await gateway.downloadChannelAttachment(target.name, attachmentId);
-      } else {
-        await gateway.downloadGroupAttachment(target.id, attachmentId);
-      }
+      await downloadChatAttachment(gateway, target, attachmentId);
       await refresh(true);
     });
   };
@@ -694,13 +663,7 @@ export function PrivateDmScreen({
     }
     const target = active;
     void run("transfer", async () => {
-      if (target.type === "dm") {
-        await gateway.cancelPrivateAttachment(target.id, attachmentId);
-      } else if (target.type === "channel") {
-        await gateway.cancelChannelAttachment(target.name, attachmentId);
-      } else {
-        await gateway.cancelGroupAttachment(target.id, attachmentId);
-      }
+      await cancelChatAttachment(gateway, target, attachmentId);
       await refresh(true);
     });
   };
@@ -1037,6 +1000,8 @@ export function PrivateDmScreen({
     onCancel: cancelAttachment,
     onOpen: openAttachment,
   };
+  const canRetrySend =
+    Boolean(active && lastFailedSend && sameChatTarget(active, lastFailedSend.target));
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
@@ -1105,7 +1070,12 @@ export function PrivateDmScreen({
         />
 
         <section className="chat-pane" aria-labelledby="chat-title">
-          {!showWelcome && error ? <ChatError message={error} /> : null}
+          {!showWelcome && error ? (
+            <ChatError
+              message={error}
+              onRetry={canRetrySend ? retryFailedSend : undefined}
+            />
+          ) : null}
           {showWelcome ? (
             <NewSessionPanel
               displayName={displayName}
@@ -1281,9 +1251,9 @@ function SessionRail({
   channels: readonly ChannelSnapshot[];
   groups: readonly GroupSnapshot[];
   offers: readonly PendingDmOffer[];
-  active: ActiveItem | null;
+  active: ChatTarget | null;
   unread: ReadonlyMap<string, number>;
-  onSelect: (item: ActiveItem) => void;
+  onSelect: (item: ChatTarget) => void;
   onAcceptOffer: (offer: PendingDmOffer) => void;
   onDismissOffer: (offer: PendingDmOffer) => void;
   onNew: () => void;
@@ -1897,10 +1867,22 @@ function Composer({
   );
 }
 
-function ChatError({ message }: { message: string }) {
+function ChatError({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
   return (
     <div className="inline-error chat-error" role="alert">
-      {message}
+      <span>{message}</span>
+      {onRetry ? (
+        <button type="button" className="chat-error-retry" onClick={onRetry}>
+          <IconRefresh size={13} />
+          Retry
+        </button>
+      ) : null}
     </div>
   );
 }
