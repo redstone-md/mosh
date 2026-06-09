@@ -5,7 +5,6 @@ import {
   IconHash,
   IconLoader2,
   IconLock,
-  IconLockOpen,
   IconLogout,
   IconMessageCircle,
   IconPhone,
@@ -46,26 +45,27 @@ import {
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
   ConversationTools,
-  SearchEmpty,
-  filterMessages,
   type ConversationFilter,
   type ConversationToolsState,
 } from "./ConversationTools";
 import { DiagnosticsDrawer } from "./DiagnosticsDrawer";
+import { shorten } from "./format";
+import {
+  ChannelChatList,
+  DmChatList,
+  GroupChatList,
+  type PeerActions,
+} from "./MessageLists";
 import { type OperationKind, useOperationBusy } from "./use-operation-busy";
 import {
   AttachmentView,
-  ChannelMessage,
   ChannelSnapshot,
-  ChatMessage,
-  GroupMessage,
   GroupSnapshot,
   NativeMessagingGateway,
   SessionSnapshot,
   nativeMessagingGateway,
 } from "./native/native-messaging-gateway";
 import {
-  AttachmentCard,
   AttachmentPicker,
   MediaViewer,
   createThumbnail,
@@ -77,7 +77,6 @@ import {
 } from "./attachments";
 import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
 import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
-import { CallLogEntry } from "./voice-call/CallLogEntry";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
 import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
@@ -117,13 +116,6 @@ type PendingDmOffer = DmOffer & {
   readonly kind: "channel" | "group";
   readonly host: string;
 };
-
-interface PeerActions {
-  readonly ownFingerprint: string;
-  readonly offered: ReadonlySet<string>;
-  readonly busy: boolean;
-  readonly onMessage: (fingerprint: string) => void;
-}
 
 const AUTO_POLL_MS = 1000;
 const READY_STATE = "ready";
@@ -1789,144 +1781,6 @@ function GroupNotice() {
   );
 }
 
-/** A channel/group sender's name; clicking a peer's name offers a DM. */
-function PeerNickname({
-  name,
-  fingerprint,
-  peer,
-}: {
-  name: string;
-  fingerprint: string;
-  peer: PeerActions;
-}) {
-  const [open, setOpen] = useState(false);
-  if (fingerprint === peer.ownFingerprint) {
-    return <strong>{name}</strong>;
-  }
-  const alreadyOffered = peer.offered.has(fingerprint);
-  return (
-    <span className="nick-anchor">
-      <button
-        type="button"
-        className="nick-button"
-        onClick={() => setOpen((value) => !value)}
-      >
-        {name}
-      </button>
-      {open ? (
-        <>
-          <div
-            className="nick-popover-backdrop"
-            aria-hidden="true"
-            onClick={() => setOpen(false)}
-          />
-          <div className="nick-popover" role="dialog" aria-label={`Actions for ${name}`}>
-            <div className="nick-popover-name">{name}</div>
-            <button
-              type="button"
-              className="btn btn-primary btn-block"
-              disabled={alreadyOffered || peer.busy}
-              onClick={() => {
-                peer.onMessage(fingerprint);
-                setOpen(false);
-              }}
-            >
-              <IconMessageCircle size={13} />
-              {alreadyOffered ? "Invite sent" : "Message"}
-            </button>
-          </div>
-        </>
-      ) : null}
-    </span>
-  );
-}
-
-function GroupChatList({
-  messages,
-  attachments,
-  tools,
-  peer,
-}: {
-  messages: readonly GroupMessage[];
-  attachments: AttachmentApi;
-  tools: ConversationToolsState;
-  peer: PeerActions;
-}) {
-  const anchorRef = useRef<HTMLDivElement>(null);
-  const visibleMessages = filterMessages(messages, tools.search, tools.filter);
-
-  useEffect(() => {
-    anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
-  }, [messages.length]);
-
-  if (messages.length === 0) {
-    return (
-      <div className="chat-empty">
-        <strong>{groupText.emptyTitle}</strong>
-        <p>{groupText.emptyBody}</p>
-      </div>
-    );
-  }
-  if (visibleMessages.length === 0) {
-    return <SearchEmpty filter={tools.filter} />;
-  }
-  return (
-    <div className="message-stack">
-      {visibleMessages.map((message, index) => (
-        <GroupMessageRow
-          message={message}
-          attachments={attachments}
-          peer={peer}
-          key={`${message.from_fingerprint}-${index}`}
-        />
-      ))}
-      <div ref={anchorRef} aria-hidden="true" />
-    </div>
-  );
-}
-
-function GroupMessageRow({
-  message,
-  attachments,
-  peer,
-}: {
-  message: GroupMessage;
-  attachments: AttachmentApi;
-  peer: PeerActions;
-}) {
-  return (
-    <article className="message-row">
-      <Avatar name={message.from_device} />
-      <div className="message-body">
-        <div className="message-meta">
-          <PeerNickname
-            name={message.from_device}
-            fingerprint={message.from_fingerprint}
-            peer={peer}
-          />
-          <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
-          <code>MLS</code>
-        </div>
-        {message.body ? <p>{message.body}</p> : null}
-        {message.attachment ? (
-          <AttachmentCard
-            descriptor={message.attachment}
-            view={attachments.views.get(message.attachment.attachment_id)}
-            busy={attachments.busy}
-            onDownload={attachments.onDownload}
-            onCancel={attachments.onCancel}
-            onOpen={attachments.onOpen}
-          />
-        ) : null}
-        <div className="message-seal">
-          <IconLockOpen size={10} />
-          <span>OpenMLS · sealed</span>
-        </div>
-      </div>
-    </article>
-  );
-}
-
 function EmptyState({
   onNew,
 }: {
@@ -1969,164 +1823,6 @@ function FingerprintBadge({
       <IconShieldCheck size={12} />
       <code>{display}</code>
     </button>
-  );
-}
-
-function DmChatList({
-  messages,
-  attachments,
-  tools,
-}: {
-  messages: readonly ChatMessage[];
-  attachments: AttachmentApi;
-  tools: ConversationToolsState;
-}) {
-  const anchorRef = useRef<HTMLDivElement>(null);
-  const visibleMessages = filterMessages(messages, tools.search, tools.filter);
-
-  useEffect(() => {
-    anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
-  }, [messages.length]);
-
-  if (messages.length === 0) {
-    return (
-      <div className="chat-empty">
-        <strong>{chatText.emptyTitle}</strong>
-        <p>{chatText.emptyBody}</p>
-      </div>
-    );
-  }
-  if (visibleMessages.length === 0) {
-    return <SearchEmpty filter={tools.filter} />;
-  }
-  return (
-    <div className="message-stack">
-      {visibleMessages.map((message, index) => (
-        <DmMessageRow
-          message={message}
-          attachments={attachments}
-          key={`${message.from_device}-${index}`}
-        />
-      ))}
-      <div ref={anchorRef} aria-hidden="true" />
-    </div>
-  );
-}
-
-function DmMessageRow({
-  message,
-  attachments,
-}: {
-  message: ChatMessage;
-  attachments: AttachmentApi;
-}) {
-  return (
-    <article className="message-row">
-      <Avatar name={message.from_device} />
-      <div className="message-body">
-        <div className="message-meta">
-          <strong>{message.from_device}</strong>
-          <code>MLS</code>
-        </div>
-        {message.body ? <p>{message.body}</p> : null}
-        {message.attachment ? (
-          <AttachmentCard
-            descriptor={message.attachment}
-            view={attachments.views.get(message.attachment.attachment_id)}
-            busy={attachments.busy}
-            onDownload={attachments.onDownload}
-            onCancel={attachments.onCancel}
-            onOpen={attachments.onOpen}
-          />
-        ) : null}
-        {message.call_event ? <CallLogEntry event={message.call_event} /> : null}
-        <div className="message-seal">
-          <IconLock size={10} />
-          <span>OpenMLS · sealed</span>
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function ChannelChatList({
-  messages,
-  attachments,
-  tools,
-  peer,
-}: {
-  messages: readonly ChannelMessage[];
-  attachments: AttachmentApi;
-  tools: ConversationToolsState;
-  peer: PeerActions;
-}) {
-  const anchorRef = useRef<HTMLDivElement>(null);
-  const visibleMessages = filterMessages(messages, tools.search, tools.filter);
-
-  useEffect(() => {
-    anchorRef.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
-  }, [messages.length]);
-
-  if (messages.length === 0) {
-    return (
-      <div className="chat-empty">
-        <strong>{channelText.emptyTitle}</strong>
-        <p>{channelText.emptyBody}</p>
-      </div>
-    );
-  }
-  if (visibleMessages.length === 0) {
-    return <SearchEmpty filter={tools.filter} />;
-  }
-  return (
-    <div className="message-stack">
-      {visibleMessages.map((message, index) => (
-        <ChannelMessageRow
-          message={message}
-          attachments={attachments}
-          peer={peer}
-          key={`${message.from_fingerprint}-${index}`}
-        />
-      ))}
-      <div ref={anchorRef} aria-hidden="true" />
-    </div>
-  );
-}
-
-function ChannelMessageRow({
-  message,
-  attachments,
-  peer,
-}: {
-  message: ChannelMessage;
-  attachments: AttachmentApi;
-  peer: PeerActions;
-}) {
-  return (
-    <article className="message-row">
-      <Avatar name={message.from_device} />
-      <div className="message-body">
-        <div className="message-meta">
-          <PeerNickname
-            name={message.from_device}
-            fingerprint={message.from_fingerprint}
-            peer={peer}
-          />
-          <code className="device-fp">{shorten(message.from_fingerprint, 6)}</code>
-        </div>
-        {message.body ? <p>{message.body}</p> : null}
-        {message.attachment ? (
-          <AttachmentCard
-            descriptor={message.attachment}
-            view={attachments.views.get(message.attachment.attachment_id)}
-            busy={attachments.busy}
-            onDownload={attachments.onDownload}
-            onCancel={attachments.onCancel}
-            onOpen={attachments.onOpen}
-          />
-        ) : null}
-      </div>
-    </article>
   );
 }
 
@@ -2252,16 +1948,6 @@ function readableError(error: unknown): string {
 
 async function copyText(value: string): Promise<void> {
   await navigator.clipboard?.writeText?.(value);
-}
-
-function shorten(value: string, head: number): string {
-  if (!value) {
-    return "—";
-  }
-  if (value.length <= head * 2 + 1) {
-    return value;
-  }
-  return `${value.slice(0, head)}…${value.slice(-4)}`;
 }
 
 function peerLabel(session: SessionSnapshot): string {
