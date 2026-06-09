@@ -1,7 +1,7 @@
 import { IconCheck } from "@tabler/icons-react";
 import { detectInvite } from "./invite/invite-detection";
 import { InviteResult, OnboardStepFrame } from "./NewSessionPanel.parts";
-import type { InviteCreateState } from "./NewSessionPanel.types";
+import type { InviteCreateState } from "./private-dm-setup.types";
 import { onboardText } from "./private-dm.content";
 
 export function ChatCreateStep(props: {

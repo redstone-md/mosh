@@ -2,17 +2,10 @@ import { type Dispatch, type SetStateAction, useMemo, useState } from "react";
 import { type ChatTarget } from "./chat-actions";
 import { copyText } from "./clipboard";
 import type { NativeMessagingGateway } from "./native/native-messaging-gateway";
-
-interface InviteCreateState {
-  readonly inviteUri?: string;
-  readonly copied: boolean;
-}
-
-export interface PrivateDmRequestBase {
-  readonly display_name: string;
-  readonly listen_port: number;
-  readonly static_peer: string | null;
-}
+import type {
+  InviteCreateState,
+  PrivateDmRequestBase,
+} from "./private-dm-setup.types";
 
 type RunSetupOperation = (
   kind: "setup",

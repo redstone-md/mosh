@@ -5,8 +5,8 @@ import type {
   GroupSnapshot,
   NativeMessagingGateway,
 } from "./native/native-messaging-gateway";
+import type { PrivateDmRequestBase } from "./private-dm-setup.types";
 import type { PendingDmOffer } from "./SessionRail";
-import type { PrivateDmRequestBase } from "./use-private-dm-setup";
 
 type RunOfferOperation = (
   kind: "offer",

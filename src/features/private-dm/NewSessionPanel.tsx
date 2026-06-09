@@ -7,8 +7,9 @@ import {
   GroupCreateStep,
   OnboardJoinStep,
 } from "./NewSessionPanelSteps";
-import type { InviteCreateState, OnboardStep } from "./NewSessionPanel.types";
+import type { OnboardStep } from "./NewSessionPanel.types";
 import type { NativeMessagingGateway } from "./native/native-messaging-gateway";
+import type { InviteCreateState } from "./private-dm-setup.types";
 import type { PersistenceWarning } from "./use-runtime-persistence-status";
 import { VpnBanner } from "./vpn/VpnBanner";
 
