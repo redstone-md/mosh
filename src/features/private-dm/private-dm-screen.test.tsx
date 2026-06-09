@@ -428,6 +428,7 @@ describe("PrivateDmScreen", () => {
     expect(screen.getByText("later message").closest(".message-row")).not.toHaveClass(
       "message-row-grouped",
     );
+    expect(screen.queryByText("OpenMLS · sealed")).not.toBeInTheDocument();
   });
 
   it("closes the active session and returns to the empty state", async () => {
