@@ -12,18 +12,23 @@ use crate::adapters::attachment_runtime::{
 };
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::mls_crypto::MlsSessionCrypto;
+use crate::adapters::outbound_delivery::OutboundAttemptRecord;
+use crate::adapters::persistence::Persistence;
 use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 pub use contracts::{
     AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
     AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
     DmOffer, InviteCreated, MeshInfo, OutgoingCall, PendingCall, PrivateDmRuntimeError,
     SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
+    MessageDeliveryStatus,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use wire::{
     blob_channel, channel_session_id, control_channel, data_channel, decode, decode_json, encode,
     publish_json, voice_call_channel, BlobEnvelope, ControlEnvelope, DataEnvelope,
 };
+
+const OUTBOUND_SCOPE_PRIVATE_DM: &str = "private_dm";
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -39,6 +44,18 @@ fn random_b64(bytes: usize) -> String {
     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf)
 }
 
+fn apply_delivery(
+    message: &mut ChatMessage,
+    status: MessageDeliveryStatus,
+    error: Option<String>,
+    retry_count: u32,
+) {
+    message.delivery_status = Some(status);
+    message.delivery_error = error;
+    message.retry_count = Some(retry_count);
+    message.retryable = Some(matches!(status, MessageDeliveryStatus::Failed));
+}
+
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
@@ -49,7 +66,7 @@ const SEEN_MESSAGE_CAP: usize = 4096;
 pub struct PrivateDmRuntime {
     moss: Arc<MossFfiRuntime>,
     attachment_store: Arc<AttachmentStore>,
-    persistence: Option<Arc<crate::adapters::persistence::Persistence>>,
+    persistence: Option<Arc<Persistence>>,
     persisted_counts: HashMap<String, usize>,
     // Sessions whose persisted record already carries a valid (non-empty)
     // group_id, so the tail-persist loop refreshes each record only once.
@@ -98,6 +115,7 @@ struct PrivateDmSession {
     attachment_store: Arc<AttachmentStore>,
     attachments: AttachmentRuntime,
     attachment_slots: HashMap<String, AttachmentSlot>,
+    outbound_attempts: HashMap<String, OutboundAttemptRecord>,
     call: Option<CallState>,
 }
 
@@ -115,7 +133,7 @@ impl PrivateDmRuntime {
     pub fn from_shared(
         moss: Arc<MossFfiRuntime>,
         attachment_store: Arc<AttachmentStore>,
-        persistence: Option<Arc<crate::adapters::persistence::Persistence>>,
+        persistence: Option<Arc<Persistence>>,
     ) -> Self {
         Self {
             moss,
@@ -242,8 +260,35 @@ impl PrivateDmRuntime {
                                 }
                             }
                         }
-                        session.messages.push(message);
+                        session.upsert_message(message);
                     }
+                }
+            }
+            if let Ok(rows) = p.list_outbound_attempts(OUTBOUND_SCOPE_PRIVATE_DM, &rec.session_id) {
+                for row in rows {
+                    let Ok(attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row) else {
+                        continue;
+                    };
+                    let Ok(mut message) = serde_json::from_str::<ChatMessage>(&attempt.message_json)
+                    else {
+                        continue;
+                    };
+                    if message.message_id.is_none() {
+                        message.message_id = Some(attempt.message_id.clone());
+                    }
+                    if message.sent_at_ms.is_none() {
+                        message.sent_at_ms = Some(attempt.sent_at_ms);
+                    }
+                    apply_delivery(
+                        &mut message,
+                        attempt.delivery_status,
+                        attempt.delivery_error.clone(),
+                        attempt.retry_count,
+                    );
+                    session.upsert_message(message);
+                    session
+                        .outbound_attempts
+                        .insert(attempt.message_id.clone(), attempt);
                 }
             }
             // Recover the peer's display name from a restored inbound message so
@@ -391,34 +436,209 @@ impl PrivateDmRuntime {
         body: String,
     ) -> Result<SendMessageResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let session = self.session_mut(session_id)?;
-        let ciphertext = session.crypto.encrypt(body.as_bytes())?;
-        let message = session.stamp_message(ChatMessage {
-            from_device: session.device_id.clone(),
-            body,
-            message_id: None,
-            sent_at_ms: None,
-            attachment: None,
-            call_event: None,
-        });
-        let envelope = DataEnvelope {
-            session_id: session.session_id.clone(),
-            participant_id: session.participant_id.clone(),
-            from_device: session.device_id.clone(),
-            message_id: message.message_id.clone(),
-            sent_at_ms: message.sent_at_ms,
-            ciphertext_b64: encode(&ciphertext),
+        let (session_id_owned, data_channel, state, message_id, sent_at_ms, ciphertext_bytes, payload) = {
+            let session = self.session_mut(session_id)?;
+            let ciphertext = session.crypto.encrypt(body.as_bytes())?;
+            let mut message = session.stamp_message(ChatMessage {
+                from_device: session.device_id.clone(),
+                body,
+                message_id: None,
+                sent_at_ms: None,
+                attachment: None,
+                call_event: None,
+                delivery_status: Some(MessageDeliveryStatus::Pending),
+                delivery_error: None,
+                retryable: None,
+                retry_count: Some(0),
+            });
+            let message_id = message.message_id.clone().unwrap_or_default();
+            let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+            message.message_id = Some(message_id.clone());
+            message.sent_at_ms = Some(sent_at_ms);
+            let envelope = DataEnvelope {
+                session_id: session.session_id.clone(),
+                participant_id: session.participant_id.clone(),
+                from_device: session.device_id.clone(),
+                message_id: Some(message_id.clone()),
+                sent_at_ms: Some(sent_at_ms),
+                ciphertext_b64: encode(&ciphertext),
+            };
+            let payload = serde_json::to_vec(&envelope)
+                .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
+            let attempt = OutboundAttemptRecord {
+                conversation_id: session.session_id.clone(),
+                message_id: message_id.clone(),
+                sent_at_ms,
+                ciphertext_bytes: ciphertext.len(),
+                message_json: serde_json::to_string(&message)
+                    .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?,
+                publish_payload_b64: encode(&payload),
+                delivery_status: MessageDeliveryStatus::Pending,
+                delivery_error: None,
+                retry_count: 0,
+            };
+            session.upsert_message(message);
+            session.outbound_attempts.insert(message_id.clone(), attempt);
+            (
+                session.session_id.clone(),
+                session.data_channel.clone(),
+                session.state(),
+                message_id,
+                sent_at_ms,
+                ciphertext.len(),
+                payload,
+            )
+        };
+        self.persist_outbound_state(session_id, &message_id, true);
+
+        let publish = {
+            let session = self.session_ref(session_id)?;
+            session
+                .node
+                .publish(&data_channel, &payload)
+                .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
         };
 
-        publish_json(&session.node, &session.data_channel, &envelope)?;
-        session.messages.push(message);
-
-        let result = SendMessageResult {
-            session_id: session.session_id.clone(),
-            state: session.state(),
-            ciphertext_bytes: ciphertext.len(),
+        let result = match publish {
+            Ok(()) => {
+                let session = self.session_mut(session_id)?;
+                session.mark_delivery(&message_id, MessageDeliveryStatus::Sent, None, 0)?;
+                session.outbound_attempts.remove(&message_id);
+                SendMessageResult {
+                    session_id: session_id_owned,
+                    state,
+                    ciphertext_bytes,
+                    message_id: message_id.clone(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Sent,
+                    delivery_error: None,
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let session = self.session_mut(session_id)?;
+                let retry_count = if let Some(attempt) = session.outbound_attempts.get_mut(&message_id)
+                {
+                    attempt.delivery_status = MessageDeliveryStatus::Failed;
+                    attempt.delivery_error = Some(error_text.clone());
+                    attempt.retry_count
+                } else {
+                    0
+                };
+                session.mark_delivery(
+                    &message_id,
+                    MessageDeliveryStatus::Failed,
+                    Some(error_text.clone()),
+                    retry_count,
+                )?;
+                session.sync_attempt_message_json(&message_id)?;
+                SendMessageResult {
+                    session_id: session_id_owned,
+                    state,
+                    ciphertext_bytes,
+                    message_id: message_id.clone(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Failed,
+                    delivery_error: Some(error_text),
+                }
+            }
         };
+        self.persist_outbound_state(session_id, &message_id, false);
         self.persist_session_tail();
+        Ok(result)
+    }
+
+    pub fn retry_message(
+        &mut self,
+        session_id: &str,
+        message_id: &str,
+    ) -> Result<SendMessageResult, PrivateDmRuntimeError> {
+        self.drain_inbound()?;
+        let (session_id_owned, data_channel, state, sent_at_ms, ciphertext_bytes, retry_count, payload) = {
+            let session = self.session_mut(session_id)?;
+            let (payload_b64, sent_at_ms, ciphertext_bytes) = {
+                let attempt = session
+                    .outbound_attempts
+                    .get_mut(message_id)
+                    .ok_or_else(|| PrivateDmRuntimeError::MissingMessage(message_id.to_string()))?;
+                attempt.retry_count = attempt.retry_count.saturating_add(1);
+                attempt.delivery_status = MessageDeliveryStatus::Pending;
+                attempt.delivery_error = None;
+                (
+                    attempt.publish_payload_b64.clone(),
+                    attempt.sent_at_ms,
+                    attempt.ciphertext_bytes,
+                )
+            };
+            let payload = decode(&payload_b64)?;
+            let retry_count = session
+                .outbound_attempts
+                .get(message_id)
+                .map(|attempt| attempt.retry_count)
+                .unwrap_or(0);
+            session.mark_delivery(message_id, MessageDeliveryStatus::Pending, None, retry_count)?;
+            session.sync_attempt_message_json(message_id)?;
+            (
+                session.session_id.clone(),
+                session.data_channel.clone(),
+                session.state(),
+                sent_at_ms,
+                ciphertext_bytes,
+                retry_count,
+                payload,
+            )
+        };
+        self.persist_outbound_state(session_id, message_id, false);
+
+        let publish = {
+            let session = self.session_ref(session_id)?;
+            session
+                .node
+                .publish(&data_channel, &payload)
+                .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
+        };
+
+        let result = match publish {
+            Ok(()) => {
+                let session = self.session_mut(session_id)?;
+                session.mark_delivery(message_id, MessageDeliveryStatus::Sent, None, retry_count)?;
+                session.outbound_attempts.remove(message_id);
+                SendMessageResult {
+                    session_id: session_id_owned,
+                    state,
+                    ciphertext_bytes,
+                    message_id: message_id.to_string(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Sent,
+                    delivery_error: None,
+                }
+            }
+            Err(error) => {
+                let error_text = error.to_string();
+                let session = self.session_mut(session_id)?;
+                if let Some(attempt) = session.outbound_attempts.get_mut(message_id) {
+                    attempt.delivery_status = MessageDeliveryStatus::Failed;
+                    attempt.delivery_error = Some(error_text.clone());
+                }
+                session.mark_delivery(
+                    message_id,
+                    MessageDeliveryStatus::Failed,
+                    Some(error_text.clone()),
+                    retry_count,
+                )?;
+                session.sync_attempt_message_json(message_id)?;
+                SendMessageResult {
+                    session_id: session_id_owned,
+                    state,
+                    ciphertext_bytes,
+                    message_id: message_id.to_string(),
+                    sent_at_ms,
+                    delivery_status: MessageDeliveryStatus::Failed,
+                    delivery_error: Some(error_text),
+                }
+            }
+        };
+        self.persist_outbound_state(session_id, message_id, false);
         Ok(result)
     }
 
@@ -558,6 +778,79 @@ impl PrivateDmRuntime {
         }
         self.persist_session_tail();
         Ok(())
+    }
+
+    fn persist_outbound_state(&mut self, session_id: &str, message_id: &str, persist_snapshot: bool) {
+        let Some(p) = self.persistence.as_ref().cloned() else {
+            return;
+        };
+        let (
+            sent_at_ms,
+            message_row,
+            attempt_row,
+            snapshot,
+            session_row,
+            needs_record_refresh,
+        ) = {
+            let Some(session) = self.sessions.get(session_id) else {
+                return;
+            };
+            let Some(message) = session
+                .messages
+                .iter()
+                .find(|message| message.message_id.as_deref() == Some(message_id))
+            else {
+                return;
+            };
+            let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+            let message_row = serde_json::to_vec(&contracts::PersistedMessage {
+                conversation_id: session.session_id.clone(),
+                sent_at_ms,
+                message_id: message_id.to_string(),
+                message: message.clone(),
+            })
+            .ok();
+            let attempt_row = session
+                .outbound_attempts
+                .get(message_id)
+                .and_then(|attempt| serde_json::to_vec(attempt).ok());
+            let snapshot = persist_snapshot.then(|| session.crypto.snapshot());
+            let needs_record_refresh =
+                !self.finalized_session_records.contains(session_id)
+                    && session.crypto.group_id_bytes().is_some();
+            let session_row = needs_record_refresh
+                .then(|| serde_json::to_vec(&session.to_persisted_record()).ok())
+                .flatten();
+            (
+                sent_at_ms,
+                message_row,
+                attempt_row,
+                snapshot,
+                session_row,
+                needs_record_refresh,
+            )
+        };
+
+        if let Some(row) = message_row {
+            let _ = p.append_message(session_id, sent_at_ms, message_id, &row);
+        }
+        if let Some(snapshot) = snapshot {
+            let _ = p.put_mls_snapshot(session_id, &snapshot);
+        }
+        match attempt_row {
+            Some(row) => {
+                let _ = p.put_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_DM, session_id, message_id, &row);
+            }
+            None => {
+                let _ = p.delete_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_DM, session_id, message_id);
+            }
+        }
+        if let Some(row) = session_row {
+            let _ = p.put_session(session_id, &row);
+            if needs_record_refresh {
+                self.finalized_session_records.insert(session_id.to_string());
+            }
+        }
     }
 
     fn persist_session_tail(&mut self) {
@@ -754,6 +1047,7 @@ impl PrivateDmSession {
             attachment_store,
             attachments: AttachmentRuntime::new(),
             attachment_slots: HashMap::new(),
+            outbound_attempts: HashMap::new(),
             call: None,
         }
     }
@@ -784,6 +1078,77 @@ impl PrivateDmSession {
             message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
         }
         message
+    }
+
+    fn upsert_message(&mut self, message: ChatMessage) {
+        if let Some(message_id) = message.message_id.as_deref() {
+            if let Some(existing) = self
+                .messages
+                .iter_mut()
+                .find(|existing| existing.message_id.as_deref() == Some(message_id))
+            {
+                *existing = message;
+                return;
+            }
+        }
+        self.messages.push(message);
+    }
+
+    fn find_message_mut(&mut self, message_id: &str) -> Option<&mut ChatMessage> {
+        self.messages
+            .iter_mut()
+            .find(|message| message.message_id.as_deref() == Some(message_id))
+    }
+
+    fn has_message(&self, candidate: &ChatMessage) -> bool {
+        self.messages.iter().any(|existing| {
+            existing.from_device == candidate.from_device
+                && match (
+                    existing.message_id.as_deref(),
+                    candidate.message_id.as_deref(),
+                ) {
+                    (Some(left), Some(right)) if !left.is_empty() && !right.is_empty() => {
+                        left == right
+                    }
+                    _ => {
+                        existing.sent_at_ms == candidate.sent_at_ms
+                            && existing.body == candidate.body
+                    }
+                }
+        })
+    }
+
+    fn mark_delivery(
+        &mut self,
+        message_id: &str,
+        status: MessageDeliveryStatus,
+        error: Option<String>,
+        retry_count: u32,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let message = self
+            .find_message_mut(message_id)
+            .ok_or_else(|| PrivateDmRuntimeError::MissingMessage(message_id.to_string()))?;
+        apply_delivery(message, status, error, retry_count);
+        Ok(())
+    }
+
+    fn sync_attempt_message_json(
+        &mut self,
+        message_id: &str,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        let message_json = self
+            .messages
+            .iter()
+            .find(|message| message.message_id.as_deref() == Some(message_id))
+            .ok_or_else(|| PrivateDmRuntimeError::MissingMessage(message_id.to_string()))
+            .and_then(|message| {
+                serde_json::to_string(message)
+                    .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))
+            })?;
+        if let Some(attempt) = self.outbound_attempts.get_mut(message_id) {
+            attempt.message_json = message_json;
+        }
+        Ok(())
     }
 
     fn handle_moss_message(
@@ -1003,6 +1368,10 @@ impl PrivateDmSession {
                 duration_ms,
                 call_id: call_id.to_string(),
             }),
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
         self.messages.push(message);
     }
@@ -1024,7 +1393,14 @@ impl PrivateDmSession {
             sent_at_ms: envelope.sent_at_ms,
             attachment: None,
             call_event: None,
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
+        if self.has_message(&message) {
+            return Ok(());
+        }
         self.messages.push(message);
 
         Ok(())
@@ -1114,6 +1490,10 @@ impl PrivateDmSession {
             sent_at_ms: None,
             attachment: Some(descriptor),
             call_event: None,
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
         self.messages.push(message);
         Ok(())
@@ -1175,6 +1555,10 @@ impl PrivateDmSession {
             sent_at_ms: None,
             attachment: Some(descriptor),
             call_event: None,
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
         });
         self.messages.push(message);
         Ok(AttachmentSendResult {
@@ -1711,6 +2095,160 @@ mod tests {
             matching2, 1,
             "tail-persist re-append duplicated the message"
         );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn failed_send_rehydrates_as_retryable_message() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!(
+            "mosh-dm-failed-send-{}.redb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [19u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let (session_id, message_id) = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42160,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            let _publish_fail = wire::fail_next_test_publish("simulated publish failure");
+            let result = alice
+                .send_message(&invite.session_id, "hello failed history".to_string())
+                .expect("send should return failed result");
+            assert_eq!(result.delivery_status, contracts::MessageDeliveryStatus::Failed);
+            assert_eq!(
+                result.delivery_error.as_deref(),
+                Some("Moss error: simulated publish failure")
+            );
+            assert!(!result.message_id.is_empty());
+
+            let live = alice
+                .poll_session(&invite.session_id)
+                .expect("poll should surface failed message");
+            let failed = live
+                .messages
+                .iter()
+                .find(|message| message.message_id.as_deref() == Some(result.message_id.as_str()))
+                .expect("failed message should be recorded");
+            assert_eq!(
+                failed.delivery_status,
+                Some(contracts::MessageDeliveryStatus::Failed)
+            );
+            assert_eq!(
+                failed.delivery_error.as_deref(),
+                Some("Moss error: simulated publish failure")
+            );
+
+            (invite.session_id, result.message_id)
+        };
+
+        let mut revived =
+            PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), Some(persistence));
+        revived.rehydrate();
+        let listing = revived.list_sessions().expect("listing should pass");
+        let session = listing
+            .sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .expect("rehydrated session should be present");
+        let failed = session
+            .messages
+            .iter()
+            .find(|message| message.message_id.as_deref() == Some(message_id.as_str()))
+            .expect("failed message should rehydrate");
+        assert_eq!(
+            failed.delivery_status,
+            Some(contracts::MessageDeliveryStatus::Failed)
+        );
+        assert_eq!(failed.retryable, Some(true));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn retry_message_reuses_message_id_and_clears_failed_attempt() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-dm-retry-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [23u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let (invite, failed_message_id) = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42161,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            let _publish_fail = wire::fail_next_test_publish("simulated publish failure");
+            let failed = alice
+                .send_message(&invite.session_id, "retry this".to_string())
+                .expect("failed send should still return a result");
+
+            let retried = alice
+                .retry_message(&invite.session_id, &failed.message_id)
+                .expect("retry should succeed");
+            assert_eq!(retried.message_id, failed.message_id);
+            assert_eq!(retried.delivery_status, contracts::MessageDeliveryStatus::Sent);
+
+            let snapshot = alice.poll_session(&invite.session_id).expect("poll should pass");
+            let matching: Vec<&ChatMessage> = snapshot
+                .messages
+                .iter()
+                .filter(|message| message.message_id.as_deref() == Some(failed.message_id.as_str()))
+                .collect();
+            assert_eq!(matching.len(), 1, "retry should update, not duplicate, the row");
+            assert_eq!(
+                matching[0].delivery_status,
+                Some(contracts::MessageDeliveryStatus::Sent)
+            );
+            assert_eq!(matching[0].retry_count, Some(1));
+
+            (invite, failed.message_id)
+        };
+
+        let stored_attempt = persistence
+            .get_outbound_attempt("private_dm", &invite.session_id, &failed_message_id)
+            .expect("lookup should pass");
+        assert!(stored_attempt.is_none());
 
         let _ = std::fs::remove_file(&db_path);
     }

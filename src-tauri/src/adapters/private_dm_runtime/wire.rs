@@ -144,6 +144,11 @@ pub fn decode(encoded: &str) -> Result<Vec<u8>, PrivateDmRuntimeError> {
 }
 
 #[cfg(test)]
+pub fn fail_next_test_publish(message: &str) -> crate::adapters::moss_ffi::TestPublishFailureGuard {
+    crate::adapters::moss_ffi::fail_next_test_publish(message)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

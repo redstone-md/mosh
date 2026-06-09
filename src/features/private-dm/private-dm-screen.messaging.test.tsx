@@ -102,6 +102,51 @@ describe("PrivateDmScreen messaging", () => {
     );
   });
 
+  it("only shows row retry controls for outbound failed messages with retry metadata", async () => {
+    const gateway = createGateway([
+      snapshot({
+        display_name: "mosh-bob",
+        messages: [
+          {
+            from_device: "Alice",
+            body: "inbound failure",
+            message_id: "dm-inbound-failed-1",
+            sent_at_ms: Date.UTC(2026, 0, 1, 9, 58),
+            delivery_status: "failed",
+            delivery_error: "remote queue rejected",
+            retryable: true,
+            retry_count: 1,
+          },
+          {
+            from_device: "mosh-bob",
+            body: "not retryable",
+            message_id: "dm-failed-2",
+            sent_at_ms: Date.UTC(2026, 0, 1, 9, 59),
+            delivery_status: "failed",
+            delivery_error: "policy blocked",
+            retryable: false,
+            retry_count: 1,
+          },
+          {
+            from_device: "mosh-bob",
+            body: "missing id",
+            sent_at_ms: Date.UTC(2026, 0, 1, 10, 0),
+            delivery_status: "failed",
+            delivery_error: "temporary outage",
+            retryable: true,
+            retry_count: 2,
+          },
+        ],
+      }),
+    ]);
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    expect(await screen.findByText("inbound failure")).toBeInTheDocument();
+    expect(screen.getByText("not retryable")).toBeInTheDocument();
+    expect(screen.getByText("missing id")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry failed message" })).not.toBeInTheDocument();
+  });
+
   it("retries failed retryable channel rows by message id", async () => {
     const gateway = createGateway([]);
     gateway.listChannels = vi.fn(async (): Promise<ChannelListSnapshot> => ({
