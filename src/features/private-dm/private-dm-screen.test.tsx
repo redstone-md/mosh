@@ -474,7 +474,32 @@ describe("PrivateDmScreen", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("send failed");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(composer).toHaveValue("hello");
+  });
+
+  it("retries the last failed message send", async () => {
+    const gateway = createGateway([snapshot()]);
+    gateway.sendPrivateMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("send failed"))
+      .mockResolvedValue({
+        session_id: SESSION_ID,
+        state: "ready",
+        ciphertext_bytes: 128,
+      });
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await screen.findByText("hello from moss");
+    const user = userEvent.setup();
+    const composer = screen.getByRole("textbox", { name: "Message" });
+    await user.type(composer, "retry me");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(gateway.sendPrivateMessage).toHaveBeenCalledTimes(2));
+    expect(gateway.sendPrivateMessage).toHaveBeenLastCalledWith(SESSION_ID, "retry me");
+    await waitFor(() => expect(composer).toHaveValue(""));
   });
 
   it("downloads voice attachments before playback", async () => {

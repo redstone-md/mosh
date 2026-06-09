@@ -358,6 +358,30 @@
 
 .chat-error {
   margin: 12px 22px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-error-retry {
+  min-height: 26px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(232,106,90,0.35);
+  border-radius: 7px;
+  padding: 0 9px;
+  background: rgba(232,106,90,0.08);
+  color: var(--danger);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chat-error-retry:hover {
+  background: rgba(232,106,90,0.14);
 }
 
 @media (max-width: 640px) {
