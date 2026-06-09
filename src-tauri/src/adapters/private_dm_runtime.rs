@@ -201,12 +201,19 @@ impl PrivateDmRuntime {
             if let Ok(msgs) = p.list_messages(&rec.session_id) {
                 for m in msgs {
                     if let Ok(pm) = serde_json::from_slice::<contracts::PersistedMessage>(&m) {
+                        let mut message = pm.message;
+                        if message.message_id.is_none() {
+                            message.message_id = Some(pm.message_id.clone());
+                        }
+                        if message.sent_at_ms.is_none() {
+                            message.sent_at_ms = Some(pm.sent_at_ms);
+                        }
                         // Re-render cached attachments from the local store. Non-cached
                         // attachments get no slot, so a peer re-offer can still register
                         // them (auto re-download from persisted data is impossible: the
                         // chunk-crypto manifest is not persisted and MLS forward secrecy
                         // bars re-decrypting the original offer).
-                        if let Some(desc) = pm.message.attachment.as_ref() {
+                        if let Some(desc) = message.attachment.as_ref() {
                             if self
                                 .attachment_store
                                 .exists(&desc.content_hash, &desc.file_name)
@@ -216,7 +223,7 @@ impl PrivateDmRuntime {
                                     .attachment_store
                                     .path_for(&desc.content_hash, &desc.file_name)
                                 {
-                                    let direction = if pm.message.from_device == rec.display_name {
+                                    let direction = if message.from_device == rec.display_name {
                                         AttachmentDirection::Outgoing
                                     } else {
                                         AttachmentDirection::Incoming
@@ -235,7 +242,7 @@ impl PrivateDmRuntime {
                                 }
                             }
                         }
-                        session.messages.push(pm.message);
+                        session.messages.push(message);
                     }
                 }
             }
@@ -386,20 +393,25 @@ impl PrivateDmRuntime {
         self.drain_inbound()?;
         let session = self.session_mut(session_id)?;
         let ciphertext = session.crypto.encrypt(body.as_bytes())?;
+        let message = session.stamp_message(ChatMessage {
+            from_device: session.device_id.clone(),
+            body,
+            message_id: None,
+            sent_at_ms: None,
+            attachment: None,
+            call_event: None,
+        });
         let envelope = DataEnvelope {
             session_id: session.session_id.clone(),
             participant_id: session.participant_id.clone(),
             from_device: session.device_id.clone(),
+            message_id: message.message_id.clone(),
+            sent_at_ms: message.sent_at_ms,
             ciphertext_b64: encode(&ciphertext),
         };
 
         publish_json(&session.node, &session.data_channel, &envelope)?;
-        session.messages.push(ChatMessage {
-            from_device: session.device_id.clone(),
-            body,
-            attachment: None,
-            call_event: None,
-        });
+        session.messages.push(message);
 
         let result = SendMessageResult {
             session_id: session.session_id.clone(),
@@ -563,13 +575,23 @@ impl PrivateDmRuntime {
                 .unwrap_or(0);
             let has_new_messages = session.messages.len() > start;
             for (idx, msg) in session.messages.iter().enumerate().skip(start) {
-                let ts = now_ms();
-                let message_id = format!("{ts}-{idx:06}");
+                let ts = msg.sent_at_ms.unwrap_or_else(now_ms);
+                let message_id = msg
+                    .message_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{ts}-{idx:06}"));
+                let mut message = msg.clone();
+                if message.sent_at_ms.is_none() {
+                    message.sent_at_ms = Some(ts);
+                }
+                if message.message_id.is_none() {
+                    message.message_id = Some(message_id.clone());
+                }
                 let record = contracts::PersistedMessage {
                     conversation_id: session.session_id.clone(),
                     sent_at_ms: ts,
                     message_id: message_id.clone(),
-                    message: msg.clone(),
+                    message,
                 };
                 if let Ok(json) = serde_json::to_vec(&record) {
                     let _ = p.append_message(&session.session_id, ts, &message_id, &json);
@@ -753,6 +775,15 @@ impl PrivateDmSession {
             listen_port: self.listen_port,
             static_peer: self.static_peer.clone(),
         }
+    }
+
+    fn stamp_message(&self, mut message: ChatMessage) -> ChatMessage {
+        let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
+        message.sent_at_ms = Some(sent_at_ms);
+        if message.message_id.as_deref().unwrap_or_default().is_empty() {
+            message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
+        }
+        message
     }
 
     fn handle_moss_message(
@@ -961,9 +992,11 @@ impl PrivateDmSession {
         duration_ms: u64,
         call_id: &str,
     ) {
-        self.messages.push(ChatMessage {
+        let message = self.stamp_message(ChatMessage {
             from_device: remote_device.to_string(),
             body: String::new(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: None,
             call_event: Some(CallEvent {
                 kind: kind.to_string(),
@@ -971,6 +1004,7 @@ impl PrivateDmSession {
                 call_id: call_id.to_string(),
             }),
         });
+        self.messages.push(message);
     }
 
     fn handle_data(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
@@ -983,12 +1017,15 @@ impl PrivateDmSession {
 
         let plaintext = self.crypto.decrypt(&decode(&envelope.ciphertext_b64)?)?;
         self.note_peer_name(&envelope.from_device);
-        self.messages.push(ChatMessage {
+        let message = self.stamp_message(ChatMessage {
             from_device: envelope.from_device,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
+            message_id: envelope.message_id,
+            sent_at_ms: envelope.sent_at_ms,
             attachment: None,
             call_event: None,
         });
+        self.messages.push(message);
 
         Ok(())
     }
@@ -1070,12 +1107,15 @@ impl PrivateDmSession {
                 cancelled: false,
             },
         );
-        self.messages.push(ChatMessage {
+        let message = self.stamp_message(ChatMessage {
             from_device,
             body: String::new(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: Some(descriptor),
             call_event: None,
         });
+        self.messages.push(message);
         Ok(())
     }
 
@@ -1128,12 +1168,15 @@ impl PrivateDmSession {
                 cancelled: false,
             },
         );
-        self.messages.push(ChatMessage {
+        let message = self.stamp_message(ChatMessage {
             from_device: self.device_id.clone(),
             body: String::new(),
+            message_id: None,
+            sent_at_ms: None,
             attachment: Some(descriptor),
             call_event: None,
         });
+        self.messages.push(message);
         Ok(AttachmentSendResult {
             session_id: self.session_id.clone(),
             attachment_id,

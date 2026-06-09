@@ -143,7 +143,10 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       ...session,
       messages: [
         ...session.messages,
-        { from_device: session.display_name || DEMO_DEVICE, body },
+        this.state.stampMessage({
+          from_device: session.display_name || DEMO_DEVICE,
+          body,
+        }),
       ],
     }));
     const session = this.state.sessionOrThrow(sessionId);
@@ -200,11 +203,11 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       ...channel,
       messages: [
         ...channel.messages,
-        {
+        this.state.stampMessage({
           from_device: channel.display_name,
           from_fingerprint: channel.device_fingerprint,
           body,
-        },
+        }),
       ],
     }));
     return { name: normalized, bytes: body.length + 32 };
@@ -273,11 +276,11 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       ...group,
       messages: [
         ...group.messages,
-        {
+        this.state.stampMessage({
           from_device: group.display_name,
           from_fingerprint: group.device_fingerprint,
           body,
-        },
+        }),
       ],
     }));
     return { group_id: groupId, bytes: body.length + 48 };
@@ -310,7 +313,11 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       attachments: [...session.attachments, payload.view],
       messages: [
         ...session.messages,
-        { from_device: session.display_name, body: "", attachment: payload.descriptor },
+        this.state.stampMessage({
+          from_device: session.display_name,
+          body: "",
+          attachment: payload.descriptor,
+        }),
       ],
     }));
     return attachmentResult(sessionId, payload.descriptor);
@@ -342,12 +349,12 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       attachments: [...group.attachments, payload.view],
       messages: [
         ...group.messages,
-        {
+        this.state.stampMessage({
           from_device: group.display_name,
           from_fingerprint: group.device_fingerprint,
           body: "",
           attachment: payload.descriptor,
-        },
+        }),
       ],
     }));
     return attachmentResult(groupId, payload.descriptor);
@@ -380,12 +387,12 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       attachments: [...channel.attachments, payload.view],
       messages: [
         ...channel.messages,
-        {
+        this.state.stampMessage({
           from_device: channel.display_name,
           from_fingerprint: channel.device_fingerprint,
           body: "",
           attachment: payload.descriptor,
-        },
+        }),
       ],
     }));
     return attachmentResult(normalized, payload.descriptor);
@@ -427,11 +434,11 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       ...session,
       messages: [
         ...session.messages,
-        {
+        this.state.stampMessage({
           from_device: session.display_name,
           body: "",
           call_event: { kind: "missed", duration_ms: 0, call_id: callId },
-        },
+        }),
       ],
     }));
     return {
