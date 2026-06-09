@@ -38,8 +38,9 @@ import { DiagnosticsDrawer } from "./DiagnosticsDrawer";
 import { readableError, shorten } from "./format";
 import { type OperationKind, useOperationBusy } from "./use-operation-busy";
 import { useChatOrchestration } from "./use-chat-orchestration";
+import { useDmOffers } from "./use-dm-offers";
 import { usePrivateDmSetup } from "./use-private-dm-setup";
-import { SessionRail, type PendingDmOffer } from "./SessionRail";
+import { SessionRail } from "./SessionRail";
 import {
   ChannelSnapshot,
   GroupSnapshot,
@@ -155,9 +156,6 @@ export function PrivateDmScreen({
   const [error, setError] = useState<string | undefined>(undefined);
   const { counts: operationCounts, runOperation } = useOperationBusy();
   const [showSetup, setShowSetup] = useState(false);
-  const [offeredFingerprints, setOfferedFingerprints] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
@@ -396,6 +394,17 @@ export function PrivateDmScreen({
     setActive,
     setShowSetup,
   });
+  const dmOffers = useDmOffers({
+    active,
+    channels,
+    gateway,
+    groups,
+    refresh,
+    requestBase: setup.requestBase,
+    run,
+    setActive,
+    setShowSetup,
+  });
 
   const closeActive = () => {
     if (!active) {
@@ -469,72 +478,6 @@ export function PrivateDmScreen({
     },
     [gateway],
   );
-
-  // Initiate a private DM with a member seen in a channel or group: mint an
-  // invite and publish it as an offer the targeted peer can accept.
-  const offerDm = (targetFingerprint: string) => {
-    if (!active || active.type === "dm" || offeredFingerprints.has(targetFingerprint)) {
-      return;
-    }
-    const target = active;
-    void run("offer", async () => {
-      const invite = await gateway.createPrivateInvite(setup.requestBase);
-      if (target.type === "channel") {
-        await gateway.sendChannelDmOffer(target.name, targetFingerprint, invite.invite_uri);
-      } else {
-        await gateway.sendGroupDmOffer(target.id, targetFingerprint, invite.invite_uri);
-      }
-      setOfferedFingerprints((prev) => new Set(prev).add(targetFingerprint));
-      setActive({ type: "dm", id: invite.session_id });
-      setShowSetup(false);
-      await refresh(true);
-    });
-  };
-
-  const acceptDmOffer = (offer: PendingDmOffer) => {
-    void run("offer", async () => {
-      const snapshot = await gateway.acceptPrivateInvite({
-        ...setup.requestBase,
-        invite_uri: offer.invite_uri,
-      });
-      if (offer.kind === "channel") {
-        await gateway.dismissChannelDmOffer(offer.host, offer.offer_id);
-      } else {
-        await gateway.dismissGroupDmOffer(offer.host, offer.offer_id);
-      }
-      setActive({ type: "dm", id: snapshot.session_id });
-      setShowSetup(false);
-      await refresh(true);
-    });
-  };
-
-  const dismissDmOffer = (offer: PendingDmOffer) => {
-    void run("offer", async () => {
-      if (offer.kind === "channel") {
-        await gateway.dismissChannelDmOffer(offer.host, offer.offer_id);
-      } else {
-        await gateway.dismissGroupDmOffer(offer.host, offer.offer_id);
-      }
-      await refresh(true);
-    });
-  };
-
-  const pendingOffers: PendingDmOffer[] = [
-    ...channels.flatMap((channel) =>
-      channel.dm_offers.map((offer) => ({
-        ...offer,
-        kind: "channel" as const,
-        host: channel.name,
-      })),
-    ),
-    ...groups.flatMap((group) =>
-      group.dm_offers.map((offer) => ({
-        ...offer,
-        kind: "group" as const,
-        host: group.group_id,
-      })),
-    ),
-  ];
 
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
   const activeConversationKey = active ? conversationKey(active) : "";
@@ -736,7 +679,7 @@ export function PrivateDmScreen({
           sessions={sessions}
           channels={channels}
           groups={groups}
-          offers={pendingOffers}
+          offers={dmOffers.pendingOffers}
           active={active}
           unread={unread}
           sessionLabel={peerLabel}
@@ -753,8 +696,8 @@ export function PrivateDmScreen({
               return next;
             });
           }}
-          onAcceptOffer={acceptDmOffer}
-          onDismissOffer={dismissDmOffer}
+          onAcceptOffer={dmOffers.acceptDmOffer}
+          onDismissOffer={dmOffers.dismissDmOffer}
           onNew={() => {
             setShowSetup(true);
             setActive(null);
@@ -817,9 +760,9 @@ export function PrivateDmScreen({
               tools={conversationTools}
               peer={{
                 ownFingerprint: activeChannel.device_fingerprint,
-                offered: offeredFingerprints,
+                offered: dmOffers.offeredFingerprints,
                 busy: offerBusy,
-                onMessage: offerDm,
+                onMessage: dmOffers.offerDm,
               }}
               onComposer={setComposer}
               onSend={sendMessage}
@@ -835,9 +778,9 @@ export function PrivateDmScreen({
               tools={conversationTools}
               peer={{
                 ownFingerprint: activeGroup.device_fingerprint,
-                offered: offeredFingerprints,
+                offered: dmOffers.offeredFingerprints,
                 busy: offerBusy,
-                onMessage: offerDm,
+                onMessage: dmOffers.offerDm,
               }}
               onComposer={setComposer}
               onSend={sendMessage}
