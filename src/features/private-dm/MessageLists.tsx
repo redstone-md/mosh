@@ -272,10 +272,7 @@ function GroupMessageRow({
             onOpen={attachments.onOpen}
           />
         ) : null}
-        <div className="message-seal">
-          <IconLockOpen size={10} />
-          <span>OpenMLS · sealed</span>
-        </div>
+        <SealLine grouped={grouped} open />
       </div>
     </article>
   );
@@ -317,10 +314,7 @@ function DmMessageRow({
           />
         ) : null}
         {message.call_event ? <CallLogEntry event={message.call_event} /> : null}
-        <div className="message-seal">
-          <IconLock size={10} />
-          <span>OpenMLS · sealed</span>
-        </div>
+        <SealLine grouped={grouped} />
       </div>
     </article>
   );
@@ -415,5 +409,18 @@ function MessageTimestamp({ epoch }: { epoch?: number }) {
     >
       {date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
     </time>
+  );
+}
+
+function SealLine({ grouped, open = false }: { grouped: boolean; open?: boolean }) {
+  if (grouped) {
+    return null;
+  }
+  const Icon = open ? IconLockOpen : IconLock;
+  return (
+    <div className="message-seal">
+      <Icon size={10} />
+      <span>OpenMLS · sealed</span>
+    </div>
   );
 }
