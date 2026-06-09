@@ -78,6 +78,7 @@ export const groupText = {
   adminBadge: "admin",
   leaveLabel: "Leave group",
   copyInvite: "Copy invite",
+  copyInviteDone: "Invite copied",
   untitled: "Private group",
 } as const;
 
