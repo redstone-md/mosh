@@ -1,4 +1,5 @@
 import {
+  IconMenu2,
   IconPlugConnected,
   IconRefresh,
   IconShieldCheck,
@@ -156,6 +157,8 @@ export function PrivateDmScreen({
   const [error, setError] = useState<string | undefined>(undefined);
   const { counts: operationCounts, runOperation } = useOperationBusy();
   const [showSetup, setShowSetup] = useState(false);
+  const [railExpanded, setRailExpanded] = useState(false);
+  const [railOverlay, setRailOverlay] = useState(false);
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
@@ -247,6 +250,22 @@ export function PrivateDmScreen({
     const intervalId = window.setInterval(() => void refresh(true), AUTO_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [refresh]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const query = window.matchMedia("(max-width: 580px)");
+    const sync = () => {
+      setRailOverlay(query.matches);
+      if (query.matches) {
+        setRailExpanded(false);
+      }
+    };
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
 
   // Ask for OS notification permission once on mount.
   useEffect(() => {
@@ -642,6 +661,17 @@ export function PrivateDmScreen({
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
       <header className="titlebar">
+        <button
+          className="btn btn-ghost btn-icon titlebar-nav"
+          type="button"
+          onClick={() => setRailExpanded((open) => !open)}
+          aria-controls="conversation-rail"
+          aria-expanded={railExpanded}
+          aria-label={railExpanded ? "Collapse conversations" : "Open conversations"}
+          title={railExpanded ? "Collapse conversations" : "Open conversations"}
+        >
+          <IconMenu2 size={16} />
+        </button>
         <div className="brand">
           <IconShieldCheck size={18} />
           <strong>{shellText.productName}</strong>
@@ -674,8 +704,9 @@ export function PrivateDmScreen({
         ) : null}
       </header>
 
-      <div className="desktop-body">
+      <div className={`desktop-body${railExpanded ? " desktop-body-rail-expanded" : ""}`}>
         <SessionRail
+          expanded={railExpanded}
           sessions={sessions}
           channels={channels}
           groups={groups}
@@ -686,6 +717,9 @@ export function PrivateDmScreen({
           onSelect={(item) => {
             setActive(item);
             setShowSetup(false);
+            if (railOverlay) {
+              setRailExpanded(false);
+            }
             const key = conversationKey(item);
             setUnread((current) => {
               if (!current.has(key)) {
@@ -701,8 +735,12 @@ export function PrivateDmScreen({
           onNew={() => {
             setShowSetup(true);
             setActive(null);
+            if (railOverlay) {
+              setRailExpanded(false);
+            }
             setup.resetInviteState();
           }}
+          onToggle={() => setRailExpanded((open) => !open)}
         />
 
         <section className="chat-pane" aria-labelledby="chat-title">
