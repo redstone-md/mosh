@@ -1,0 +1,69 @@
+import type { MeshInfo } from "./native/native-messaging-gateway";
+
+export function peerCount(mesh: MeshInfo | null): string {
+  return mesh ? String(mesh.peer_count) : "booting";
+}
+
+export function natType(mesh: MeshInfo | null): string {
+  return mesh?.nat_type || "unknown";
+}
+
+export function peerBreakdown(mesh: MeshInfo): string {
+  return `${mesh.direct_peer_count} direct / ${mesh.relayed_peer_count} relayed`;
+}
+
+export function relayStatus(mesh: MeshInfo): string {
+  if (mesh.relay_session_count > 0) {
+    return `${mesh.relay_session_count} active`;
+  }
+  if (mesh.relayed_peer_count > 0) {
+    return `${mesh.relayed_peer_count} relayed`;
+  }
+  if (mesh.relay_capable_peer_count > 0) {
+    return `${mesh.relay_capable_peer_count} capable`;
+  }
+  return "none";
+}
+
+export function relayBreakdown(mesh: MeshInfo): string {
+  return `${mesh.relay_capable_peer_count} capable / ${mesh.relay_route_count} routes`;
+}
+
+export function compactDetail(raw: string): string {
+  if (!raw) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return Object.entries(parsed)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(" ");
+    }
+    return String(parsed);
+  } catch {
+    return raw;
+  }
+}
+
+export function formatTime(epoch: number): string {
+  if (!epoch) {
+    return "-";
+  }
+  const date = new Date(epoch);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+export function shorten(value: string, head: number): string {
+  if (!value) {
+    return "-";
+  }
+  if (value.length <= head * 2 + 1) {
+    return value;
+  }
+  return `${value.slice(0, head)}...${value.slice(-head)}`;
+}
+
+function pad(value: number): string {
+  return value < 10 ? `0${value}` : String(value);
+}
