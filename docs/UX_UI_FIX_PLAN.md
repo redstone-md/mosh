@@ -16,22 +16,23 @@
 - Add a browser demo gateway with seeded DM, group, channel, attachment, and
   call-event examples.
 - Show specific invite validation feedback and confirm group invite copy actions.
+- Surface active-chat send failures inline and show an explicit sending state in
+  the composer.
 
 ## Deferred
 
 - `prefers-reduced-motion` was intentionally skipped for now. This is a
   desktop-first app, and higher-impact layout, validation, runtime, and dialog
   problems came first.
+- Message timestamps, grouped adjacent messages, and per-message retry remain
+  deferred until gateway snapshots expose stable message ids and time metadata.
+
 ## Next Pass Roadmap
 
-1. Improve message UX.
-   - Add timestamps once message snapshots expose stable time metadata.
-   - Add sending/failed/retry states where gateway results can support it.
-   - Group adjacent messages by sender/time after timestamp data exists.
-2. Add search and media filtering.
+1. Add search and media filtering.
    - Text search first.
    - Media/attachments filter second.
-3. Reduce `private-dm-screen.tsx` size.
+2. Reduce `private-dm-screen.tsx` size.
    - Extract onboarding, diagnostics, chat action orchestration, and message
      lists into focused modules.
    - Keep each new module under 500 lines.
