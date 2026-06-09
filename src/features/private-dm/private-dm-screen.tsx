@@ -33,6 +33,7 @@ import { DiagnosticsDrawer } from "./DiagnosticsDrawer";
 import { readableError, shorten } from "./format";
 import { type OperationKind, useOperationBusy } from "./use-operation-busy";
 import { useChatOrchestration } from "./use-chat-orchestration";
+import { useConversationRailState } from "./use-conversation-rail-state";
 import { useDmOffers } from "./use-dm-offers";
 import { usePrivateDmSetup } from "./use-private-dm-setup";
 import { SessionRail } from "./SessionRail";
@@ -124,8 +125,7 @@ export function PrivateDmScreen({
   const [error, setError] = useState<string | undefined>(undefined);
   const { counts: operationCounts, runOperation } = useOperationBusy();
   const [showSetup, setShowSetup] = useState(false);
-  const [railExpanded, setRailExpanded] = useState(false);
-  const [railOverlay, setRailOverlay] = useState(false);
+  const rail = useConversationRailState();
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
@@ -206,22 +206,6 @@ export function PrivateDmScreen({
     const intervalId = window.setInterval(() => void refresh(true), AUTO_POLL_MS);
     return () => window.clearInterval(intervalId);
   }, [refresh]);
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") {
-      return;
-    }
-    const query = window.matchMedia("(max-width: 580px)");
-    const sync = () => {
-      setRailOverlay(query.matches);
-      if (query.matches) {
-        setRailExpanded(false);
-      }
-    };
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
 
   const activeSession =
     active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
@@ -369,11 +353,11 @@ export function PrivateDmScreen({
         <button
           className="btn btn-ghost btn-icon titlebar-nav"
           type="button"
-          onClick={() => setRailExpanded((open) => !open)}
+          onClick={rail.toggle}
           aria-controls="conversation-rail"
-          aria-expanded={railExpanded}
-          aria-label={railExpanded ? "Collapse conversations" : "Open conversations"}
-          title={railExpanded ? "Collapse conversations" : "Open conversations"}
+          aria-expanded={rail.expanded}
+          aria-label={rail.expanded ? "Collapse conversations" : "Open conversations"}
+          title={rail.expanded ? "Collapse conversations" : "Open conversations"}
         >
           <IconMenu2 size={16} />
         </button>
@@ -409,9 +393,9 @@ export function PrivateDmScreen({
         ) : null}
       </header>
 
-      <div className={`desktop-body${railExpanded ? " desktop-body-rail-expanded" : ""}`}>
+      <div className={`desktop-body${rail.expanded ? " desktop-body-rail-expanded" : ""}`}>
         <SessionRail
-          expanded={railExpanded}
+          expanded={rail.expanded}
           sessions={sessions}
           channels={channels}
           groups={groups}
@@ -422,9 +406,7 @@ export function PrivateDmScreen({
           onSelect={(item) => {
             setActive(item);
             setShowSetup(false);
-            if (railOverlay) {
-              setRailExpanded(false);
-            }
+            rail.closeAfterMobileAction();
             clearUnread(conversationKey(item));
           }}
           onAcceptOffer={dmOffers.acceptDmOffer}
@@ -432,12 +414,10 @@ export function PrivateDmScreen({
           onNew={() => {
             setShowSetup(true);
             setActive(null);
-            if (railOverlay) {
-              setRailExpanded(false);
-            }
+            rail.closeAfterMobileAction();
             setup.resetInviteState();
           }}
-          onToggle={() => setRailExpanded((open) => !open)}
+          onToggle={rail.toggle}
         />
 
         <section className="chat-pane" aria-labelledby="chat-title">
