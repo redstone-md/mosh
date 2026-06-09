@@ -260,6 +260,18 @@
 .send-button:disabled { background: var(--bg-3); color: var(--fg-4); }
 .send-button:hover:not(:disabled) { background: var(--moss-300); }
 
+.send-button-busy svg {
+  animation: send-spin 0.8s linear infinite;
+}
+
+@keyframes send-spin {
+  to { transform: rotate(360deg); }
+}
+
+.chat-error {
+  margin: 12px 22px 0;
+}
+
 .attachment-file-input {
   position: absolute;
   width: 1px;

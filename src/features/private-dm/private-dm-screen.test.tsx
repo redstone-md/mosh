@@ -381,6 +381,23 @@ describe("PrivateDmScreen", () => {
     expect(gateway.sendPrivateMessage).toHaveBeenCalledWith(SESSION_ID, "hello");
   });
 
+  it("surfaces message send failures in the active chat", async () => {
+    const gateway = createGateway([snapshot()]);
+    gateway.sendPrivateMessage = vi.fn(async () => {
+      throw new Error("send failed");
+    });
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    await screen.findByText("hello from moss");
+    const user = userEvent.setup();
+    const composer = screen.getByRole("textbox", { name: "Message" });
+    await user.type(composer, "hello");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("send failed");
+    expect(composer).toHaveValue("hello");
+  });
+
   it("downloads voice attachments before playback", async () => {
     const user = userEvent.setup();
     const gateway = createGateway([

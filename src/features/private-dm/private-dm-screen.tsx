@@ -7,6 +7,7 @@ import {
   IconCrown,
   IconHash,
   IconLink,
+  IconLoader2,
   IconLock,
   IconLockOpen,
   IconLogout,
@@ -1100,6 +1101,7 @@ export function PrivateDmScreen({
         />
 
         <section className="chat-pane" aria-labelledby="chat-title">
+          {!showWelcome && error ? <ChatError message={error} /> : null}
           {showWelcome ? (
             <NewSessionPanel
               displayName={displayName}
@@ -1963,6 +1965,7 @@ function ActiveDmChat(props: {
         onSendVoice={props.attachments.onSendVoice}
         onVoiceError={props.attachments.onVoiceError}
         disabled={!ready || props.busy}
+        sending={props.busy}
       />
     </>
   );
@@ -2017,6 +2020,7 @@ function ActiveChannelChat(props: {
         onSendVoice={props.attachments.onSendVoice}
         onVoiceError={props.attachments.onVoiceError}
         disabled={props.busy}
+        sending={props.busy}
       />
     </>
   );
@@ -2122,6 +2126,7 @@ function ActiveGroupChat(props: {
         onSendVoice={props.attachments.onSendVoice}
         onVoiceError={props.attachments.onVoiceError}
         disabled={!ready || props.busy}
+        sending={props.busy}
       />
     </>
   );
@@ -2512,15 +2517,18 @@ function Composer({
   onSendVoice,
   onVoiceError,
   disabled,
+  sending = false,
 }: {
   value: string;
   disabled: boolean;
+  sending?: boolean;
   onChange: (value: string) => void;
   onSend: (event: FormEvent) => void;
   onAttach?: (file: File) => void;
   onSendVoice?: (voice: VoiceSend) => void;
   onVoiceError?: (message: string) => void;
 }) {
+  const sendLabel = sending ? "Sending" : chatText.sendLabel;
   const handlePaste = (event: ClipboardEvent<HTMLInputElement>) => {
     if (disabled || !onAttach) {
       return;
@@ -2559,15 +2567,24 @@ function Composer({
           disabled={disabled}
         />
         <button
-          className="send-button"
+          className={`send-button${sending ? " send-button-busy" : ""}`}
           type="submit"
-          aria-label={chatText.sendLabel}
+          aria-label={sendLabel}
+          title={sendLabel}
           disabled={disabled || !value.trim()}
         >
-          <IconSend size={14} />
+          {sending ? <IconLoader2 size={14} /> : <IconSend size={14} />}
         </button>
       </div>
     </form>
+  );
+}
+
+function ChatError({ message }: { message: string }) {
+  return (
+    <div className="inline-error chat-error" role="alert">
+      {message}
+    </div>
   );
 }
 
