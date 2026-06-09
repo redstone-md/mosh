@@ -70,6 +70,13 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
         service: "Mosh demo",
         available: false,
       },
+      persistence: {
+        backend: "browser-demo",
+        database: "memory",
+        available: false,
+        encrypted_at_rest: false,
+        error: null,
+      },
       openmls_smoke: {
         Ok: {
           provider: "demo",

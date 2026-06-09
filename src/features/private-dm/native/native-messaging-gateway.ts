@@ -64,6 +64,13 @@ export interface NativeRuntimeStatus {
     readonly service: string;
     readonly available: boolean;
   };
+  readonly persistence: {
+    readonly backend: string;
+    readonly database: string;
+    readonly available: boolean;
+    readonly encrypted_at_rest: boolean;
+    readonly error?: string | null;
+  };
   readonly openmls_smoke: OpenMlsSmokeResult;
   readonly openmls_roundtrip: OpenMlsRoundTripResult;
 }

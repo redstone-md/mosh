@@ -34,6 +34,7 @@ import { useConversationRailState } from "./use-conversation-rail-state";
 import { useDmOffers } from "./use-dm-offers";
 import { usePrivateDmSetup } from "./use-private-dm-setup";
 import { usePrivateDmSnapshots } from "./use-private-dm-snapshots";
+import { useRuntimePersistenceStatus } from "./use-runtime-persistence-status";
 import { SessionRail } from "./SessionRail";
 import {
   NativeMessagingGateway,
@@ -83,6 +84,7 @@ export function PrivateDmScreen({
     setActive,
     onError: setError,
   });
+  const persistenceWarning = useRuntimePersistenceStatus(gateway);
 
   const activeSession =
     active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
@@ -292,6 +294,7 @@ export function PrivateDmScreen({
               createState={setup.createState}
               groupCreateState={setup.groupCreateState}
               error={error}
+              persistenceWarning={persistenceWarning}
               gateway={gateway}
               onDisplayName={setup.setDisplayName}
               onStaticPeer={setup.setStaticPeer}

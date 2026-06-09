@@ -3,7 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { NativeMessagingGateway } from "./native/native-messaging-gateway";
 import { PrivateDmScreen } from "./private-dm-screen";
-import { createGateway, groupSnapshot, INVITE } from "./private-dm-test-utils";
+import {
+  createGateway,
+  groupSnapshot,
+  INVITE,
+  RUNTIME_STATUS_READY,
+} from "./private-dm-test-utils";
 
 describe("PrivateDmScreen onboarding", () => {
   it("renders welcome state when there are no sessions", async () => {
@@ -18,6 +23,28 @@ describe("PrivateDmScreen onboarding", () => {
     expect(screen.queryByRole("dialog", { name: "Peer status" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /New private chat/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Join a public channel/ })).toBeInTheDocument();
+  });
+
+  it("warns when encrypted history persistence is unavailable", async () => {
+    const gateway: NativeMessagingGateway = {
+      ...createGateway(),
+      getNativeRuntimeStatus: vi.fn(async () => ({
+        ...RUNTIME_STATUS_READY,
+        persistence: {
+          ...RUNTIME_STATUS_READY.persistence,
+          available: false,
+          encrypted_at_rest: false,
+          error: "DEK unavailable but database exists",
+        },
+      })),
+    };
+
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    expect(await screen.findByText("Encrypted history unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText(/private DM history and session continuity may be lost/i),
+    ).toBeInTheDocument();
   });
 
   it("creates and copies an invite, then surfaces the active session", async () => {

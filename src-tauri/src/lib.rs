@@ -45,8 +45,25 @@ struct AppDiagnostics {
 struct NativeRuntimeStatus {
     moss: MossRuntimeStatus,
     secure_storage: SecureStorageStatus,
+    persistence: PersistenceRuntimeStatus,
     openmls_smoke: Result<OpenMlsSmokeStatus, String>,
     openmls_roundtrip: Result<OpenMlsRoundTripStatus, String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PersistenceRuntimeStatus {
+    backend: &'static str,
+    database: String,
+    available: bool,
+    encrypted_at_rest: bool,
+    error: Option<String>,
+}
+
+struct PersistenceStatusState(PersistenceRuntimeStatus);
+
+struct PersistenceLoad {
+    persistence: Option<Arc<adapters::persistence::Persistence>>,
+    status: PersistenceRuntimeStatus,
 }
 
 struct PrivateDmState {
@@ -226,10 +243,13 @@ fn app_diagnostics() -> AppDiagnostics {
 }
 
 #[tauri::command]
-fn native_runtime_status() -> NativeRuntimeStatus {
+fn native_runtime_status(
+    persistence: tauri::State<'_, PersistenceStatusState>,
+) -> NativeRuntimeStatus {
     NativeRuntimeStatus {
         moss: MossDynamicRuntime::from_default_candidates().status(),
         secure_storage: OsSecureSecretStore::status(),
+        persistence: persistence.0.clone(),
         openmls_smoke: run_openmls_smoke_test().map_err(|error| error.to_string()),
         openmls_roundtrip: run_openmls_alice_bob_roundtrip().map_err(|error| error.to_string()),
     }
@@ -467,14 +487,62 @@ fn load_attachment_store(app: &tauri::AppHandle) -> Arc<AttachmentStore> {
     Arc::new(store)
 }
 
-fn load_persistence(app: &tauri::AppHandle) -> Option<Arc<adapters::persistence::Persistence>> {
-    let base = app.path().app_data_dir().ok()?;
-    std::fs::create_dir_all(&base).ok()?;
-    match adapters::persistence::Persistence::open(&base.join("mosh-history.redb")) {
-        Ok(p) => Some(Arc::new(p)),
+fn load_persistence(app: &tauri::AppHandle) -> PersistenceLoad {
+    const BACKEND: &str = "redb+aes-256-gcm+os-keychain";
+
+    let base = match app.path().app_data_dir() {
+        Ok(base) => base,
+        Err(error) => {
+            return PersistenceLoad {
+                persistence: None,
+                status: PersistenceRuntimeStatus {
+                    backend: BACKEND,
+                    database: "unavailable".into(),
+                    available: false,
+                    encrypted_at_rest: false,
+                    error: Some(error.to_string()),
+                },
+            };
+        }
+    };
+
+    let path = base.join("mosh-history.redb");
+    if let Err(error) = std::fs::create_dir_all(&base) {
+        return PersistenceLoad {
+            persistence: None,
+            status: PersistenceRuntimeStatus {
+                backend: BACKEND,
+                database: path.to_string_lossy().into_owned(),
+                available: false,
+                encrypted_at_rest: false,
+                error: Some(error.to_string()),
+            },
+        };
+    }
+
+    match adapters::persistence::Persistence::open(&path) {
+        Ok(p) => PersistenceLoad {
+            persistence: Some(Arc::new(p)),
+            status: PersistenceRuntimeStatus {
+                backend: BACKEND,
+                database: path.to_string_lossy().into_owned(),
+                available: true,
+                encrypted_at_rest: true,
+                error: None,
+            },
+        },
         Err(e) => {
             eprintln!("persistence unavailable: {e}");
-            None
+            PersistenceLoad {
+                persistence: None,
+                status: PersistenceRuntimeStatus {
+                    backend: BACKEND,
+                    database: path.to_string_lossy().into_owned(),
+                    available: false,
+                    encrypted_at_rest: false,
+                    error: Some(e.to_string()),
+                },
+            }
         }
     }
 }
@@ -929,15 +997,16 @@ pub fn run() {
             });
         })
         .setup(|app| {
+            let persistence_load = load_persistence(app.handle());
+            app.manage(PersistenceStatusState(persistence_load.status.clone()));
             match MossFfiRuntime::load_from_app_handle(app.handle()) {
                 Ok(moss) => {
                     let moss = Arc::new(moss);
                     let attachment_store = load_attachment_store(app.handle());
-                    let persistence = load_persistence(app.handle());
                     app.manage(PrivateDmState::ready(
                         Arc::clone(&moss),
                         Arc::clone(&attachment_store),
-                        persistence,
+                        persistence_load.persistence.clone(),
                     ));
                     app.manage(ChannelState::ready(
                         Arc::clone(&moss),
