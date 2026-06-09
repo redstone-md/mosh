@@ -19,3 +19,31 @@
   problems came first.
 - A full demo/mock conversation gateway remains a future improvement. The
   current fallback makes browser preview safe but does not seed fake chats.
+
+## Next Pass Roadmap
+
+1. Replace destructive `window.confirm` flows with an in-app confirmation dialog.
+   - DM: make local history deletion explicit.
+   - Channel/group: use leave-specific copy instead of the DM deletion text.
+2. Move diagnostics out of the permanent right column and into an on-demand
+   drawer from the chat header/titlebar.
+   - Keep peer status discoverable for debugging.
+   - Reduce first-screen technical noise for normal users.
+3. Add a browser demo gateway.
+   - Seed realistic DM, group, channel, attachment, and call-event examples.
+   - Keep it separate from the Tauri gateway so native behavior stays isolated.
+4. Improve invite UX.
+   - Map invite parser errors to specific inline copy.
+   - Add clearer copy feedback for copied group invites.
+   - Consider QR invite export once the text flow is solid.
+5. Improve message UX.
+   - Add timestamps once message snapshots expose stable time metadata.
+   - Add sending/failed/retry states where gateway results can support it.
+   - Group adjacent messages by sender/time after timestamp data exists.
+6. Add search and media filtering.
+   - Text search first.
+   - Media/attachments filter second.
+7. Reduce `private-dm-screen.tsx` size.
+   - Extract onboarding, diagnostics, chat action orchestration, and message
+     lists into focused modules.
+   - Keep each new module under 500 lines.
