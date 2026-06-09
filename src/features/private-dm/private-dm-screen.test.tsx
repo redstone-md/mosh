@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
   MeshInfo,
+  GroupSnapshot,
   NativeMessagingGateway,
   SessionListSnapshot,
   SessionSnapshot,
@@ -54,6 +55,28 @@ function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
     attachments: [],
     mesh: MESH_READY,
     events: EVENTS,
+    ...overrides,
+  };
+}
+
+function groupSnapshot(overrides: Partial<GroupSnapshot> = {}): GroupSnapshot {
+  return {
+    group_id: "group-test",
+    mesh_id: "groupmesh-test",
+    label: "Friends",
+    display_name: "mosh-test",
+    device_fingerprint: "abcdef",
+    creator_fingerprint: "AABB",
+    is_admin: true,
+    state: "ready",
+    member_count: 2,
+    invite_uri:
+      "mosh://group?mesh=groupmesh-test&group=group-test#fp=AABBCCDDEEFF00112233445566778899",
+    messages: [],
+    attachments: [],
+    dm_offers: [],
+    mesh: MESH_READY,
+    events: [],
     ...overrides,
   };
 }
@@ -292,8 +315,23 @@ describe("PrivateDmScreen", () => {
     await user.click(screen.getByRole("button", { name: /Join with a link/ }));
     await user.type(screen.getByRole("textbox", { name: "Invite link" }), "mosh://invite?bad=1");
 
-    expect(screen.getByText("That does not look like a mosh:// invite")).toBeInTheDocument();
+    expect(screen.getByText("Invite link is missing mesh=...")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+  });
+
+  it("confirms active group invite copies", async () => {
+    const user = userEvent.setup();
+    const group = groupSnapshot();
+    const gateway: NativeMessagingGateway = {
+      ...createGateway(),
+      listPrivateGroups: vi.fn(async () => ({ groups: [group] })),
+    };
+    render(<PrivateDmScreen gateway={gateway} />);
+
+    expect(await screen.findByRole("heading", { name: "Friends" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy invite" }));
+
+    expect(screen.getByRole("button", { name: "Invite copied" })).toBeInTheDocument();
   });
 
   it("lists active sessions in the rail and switches between them", async () => {

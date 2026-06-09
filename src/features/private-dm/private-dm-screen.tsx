@@ -82,7 +82,7 @@ import { VpnBanner } from "./vpn/VpnBanner";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
 import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
-import { parseMoshGroupInvite, parseMoshInvite } from "./invite/invite-uri";
+import { detectInvite } from "./invite/invite-detection";
 import {
   CALLEE_DIRECTION_BIT,
   CALLER_DIRECTION_BIT,
@@ -1467,25 +1467,6 @@ function GroupRailItem({
 
 type OnboardStep = "menu" | "chat" | "group" | "join" | "channel";
 
-function detectInviteKind(value: string): "dm" | "group" | "empty" | "unknown" {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "empty";
-  }
-  try {
-    parseMoshInvite(trimmed);
-    return "dm";
-  } catch {
-    // Keep checking: a valid group invite intentionally fails the DM parser.
-  }
-  try {
-    parseMoshGroupInvite(trimmed);
-    return "group";
-  } catch {
-    return "unknown";
-  }
-}
-
 function NewSessionPanel(props: {
   displayName: string;
   staticPeer: string;
@@ -1805,7 +1786,8 @@ function OnboardJoinStep(props: {
   onAccept: (uri: string) => void;
   onJoinGroup: (uri: string) => void;
 }) {
-  const kind = detectInviteKind(props.value);
+  const detection = detectInvite(props.value);
+  const kind = detection.kind;
   const ready = (kind === "dm" || kind === "group") && !props.busy;
   const detectClass =
     kind === "dm" || kind === "group"
@@ -1819,7 +1801,7 @@ function OnboardJoinStep(props: {
       : kind === "group"
         ? onboardText.joinDetectGroup
         : kind === "unknown"
-          ? onboardText.joinDetectBad
+          ? detection.errorMessage ?? onboardText.joinDetectBad
           : onboardText.joinDetectNone;
   const connect = () => {
     if (kind === "dm") {
@@ -1838,7 +1820,7 @@ function OnboardJoinStep(props: {
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
       />
-      <div className={detectClass}>
+      <div className={detectClass} aria-live="polite">
         {kind === "dm" || kind === "group" ? <IconCheck size={13} /> : null}
         <span>{detectLabel}</span>
       </div>
@@ -2053,6 +2035,32 @@ function ActiveGroupChat(props: {
   const ready = props.group.state === READY_STATE;
   const label = props.group.label ?? groupText.untitled;
   const inviteUri = props.group.invite_uri;
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const inviteCopyTimer = useRef<number | null>(null);
+  useEffect(() => {
+    setInviteCopied(false);
+    return () => {
+      if (inviteCopyTimer.current) {
+        window.clearTimeout(inviteCopyTimer.current);
+        inviteCopyTimer.current = null;
+      }
+    };
+  }, [inviteUri]);
+  const copyGroupInvite = () => {
+    if (!inviteUri) {
+      return;
+    }
+    void copyText(inviteUri).then(() => {
+      setInviteCopied(true);
+      if (inviteCopyTimer.current) {
+        window.clearTimeout(inviteCopyTimer.current);
+      }
+      inviteCopyTimer.current = window.setTimeout(() => {
+        setInviteCopied(false);
+        inviteCopyTimer.current = null;
+      }, 1600);
+    });
+  };
   return (
     <>
       <header className="chat-header">
@@ -2078,11 +2086,11 @@ function ActiveGroupChat(props: {
           <button
             className="btn btn-ghost btn-icon"
             type="button"
-            onClick={() => void navigator.clipboard?.writeText?.(inviteUri)}
-            aria-label={groupText.copyInvite}
-            title={groupText.copyInvite}
+            onClick={copyGroupInvite}
+            aria-label={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
+            title={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
           >
-            <IconCopy size={14} />
+            {inviteCopied ? <IconCheck size={14} /> : <IconCopy size={14} />}
           </button>
         ) : null}
         <button
