@@ -5,9 +5,7 @@ import {
   IconShieldCheck,
 } from "@tabler/icons-react";
 import {
-  useCallback,
   useEffect,
-  useRef,
   useState,
 } from "react";
 import { useUnreadNotifications } from "./notifications/use-unread-notifications";
@@ -24,22 +22,20 @@ import {
   EmptyState,
 } from "./ActiveChatPanes";
 import {
-  closeChatTarget,
-  sameChatTarget,
   type ChatTarget,
 } from "./chat-actions";
 import { type ConversationFilter, type ConversationToolsState } from "./ConversationTools";
 import { DiagnosticsDrawer } from "./DiagnosticsDrawer";
-import { readableError, shorten } from "./format";
+import { readableError } from "./format";
 import { type OperationKind, useOperationBusy } from "./use-operation-busy";
+import { useChatCloseFlow } from "./use-chat-close-flow";
 import { useChatOrchestration } from "./use-chat-orchestration";
 import { useConversationRailState } from "./use-conversation-rail-state";
 import { useDmOffers } from "./use-dm-offers";
 import { usePrivateDmSetup } from "./use-private-dm-setup";
+import { usePrivateDmSnapshots } from "./use-private-dm-snapshots";
 import { SessionRail } from "./SessionRail";
 import {
-  ChannelSnapshot,
-  GroupSnapshot,
   NativeMessagingGateway,
   SessionSnapshot,
   nativeMessagingGateway,
@@ -51,15 +47,7 @@ import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
 import { useVoiceCallOrchestration } from "./voice-call/use-voice-call-orchestration";
 import { NewSessionPanel } from "./NewSessionPanel";
 
-const AUTO_POLL_MS = 1000;
 const READY_STATE = "ready";
-
-interface PendingCloseConfirmation {
-  readonly item: ChatTarget;
-  readonly title: string;
-  readonly body: string;
-  readonly confirmLabel: string;
-}
 
 /** Stable per-conversation key used for unread tracking and notifications. */
 function conversationKey(item: ChatTarget): string {
@@ -68,67 +56,20 @@ function conversationKey(item: ChatTarget): string {
     : `${item.type}:${item.id}`;
 }
 
-function closeConfirmationFor(
-  item: ChatTarget,
-  sessions: readonly SessionSnapshot[],
-  channels: readonly ChannelSnapshot[],
-  groups: readonly GroupSnapshot[],
-): PendingCloseConfirmation {
-  if (item.type === "dm") {
-    const session = sessions.find((candidate) => candidate.session_id === item.id);
-    const label = session ? peerLabel(session) : "this private chat";
-    return {
-      item,
-      title: `Delete chat with ${label}?`,
-      body:
-        "Saved history for this private chat will be removed from this device. You cannot undo this.",
-      confirmLabel: "Delete chat",
-    };
-  }
-  if (item.type === "channel") {
-    const channel = channels.find((candidate) => candidate.name === item.name);
-    const label = channel?.name ?? item.name;
-    return {
-      item,
-      title: `Leave #${label}?`,
-      body:
-        "You will stop receiving new messages from this public channel until you join it again.",
-      confirmLabel: "Leave channel",
-    };
-  }
-  const group = groups.find((candidate) => candidate.group_id === item.id);
-  const label = group?.label ?? (group ? shorten(group.group_id, 6) : "this group");
-  return {
-    item,
-    title: `Leave ${label}?`,
-    body:
-      "Saved group history will be removed from this device. You will need a new invite to rejoin.",
-    confirmLabel: "Leave group",
-  };
-}
-
 export function PrivateDmScreen({
   gateway = nativeMessagingGateway,
 }: {
   gateway?: NativeMessagingGateway;
 }) {
   const [composer, setComposer] = useState("");
-  const [sessions, setSessions] = useState<readonly SessionSnapshot[]>([]);
-  const [channels, setChannels] = useState<readonly ChannelSnapshot[]>([]);
-  const [groups, setGroups] = useState<readonly GroupSnapshot[]>([]);
   const [active, setActive] = useState<ChatTarget | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
   const [conversationFilter, setConversationFilter] = useState<ConversationFilter>("all");
-  const [pendingClose, setPendingClose] = useState<PendingCloseConfirmation | null>(null);
-  const [confirmedFingerprints, setConfirmedFingerprints] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | undefined>(undefined);
   const { counts: operationCounts, runOperation } = useOperationBusy();
   const [showSetup, setShowSetup] = useState(false);
   const rail = useConversationRailState();
-  const pollInFlight = useRef(false);
-  const pollPending = useRef(false);
-  const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
   const refreshBusy = operationCounts.refresh > 0;
   const setupBusy = operationCounts.setup > 0;
   const messageBusy = operationCounts.message > 0;
@@ -136,76 +77,12 @@ export function PrivateDmScreen({
   const sessionBusy = operationCounts.session > 0;
   const offerBusy = operationCounts.offer > 0;
   const chatBusy = messageBusy || sessionBusy;
-
-  const refresh = useCallback(
-    async (quiet = false) => {
-      if (pollInFlight.current) {
-        // Coalesce: remember that another refresh was requested so we can
-        // run it once the in-flight call completes. Without this, a rapid
-        // burst of session/channel/group mutations could leave the UI
-        // showing a stale roster until the next AUTO_POLL_MS tick.
-        pollPending.current = true;
-        return;
-      }
-      pollInFlight.current = true;
-      if (!quiet) {
-        setError(undefined);
-      }
-      const loadSnapshots = async () => {
-        const [sessionList, channelList, groupList] = await Promise.all([
-          gateway.listPrivateSessions(),
-          gateway.listChannels(),
-          gateway.listPrivateGroups(),
-        ]);
-        setSessions(sessionList.sessions);
-        setChannels(channelList.channels);
-        setGroups(groupList.groups);
-        setActive((current) => {
-          if (current?.type === "dm" && sessionList.sessions.some((s) => s.session_id === current.id)) {
-            return current;
-          }
-          if (current?.type === "channel" && channelList.channels.some((c) => c.name === current.name)) {
-            return current;
-          }
-          if (current?.type === "group" && groupList.groups.some((g) => g.group_id === current.id)) {
-            return current;
-          }
-          if (sessionList.sessions.length > 0) {
-            return { type: "dm", id: sessionList.sessions[0].session_id };
-          }
-          if (groupList.groups.length > 0) {
-            return { type: "group", id: groupList.groups[0].group_id };
-          }
-          if (channelList.channels.length > 0) {
-            return { type: "channel", name: channelList.channels[0].name };
-          }
-          return null;
-        });
-      };
-      try {
-        await (quiet ? loadSnapshots() : runOperation("refresh", loadSnapshots));
-      } catch (err) {
-        setError(readableError(err));
-      } finally {
-        pollInFlight.current = false;
-        if (pollPending.current && refreshRef.current) {
-          pollPending.current = false;
-          const followUp = refreshRef.current;
-          // Defer so the next refresh runs on a fresh task and does not
-          // recursively extend the current finally block.
-          window.setTimeout(() => void followUp(true), 0);
-        }
-      }
-    },
-    [gateway, runOperation],
-  );
-  refreshRef.current = refresh;
-
-  useEffect(() => {
-    void refresh(true);
-    const intervalId = window.setInterval(() => void refresh(true), AUTO_POLL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [refresh]);
+  const { sessions, channels, groups, refresh } = usePrivateDmSnapshots({
+    gateway,
+    runOperation,
+    setActive,
+    onError: setError,
+  });
 
   const activeSession =
     active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
@@ -281,38 +158,17 @@ export function PrivateDmScreen({
     setActive,
     setShowSetup,
   });
-
-  const closeActive = () => {
-    if (!active) {
-      return;
-    }
-    setPendingClose(closeConfirmationFor(active, sessions, channels, groups));
-  };
-
-  const confirmCloseActive = () => {
-    const target = pendingClose?.item;
-    if (!target) {
-      return;
-    }
-    setPendingClose(null);
-    void run("session", async () => {
-      await closeChatTarget(gateway, target);
-      if (target.type === "dm") {
-        setConfirmedFingerprints((current) => {
-          const next = new Set(current);
-          next.delete(target.id);
-          return next;
-        });
-      }
-      setActive((current) =>
-        current && sameChatTarget(current, target) ? null : current,
-      );
-      await refresh(true);
-    });
-  };
-
-  const confirmFingerprint = (sessionId: string) =>
-    setConfirmedFingerprints((current) => new Set(current).add(sessionId));
+  const closeFlow = useChatCloseFlow({
+    active,
+    sessions,
+    channels,
+    groups,
+    gateway,
+    refresh,
+    run,
+    setActive,
+    sessionLabel: peerLabel,
+  });
 
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
   const conversationTools: ConversationToolsState = {
@@ -454,14 +310,14 @@ export function PrivateDmScreen({
               peerName={peerLabel(activeSession)}
               ready={activeSession.state === READY_STATE}
               composer={composer}
-              confirmed={confirmedFingerprints.has(activeSession.session_id)}
+              confirmed={closeFlow.confirmedFingerprints.has(activeSession.session_id)}
               busy={chatBusy}
               attachments={attachmentApi}
               tools={conversationTools}
               onComposer={setComposer}
               onSend={sendMessage}
-              onConfirm={() => confirmFingerprint(activeSession.session_id)}
-              onClose={closeActive}
+              onConfirm={() => closeFlow.confirmFingerprint(activeSession.session_id)}
+              onClose={closeFlow.closeActive}
               callSupported={callSupported}
               callBusy={!!activeSession.active_call}
               onStartCall={() => startCall(activeSession.session_id)}
@@ -481,7 +337,7 @@ export function PrivateDmScreen({
               }}
               onComposer={setComposer}
               onSend={sendMessage}
-              onClose={closeActive}
+              onClose={closeFlow.closeActive}
             />
           ) : activeGroup ? (
             <ActiveGroupChat
@@ -499,7 +355,7 @@ export function PrivateDmScreen({
               }}
               onComposer={setComposer}
               onSend={sendMessage}
-              onClose={closeActive}
+              onClose={closeFlow.closeActive}
             />
           ) : (
             <EmptyState onNew={() => setShowSetup(true)} />
@@ -528,13 +384,13 @@ export function PrivateDmScreen({
         />
       ) : null}
 
-      {pendingClose ? (
+      {closeFlow.pendingClose ? (
         <ConfirmDialog
-          title={pendingClose.title}
-          body={pendingClose.body}
-          confirmLabel={pendingClose.confirmLabel}
-          onCancel={() => setPendingClose(null)}
-          onConfirm={confirmCloseActive}
+          title={closeFlow.pendingClose.title}
+          body={closeFlow.pendingClose.body}
+          confirmLabel={closeFlow.pendingClose.confirmLabel}
+          onCancel={closeFlow.cancelClose}
+          onConfirm={closeFlow.confirmCloseActive}
         />
       ) : null}
 
