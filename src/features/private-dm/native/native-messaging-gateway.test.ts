@@ -2,25 +2,27 @@ import { describe, expect, it } from "vitest";
 import { nativeMessagingGateway } from "./native-messaging-gateway";
 
 describe("nativeMessagingGateway", () => {
-  it("falls back to an empty browser-safe gateway outside Tauri", async () => {
-    await expect(nativeMessagingGateway.listPrivateSessions()).resolves.toEqual({
-      sessions: [],
+  it("uses seeded demo data outside Tauri", async () => {
+    await expect(nativeMessagingGateway.listPrivateSessions()).resolves.toMatchObject({
+      sessions: [expect.objectContaining({ peer_display_name: "Sera" })],
     });
-    await expect(nativeMessagingGateway.listChannels()).resolves.toEqual({
-      channels: [],
+    await expect(nativeMessagingGateway.listChannels()).resolves.toMatchObject({
+      channels: [expect.objectContaining({ name: "design-lab" })],
     });
-    await expect(nativeMessagingGateway.listPrivateGroups()).resolves.toEqual({
-      groups: [],
+    await expect(nativeMessagingGateway.listPrivateGroups()).resolves.toMatchObject({
+      groups: [expect.objectContaining({ label: "Core team" })],
     });
   });
 
-  it("surfaces a readable runtime error outside Tauri", async () => {
-    await expect(
-      nativeMessagingGateway.createPrivateInvite({
-        display_name: "mosh-test",
-        listen_port: 0,
-        static_peer: null,
-      }),
-    ).rejects.toThrow("Mosh desktop runtime is unavailable");
+  it("mutates demo conversations for browser preview", async () => {
+    const before = await nativeMessagingGateway.listPrivateSessions();
+    const session = before.sessions[0];
+    await nativeMessagingGateway.sendPrivateMessage(session.session_id, "preview message");
+
+    await expect(nativeMessagingGateway.pollPrivateSession(session.session_id)).resolves.toMatchObject({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ body: "preview message" }),
+      ]),
+    });
   });
 });
