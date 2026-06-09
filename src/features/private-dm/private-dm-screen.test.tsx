@@ -230,11 +230,15 @@ function createGateway(initial: SessionSnapshot[] = []): NativeMessagingGateway 
 
 describe("PrivateDmScreen", () => {
   it("renders welcome state when there are no sessions", async () => {
+    const user = userEvent.setup();
     render(<PrivateDmScreen gateway={createGateway()} />);
 
     expect(screen.getByRole("main", { name: "MOSH" })).toBeInTheDocument();
     expect(await screen.findByRole("complementary", { name: "Active sessions" })).toBeInTheDocument();
-    expect(screen.getByRole("complementary", { name: "Peer status" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open peer status" }));
+    expect(screen.getByRole("dialog", { name: "Peer status" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close peer status" }));
+    expect(screen.queryByRole("dialog", { name: "Peer status" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /New private chat/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Join a public channel/ })).toBeInTheDocument();
   });

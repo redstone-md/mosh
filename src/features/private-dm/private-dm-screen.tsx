@@ -1,5 +1,4 @@
 import {
-  IconActivity,
   IconArrowLeft,
   IconCheck,
   IconChevronDown,
@@ -16,7 +15,6 @@ import {
   IconPhone,
   IconPlugConnected,
   IconPlus,
-  IconRefresh,
   IconSend,
   IconShieldCheck,
   IconSettings,
@@ -52,6 +50,7 @@ import {
   groupText,
 } from "./private-dm.content";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DiagnosticsDrawer } from "./DiagnosticsDrawer";
 import { type OperationKind, useOperationBusy } from "./use-operation-busy";
 import {
   AttachmentView,
@@ -60,10 +59,8 @@ import {
   ChatMessage,
   GroupMessage,
   GroupSnapshot,
-  MeshInfo,
   NativeMessagingGateway,
   SessionSnapshot,
-  SnapshotEvent,
   nativeMessagingGateway,
 } from "./native/native-messaging-gateway";
 import {
@@ -238,6 +235,7 @@ export function PrivateDmScreen({
   const [channels, setChannels] = useState<readonly ChannelSnapshot[]>([]);
   const [groups, setGroups] = useState<readonly GroupSnapshot[]>([]);
   const [active, setActive] = useState<ActiveItem | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [pendingClose, setPendingClose] = useState<PendingCloseConfirmation | null>(null);
   const [confirmedFingerprints, setConfirmedFingerprints] = useState<Set<string>>(new Set());
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
@@ -1043,6 +1041,15 @@ export function PrivateDmScreen({
           <strong>{shellText.productName}</strong>
         </div>
         <span className="titlebar-subtitle">{shellText.windowSubtitle}</span>
+        <button
+          className="btn btn-ghost titlebar-action"
+          type="button"
+          onClick={() => setShowDiagnostics(true)}
+          aria-label="Open peer status"
+        >
+          <IconPlugConnected size={14} />
+          <span>Peer status</span>
+        </button>
         {activeSession ? (
           <StatePill
             state={activeSession.state}
@@ -1166,47 +1173,19 @@ export function PrivateDmScreen({
           )}
         </section>
 
-        <aside className="diagnostics-panel" aria-labelledby="diagnostics-title">
-          <header>
-            <IconPlugConnected size={16} />
-            <h2 id="diagnostics-title">Peer status</h2>
-            <button
-              className="btn btn-ghost btn-icon"
-              type="button"
-              onClick={() => void refresh(false)}
-              aria-label="Refresh status"
-              disabled={refreshBusy}
-            >
-              <IconRefresh size={14} />
-            </button>
-          </header>
-
-          <div className="diagnostics-content">
-            {activeSession ? (
-              <SessionDiagnostics session={activeSession} />
-            ) : activeChannel ? (
-              <ChannelDiagnostics channel={activeChannel} />
-            ) : activeGroup ? (
-              <GroupDiagnostics group={activeGroup} />
-            ) : (
-              <div className="diagnostic-group">
-                <div className="diagnostic-group-label">Session</div>
-                <div className="diagnostic-row">
-                  <span>State</span>
-                  <strong>{shellText.noActive}</strong>
-                </div>
-              </div>
-            )}
-
-            {error ? (
-              <div className="diagnostic-row diagnostic-error">
-                <span>Runtime error</span>
-                <strong>{error}</strong>
-              </div>
-            ) : null}
-          </div>
-        </aside>
       </div>
+
+      {showDiagnostics ? (
+        <DiagnosticsDrawer
+          session={activeSession}
+          channel={activeChannel}
+          group={activeGroup}
+          error={error}
+          refreshing={refreshBusy}
+          onRefresh={() => void refresh(false)}
+          onClose={() => setShowDiagnostics(false)}
+        />
+      ) : null}
 
       {viewer ? (
         <MediaViewer
@@ -2326,26 +2305,6 @@ function GroupMessageRow({
   );
 }
 
-function GroupDiagnostics({ group }: { group: GroupSnapshot }) {
-  return (
-    <>
-      <div className="diagnostic-group">
-        <div className="diagnostic-group-label">Group</div>
-        <Row k="Label" v={group.label ?? "—"} />
-        <Row k="Members" v={String(group.member_count)} />
-        <Row k="Role" v={group.is_admin ? "admin" : "member"} />
-        <Row k="MLS state" v={stateLabels[group.state] ?? group.state} />
-        <Row k="Group id" v={shorten(group.group_id, 12)} />
-        <Row k="Creator" v={shorten(group.creator_fingerprint, 8)} />
-        <Row k="Display" v={group.display_name} />
-        <Row k="Device" v={shorten(group.device_fingerprint, 10)} />
-      </div>
-      <MeshDiagnostics mesh={group.mesh} />
-      <EventLog events={group.events} />
-    </>
-  );
-}
-
 function EmptyState({
   onNew,
 }: {
@@ -2629,140 +2588,6 @@ function PublicNotice() {
         <p>{channelText.noticeBody}</p>
       </div>
     </section>
-  );
-}
-
-function SessionDiagnostics({ session }: { session: SessionSnapshot }) {
-  return (
-    <>
-      <div className="diagnostic-group">
-        <div className="diagnostic-group-label">Session</div>
-        <Row k="MLS state" v={stateLabels[session.state] ?? session.state} />
-        <Row k="Role" v={session.role} />
-        <Row k="Display" v={session.display_name} />
-        <Row k="Session" v={shorten(session.session_id, 14)} />
-      </div>
-      <MeshDiagnostics mesh={session.mesh} />
-      <EventLog events={session.events} />
-    </>
-  );
-}
-
-function ChannelDiagnostics({ channel }: { channel: ChannelSnapshot }) {
-  return (
-    <>
-      <div className="diagnostic-group">
-        <div className="diagnostic-group-label">Channel</div>
-        <Row k="Name" v={`#${channel.name}`} />
-        <Row k="Display" v={channel.display_name} />
-        <Row k="Device" v={shorten(channel.device_fingerprint, 10)} />
-        <Row k="Topic" v={channel.topic} />
-      </div>
-      <MeshDiagnostics mesh={channel.mesh} />
-      <EventLog events={channel.events} />
-    </>
-  );
-}
-
-function MeshDiagnostics({ mesh }: { mesh: MeshInfo | null }) {
-  if (!mesh) {
-    return (
-      <div className="diagnostic-group">
-        <div className="diagnostic-group-label">Moss network</div>
-        <div className="diagnostic-row">
-          <span>Status</span>
-          <strong>booting…</strong>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="diagnostic-group">
-      <div className="diagnostic-group-label">Moss network</div>
-      <Row k="NAT type" v={mesh.nat_type || "unknown"} />
-      <Row k="Advertised" v={mesh.advertised_addr || "—"} />
-      <Row k="Listen port" v={String(mesh.listen_port)} />
-      <Row
-        k="Peers"
-        v={`${mesh.peer_count} (${mesh.direct_peer_count}d / ${mesh.relayed_peer_count}r)`}
-      />
-      <Row k="Known" v={String(mesh.known_peer_count)} />
-      <Row k="Relay" v={String(mesh.relay_session_count)} />
-      <Row k="Supernode" v={mesh.supernode_ready ? "ready" : "no"} />
-      <Row k="Mesh id" v={shorten(mesh.mesh_id, 14)} />
-    </div>
-  );
-}
-
-function EventLog({ events }: { events: readonly SnapshotEvent[] }) {
-  const slice = events.slice(-40).reverse();
-  return (
-    <div className="diagnostic-group">
-      <div className="diagnostic-group-label">
-        <IconActivity size={11} style={{ marginRight: 6, verticalAlign: "-1px" }} />
-        Moss events
-      </div>
-      <div className="diagnostic-scroll">
-        {slice.length === 0 ? (
-          <div className="diagnostic-row event-empty">
-            <span>—</span>
-            <strong>no events yet</strong>
-          </div>
-        ) : (
-          slice.map((event, index) => {
-            const detail = compactDetail(event.detail_json);
-            const time = formatTime(event.epoch_millis);
-            return (
-              <div className={`diagnostic-row event-row event-${event.event_name}`} key={index}>
-                <span>{time}</span>
-                <strong>
-                  <span className="event-name">{event.event_name}</span>
-                  {detail ? <span className="event-detail">{detail}</span> : null}
-                </strong>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
-function compactDetail(raw: string): string {
-  if (!raw) {
-    return "";
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      return Object.entries(parsed)
-        .map(([key, value]) => `${key}=${value}`)
-        .join(" ");
-    }
-    return String(parsed);
-  } catch {
-    return raw;
-  }
-}
-
-function formatTime(epoch: number): string {
-  if (!epoch) {
-    return "—";
-  }
-  const date = new Date(epoch);
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
-function pad(value: number): string {
-  return value < 10 ? `0${value}` : String(value);
-}
-
-function Row({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="diagnostic-row">
-      <span>{k}</span>
-      <strong>{v}</strong>
-    </div>
   );
 }
 

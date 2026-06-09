@@ -42,6 +42,17 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   flex: 1;
   color: var(--fg-3);
   font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titlebar-action {
+  flex: 0 0 auto;
+  height: 30px;
+  padding-inline: 10px;
+  color: var(--fg-2);
 }
 
 .state-pill {
@@ -76,9 +87,9 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) minmax(240px, 280px);
-  /* Bound the single row to the container height so each column (notably the
-     diagnostics aside) scrolls internally instead of overflowing the window. */
+  grid-template-columns: 72px minmax(0, 1fr);
+  /* Bound the single row to the container height so each column scrolls
+     internally instead of overflowing the window. */
   grid-template-rows: minmax(0, 1fr);
 }
 
@@ -86,12 +97,20 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   .desktop-body {
     grid-template-columns: 72px minmax(0, 1fr);
   }
-  .diagnostics-panel {
-    display: none;
-  }
 }
 
 @media (max-width: 580px) {
+  .titlebar {
+    gap: 8px;
+    padding-inline: 10px;
+  }
+
+  .brand strong,
+  .titlebar-action span,
+  .titlebar-subtitle {
+    display: none;
+  }
+
   .desktop-body {
     grid-template-columns: 56px minmax(0, 1fr);
   }
