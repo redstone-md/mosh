@@ -45,12 +45,8 @@ import {
 } from "./private-dm.content";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {
-  cancelChatAttachment,
   closeChatTarget,
-  downloadChatAttachment,
   sameChatTarget,
-  sendChatAttachment,
-  sendChatText,
   type ChatTarget,
 } from "./chat-actions";
 import {
@@ -59,7 +55,7 @@ import {
   type ConversationToolsState,
 } from "./ConversationTools";
 import { DiagnosticsDrawer } from "./DiagnosticsDrawer";
-import { shorten } from "./format";
+import { readableError, shorten } from "./format";
 import {
   ChannelChatList,
   DmChatList,
@@ -68,24 +64,18 @@ import {
 } from "./MessageLists";
 import { type OperationKind, useOperationBusy } from "./use-operation-busy";
 import {
-  AttachmentView,
+  useChatOrchestration,
+  type AttachmentApi,
+} from "./use-chat-orchestration";
+import {
   ChannelSnapshot,
   GroupSnapshot,
   NativeMessagingGateway,
   SessionSnapshot,
   nativeMessagingGateway,
 } from "./native/native-messaging-gateway";
-import {
-  AttachmentPicker,
-  MediaViewer,
-  createThumbnail,
-  isAttachmentTooLarge,
-  isStreamableMedia,
-  localFileSrc,
-  readFileAsBase64,
-  streamingMediaSrc,
-} from "./attachments";
-import type { AttachmentDescriptor, DmOffer } from "./native/native-messaging-gateway";
+import { AttachmentPicker, MediaViewer } from "./attachments";
+import type { DmOffer } from "./native/native-messaging-gateway";
 import { VoiceComposer, type VoiceSend } from "./voice/VoiceComposer";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
@@ -110,17 +100,6 @@ import {
   startVoicePlayback,
   type VoicePlaybackHandle,
 } from "./voice-call/audio-playback";
-
-interface AttachmentApi {
-  readonly views: ReadonlyMap<string, AttachmentView>;
-  readonly busy: boolean;
-  readonly onSend: (file: File) => void;
-  readonly onSendVoice: (voice: VoiceSend) => void;
-  readonly onVoiceError: (message: string) => void;
-  readonly onDownload: (attachmentId: string) => void;
-  readonly onCancel: (attachmentId: string) => void;
-  readonly onOpen: (descriptor: AttachmentDescriptor) => void;
-}
 
 type PendingDmOffer = DmOffer & {
   readonly kind: "channel" | "group";
@@ -208,11 +187,6 @@ interface CreateState {
   readonly copied: boolean;
 }
 
-interface FailedSend {
-  readonly target: ChatTarget;
-  readonly body: string;
-}
-
 export function PrivateDmScreen({
   gateway = nativeMessagingGateway,
 }: {
@@ -234,13 +208,8 @@ export function PrivateDmScreen({
   const [createState, setCreateState] = useState<CreateState>({ copied: false });
   const [groupCreateState, setGroupCreateState] = useState<GroupCreateState>({ copied: false });
   const [error, setError] = useState<string | undefined>(undefined);
-  const [lastFailedSend, setLastFailedSend] = useState<FailedSend | null>(null);
   const { counts: operationCounts, runOperation } = useOperationBusy();
   const [showSetup, setShowSetup] = useState(false);
-  const [viewer, setViewer] = useState<
-    { descriptor: AttachmentDescriptor; src: string } | null
-  >(null);
-  const [pendingOpen, setPendingOpen] = useState<AttachmentDescriptor | null>(null);
   const [offeredFingerprints, setOfferedFingerprints] = useState<ReadonlySet<string>>(
     new Set(),
   );
@@ -435,6 +404,37 @@ export function PrivateDmScreen({
     };
   }, [sessions, channels, groups, active]);
 
+  const activeSession =
+    active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
+  const activeChannel =
+    active?.type === "channel" ? channels.find((c) => c.name === active.name) ?? null : null;
+  const activeGroup =
+    active?.type === "group" ? groups.find((g) => g.group_id === active.id) ?? null : null;
+  const activeAttachments =
+    activeSession?.attachments ??
+    activeChannel?.attachments ??
+    activeGroup?.attachments ??
+    [];
+  const {
+    attachmentApi,
+    canRetrySend,
+    clearFailedSend,
+    retryFailedSend,
+    sendMessage,
+    setViewer,
+    viewer,
+  } = useChatOrchestration({
+    active,
+    activeAttachments,
+    composer,
+    gateway,
+    refresh,
+    runOperation,
+    setComposer,
+    transferBusy,
+    onError: setError,
+  });
+
   const run = async (
     kind: OperationKind,
     action: () => Promise<void>,
@@ -442,7 +442,7 @@ export function PrivateDmScreen({
   ) => {
     setError(undefined);
     if (kind !== "message") {
-      setLastFailedSend(null);
+      clearFailedSend();
     }
     try {
       await runOperation(kind, action);
@@ -539,35 +539,6 @@ export function PrivateDmScreen({
     setCreateState((state) => ({ ...state, copied: true }));
   };
 
-  const sendMessageBody = (target: ChatTarget, body: string) => {
-    void run(
-      "message",
-      async () => {
-        await sendChatText(gateway, target, body);
-        setLastFailedSend(null);
-        setComposer((current) => (current.trim() === body ? "" : current));
-        await refresh(true);
-      },
-      () => setLastFailedSend({ target, body }),
-    );
-  };
-
-  const sendMessage = (event: FormEvent) => {
-    event.preventDefault();
-    const body = composer.trim();
-    if (!body || !active) {
-      return;
-    }
-    sendMessageBody(active, body);
-  };
-
-  const retryFailedSend = () => {
-    if (!active || !lastFailedSend || !sameChatTarget(active, lastFailedSend.target)) {
-      return;
-    }
-    sendMessageBody(lastFailedSend.target, lastFailedSend.body);
-  };
-
   const closeActive = () => {
     if (!active) {
       return;
@@ -599,74 +570,6 @@ export function PrivateDmScreen({
 
   const confirmFingerprint = (sessionId: string) =>
     setConfirmedFingerprints((current) => new Set(current).add(sessionId));
-
-  const sendAttachment = (file: File) => {
-    if (!active) {
-      return;
-    }
-    if (isAttachmentTooLarge(file)) {
-      setError("Attachment exceeds the 50 MB limit");
-      return;
-    }
-    const target = active;
-    void run("transfer", async () => {
-      const dataBase64 = await readFileAsBase64(file);
-      const thumbnail = await createThumbnail(file);
-      const mime = file.type ?? "";
-      await sendChatAttachment(gateway, target, {
-        fileName: file.name,
-        mime,
-        dataBase64,
-        thumbnail,
-      });
-      await refresh(true);
-    });
-  };
-
-  const sendVoice = (voice: VoiceSend) => {
-    if (!active) {
-      return;
-    }
-    const target = active;
-    const fileName = voice.mime.includes("ogg")
-      ? "voice-message.ogg"
-      : "voice-message.webm";
-    const meta = { duration_ms: voice.durationMs, peaks_b64: voice.peaksB64 };
-    void run("transfer", async () => {
-      const dataBase64 = await readFileAsBase64(
-        new File([voice.blob], fileName, { type: voice.mime }),
-      );
-      await sendChatAttachment(gateway, target, {
-        fileName,
-        mime: voice.mime,
-        dataBase64,
-        voice: meta,
-      });
-      await refresh(true);
-    });
-  };
-
-  const downloadAttachment = (attachmentId: string) => {
-    if (!active) {
-      return;
-    }
-    const target = active;
-    void run("transfer", async () => {
-      await downloadChatAttachment(gateway, target, attachmentId);
-      await refresh(true);
-    });
-  };
-
-  const cancelAttachment = (attachmentId: string) => {
-    if (!active) {
-      return;
-    }
-    const target = active;
-    void run("transfer", async () => {
-      await cancelChatAttachment(gateway, target, attachmentId);
-      await refresh(true);
-    });
-  };
 
   const startCall = useCallback(
     (sessionId: string) => {
@@ -775,12 +678,6 @@ export function PrivateDmScreen({
     ),
   ];
 
-  const activeSession =
-    active?.type === "dm" ? sessions.find((s) => s.session_id === active.id) ?? null : null;
-  const activeChannel =
-    active?.type === "channel" ? channels.find((c) => c.name === active.name) ?? null : null;
-  const activeGroup =
-    active?.type === "group" ? groups.find((g) => g.group_id === active.id) ?? null : null;
   const showWelcome = (!activeSession && !activeChannel && !activeGroup) || showSetup;
   const activeConversationKey = active ? conversationKey(active) : "";
   const conversationTools: ConversationToolsState = {
@@ -940,68 +837,6 @@ export function PrivateDmScreen({
     pendingCallSession?.pending_call?.call_id,
     pendingCallSession?.display_name,
   ]);
-
-  const activeAttachments =
-    activeSession?.attachments ??
-    activeChannel?.attachments ??
-    activeGroup?.attachments ??
-    [];
-  const attachmentViews = new Map(
-    activeAttachments.map((view) => [view.attachment_id, view]),
-  );
-
-  const openAttachment = (descriptor: AttachmentDescriptor) => {
-    if (!active) {
-      return;
-    }
-    const view = attachmentViews.get(descriptor.attachment_id);
-    if (view?.local_path) {
-      setViewer({ descriptor, src: localFileSrc(view.local_path) });
-      return;
-    }
-    if (isStreamableMedia(descriptor.mime)) {
-      // Video and audio open right away and play while they download.
-      const host = active.type === "channel" ? active.name : active.id;
-      downloadAttachment(descriptor.attachment_id);
-      setViewer({
-        descriptor,
-        src: streamingMediaSrc(active.type, host, descriptor.attachment_id),
-      });
-      return;
-    }
-    // Images cannot stream: download, then open the finished file.
-    setPendingOpen(descriptor);
-    downloadAttachment(descriptor.attachment_id);
-  };
-
-  // Auto-open the viewer when a click-to-open image download finishes.
-  useEffect(() => {
-    if (!pendingOpen) {
-      return;
-    }
-    const view = activeAttachments.find(
-      (candidate) => candidate.attachment_id === pendingOpen.attachment_id,
-    );
-    if (view?.local_path) {
-      setViewer({ descriptor: pendingOpen, src: localFileSrc(view.local_path) });
-      setPendingOpen(null);
-    } else if (view && (view.state === "failed" || view.state === "cancelled")) {
-      setPendingOpen(null);
-    }
-  }, [activeAttachments, pendingOpen]);
-
-  const attachmentApi: AttachmentApi = {
-    views: attachmentViews,
-    busy: transferBusy,
-    onSend: sendAttachment,
-    onSendVoice: sendVoice,
-    onVoiceError: setError,
-    onDownload: downloadAttachment,
-    onCancel: cancelAttachment,
-    onOpen: openAttachment,
-  };
-  const canRetrySend =
-    Boolean(active && lastFailedSend && sameChatTarget(active, lastFailedSend.target));
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
@@ -1926,10 +1761,6 @@ function StatePill({ state, label }: { state: string; label: string }) {
       {label}
     </span>
   );
-}
-
-function readableError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function copyText(value: string): Promise<void> {
