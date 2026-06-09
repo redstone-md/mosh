@@ -122,7 +122,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 14px 0;
   min-height: 0;
   overflow-y: auto;
@@ -148,16 +148,16 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 .rail-new:active { transform: translateY(1px); }
 
 .rail-divider {
-  width: 28px;
-  height: 2px;
+  width: 24px;
+  height: 1px;
   border-radius: 1px;
-  background: var(--line);
+  background: rgba(255,255,255,0.08);
 }
 
 .rail-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   width: 100%;
 }
@@ -182,7 +182,7 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .rail-item-active {
   border-radius: 14px;
-  box-shadow: inset 0 0 0 2px var(--moss);
+  box-shadow: inset 0 0 0 2px var(--moss), 0 0 0 3px rgba(183,216,74,0.08);
 }
 
 .rail-item:active { transform: translateY(1px); }
@@ -234,8 +234,8 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .rail-offer-dismiss {
   position: absolute;
-  top: -3px;
-  right: -3px;
+  top: -4px;
+  right: -4px;
   width: 16px;
   height: 16px;
   display: grid;
@@ -265,19 +265,6 @@ button:disabled { cursor: not-allowed; opacity: 0.5; }
 
 .rail-channel.rail-item-active {
   box-shadow: inset 0 0 0 2px var(--info);
-}
-
-.rail-channel-label {
-  position: absolute;
-  left: 50%;
-  bottom: -16px;
-  transform: translateX(-50%);
-  font-size: 9px;
-  color: var(--fg-3);
-  max-width: 60px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .channel-icon {

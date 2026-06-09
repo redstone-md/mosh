@@ -1405,7 +1405,6 @@ function ChannelRailItem({
       aria-label={`Open channel ${channel.name}`}
     >
       <IconHash size={18} />
-      <span className="rail-channel-label">{channel.name}</span>
       <UnreadBadge count={unreadCount} />
     </button>
   );
@@ -1437,7 +1436,6 @@ function GroupRailItem({
           <IconCrown size={11} />
         </span>
       ) : null}
-      <span className="rail-channel-label">{label}</span>
       <span className={`rail-dot rail-dot-${group.state}`} />
       <UnreadBadge count={unreadCount} />
     </button>
