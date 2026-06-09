@@ -30,6 +30,18 @@
   font-size: 12px;
 }
 
+.chat-header-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  margin-left: auto;
+}
+
+.chat-header-actions .fingerprint-badge {
+  margin-left: 0;
+}
+
 .chat-state-line {
   display: flex;
   align-items: center;
@@ -386,24 +398,35 @@
 
 @media (max-width: 640px) {
   .chat-header {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
     align-items: center;
     gap: 8px 12px;
     padding: 12px 14px;
   }
 
   .chat-title-block {
-    order: 10;
-    flex: 0 0 calc(100% - 44px);
-    min-width: calc(100% - 44px);
-    margin-left: 44px;
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
   }
 
-  .fingerprint-badge {
+  .chat-header-actions {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    justify-content: flex-start;
+    gap: 8px;
     margin-left: 0;
   }
 
-  .fingerprint-badge code {
+  .chat-header-actions .fingerprint-badge {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: calc(100% - 80px);
+  }
+
+  .chat-header-actions .fingerprint-badge code {
     white-space: normal;
     overflow-wrap: anywhere;
   }
