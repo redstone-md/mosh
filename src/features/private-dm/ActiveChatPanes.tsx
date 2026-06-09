@@ -6,28 +6,22 @@ import {
   IconLock,
   IconLogout,
   IconMessageCircle,
-  IconPaperclip,
   IconPhone,
   IconPlus,
-  IconSearch,
   IconShieldCheck,
   IconTrash,
   IconUsers,
   IconX,
 } from "@tabler/icons-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import {
+  ActiveChatHeader,
+  FingerprintBadge,
+} from "./ActiveChatHeader";
 import { Avatar } from "./Avatar";
 import { ChatDropZone, Composer } from "./ChatComposer";
-import {
-  ConversationTools,
-  MobileConversationFilterNotice,
-  MobileConversationSearch,
-  type ConversationToolsState,
-} from "./ConversationTools";
-import {
-  ChatHeaderMenu,
-  type ChatHeaderMenuAction,
-} from "./ChatHeaderMenu";
+import { type ConversationToolsState } from "./ConversationTools";
+import { type ChatHeaderMenuAction } from "./ChatHeaderMenu";
 import { copyText } from "./clipboard";
 import {
   ChannelChatList,
@@ -66,10 +60,7 @@ export function ActiveDmChat(props: {
   callBusy: boolean;
   onStartCall: () => void;
 }) {
-  const [mobileSearchOpen, setMobileSearchOpen] = useMobileSearchPanel(
-    props.session.session_id,
-  );
-  const menuActions = conversationMenuActions(props.tools, [
+  const menuActions: readonly ChatHeaderMenuAction[] = [
     {
       label: props.confirmed ? inviteText.confirmedButton : inviteText.confirmButton,
       icon: <IconShieldCheck size={15} />,
@@ -82,21 +73,21 @@ export function ActiveDmChat(props: {
       tone: "danger",
       onSelect: props.onClose,
     },
-  ]);
+  ];
 
   return (
     <>
-      <header className="chat-header">
-        <Avatar name={props.peerName} />
-        <div className="chat-title-block">
-          <h1 id="chat-title">{props.peerName}</h1>
-          <p>
-            {props.confirmed
-              ? `MLS ${props.session.state} · fingerprint confirmed`
-              : `MLS ${props.session.state} · fingerprint unverified`}
-          </p>
-        </div>
-        <div className="chat-header-actions">
+      <ActiveChatHeader
+        resetKey={props.session.session_id}
+        leading={<Avatar name={props.peerName} />}
+        title={props.peerName}
+        subtitle={
+          props.confirmed
+            ? `MLS ${props.session.state} · fingerprint confirmed`
+            : `MLS ${props.session.state} · fingerprint unverified`
+        }
+        tools={props.tools}
+        beforeSearchActions={
           <span className="chat-desktop-only">
             <FingerprintBadge
               fingerprint={props.session.fingerprint}
@@ -104,50 +95,41 @@ export function ActiveDmChat(props: {
               onConfirm={props.onConfirm}
             />
           </span>
-          <MobileSearchToggle
-            open={mobileSearchOpen}
-            onToggle={() => setMobileSearchOpen((open) => !open)}
-          />
-          <button
-            className="btn btn-ghost btn-icon"
-            type="button"
-            aria-label="Start voice call"
-            title={
-              props.callSupported
-                ? "Start voice call"
-                : "Voice calls require a newer WebView"
-            }
-            disabled={
-              !props.callSupported ||
-              props.callBusy ||
-              props.busy ||
-              !props.ready
-            }
-            onClick={props.onStartCall}
-          >
-            <IconPhone size={16} />
-          </button>
-          <button
-            className="btn btn-ghost btn-icon chat-desktop-only"
-            type="button"
-            onClick={props.onClose}
-            aria-label={shellText.closeSession}
-            title={shellText.closeSession}
-          >
-            <IconX size={16} />
-          </button>
-          <ChatHeaderMenu actions={menuActions} />
-        </div>
-      </header>
-
-      {mobileSearchOpen ? (
-        <MobileConversationSearch
-          tools={props.tools}
-          onClose={() => setMobileSearchOpen(false)}
-        />
-      ) : null}
-      <MobileConversationFilterNotice tools={props.tools} />
-      <ConversationTools tools={props.tools} />
+        }
+        afterSearchActions={
+          <>
+            <button
+              className="btn btn-ghost btn-icon"
+              type="button"
+              aria-label="Start voice call"
+              title={
+                props.callSupported
+                  ? "Start voice call"
+                  : "Voice calls require a newer WebView"
+              }
+              disabled={
+                !props.callSupported ||
+                props.callBusy ||
+                props.busy ||
+                !props.ready
+              }
+              onClick={props.onStartCall}
+            >
+              <IconPhone size={16} />
+            </button>
+            <button
+              className="btn btn-ghost btn-icon chat-desktop-only"
+              type="button"
+              onClick={props.onClose}
+              aria-label={shellText.closeSession}
+              title={shellText.closeSession}
+            >
+              <IconX size={16} />
+            </button>
+          </>
+        }
+        menuActions={menuActions}
+      />
 
       <ChatDropZone disabled={!props.ready || props.busy} onAttach={props.attachments.onSend}>
         <DmChatList
@@ -182,33 +164,28 @@ export function ActiveChannelChat(props: {
   onSend: (event: FormEvent) => void;
   onClose: () => void;
 }) {
-  const [mobileSearchOpen, setMobileSearchOpen] = useMobileSearchPanel(
-    props.channel.name,
-  );
-  const menuActions = conversationMenuActions(props.tools, [
+  const menuActions: readonly ChatHeaderMenuAction[] = [
     {
       label: channelText.leaveLabel,
       icon: <IconLogout size={15} />,
       tone: "danger",
       onSelect: props.onClose,
     },
-  ]);
+  ];
 
   return (
     <>
-      <header className="chat-header">
-        <div className="channel-icon">
-          <IconHash size={18} />
-        </div>
-        <div className="chat-title-block">
-          <h1 id="chat-title">{props.channel.name}</h1>
-          <p>{channelText.subtitle}</p>
-        </div>
-        <div className="chat-header-actions">
-          <MobileSearchToggle
-            open={mobileSearchOpen}
-            onToggle={() => setMobileSearchOpen((open) => !open)}
-          />
+      <ActiveChatHeader
+        resetKey={props.channel.name}
+        leading={
+          <div className="channel-icon">
+            <IconHash size={18} />
+          </div>
+        }
+        title={props.channel.name}
+        subtitle={channelText.subtitle}
+        tools={props.tools}
+        afterSearchActions={
           <button
             className="btn btn-ghost btn-icon chat-desktop-only"
             type="button"
@@ -218,19 +195,10 @@ export function ActiveChannelChat(props: {
           >
             <IconLogout size={16} />
           </button>
-          <ChatHeaderMenu actions={menuActions} />
-        </div>
-      </header>
-
-      <PublicNotice />
-      {mobileSearchOpen ? (
-        <MobileConversationSearch
-          tools={props.tools}
-          onClose={() => setMobileSearchOpen(false)}
-        />
-      ) : null}
-      <MobileConversationFilterNotice tools={props.tools} />
-      <ConversationTools tools={props.tools} />
+        }
+        menuActions={menuActions}
+        afterHeader={<PublicNotice />}
+      />
 
       <ChatDropZone disabled={props.busy} onAttach={props.attachments.onSend}>
         <ChannelChatList
@@ -271,9 +239,6 @@ export function ActiveGroupChat(props: {
   const inviteUri = props.group.invite_uri;
   const [inviteCopied, setInviteCopied] = useState(false);
   const inviteCopyTimer = useRef<number | null>(null);
-  const [mobileSearchOpen, setMobileSearchOpen] = useMobileSearchPanel(
-    props.group.group_id,
-  );
 
   useEffect(() => {
     setInviteCopied(false);
@@ -300,7 +265,7 @@ export function ActiveGroupChat(props: {
       }, 1600);
     });
   };
-  const menuActions = conversationMenuActions(props.tools, [
+  const menuActions: readonly ChatHeaderMenuAction[] = [
     ...(inviteUri
       ? [
           {
@@ -316,45 +281,49 @@ export function ActiveGroupChat(props: {
       tone: "danger",
       onSelect: props.onClose,
     },
-  ]);
+  ];
 
   return (
     <>
-      <header className="chat-header">
-        <div className="group-icon">
-          <IconUsers size={18} />
-        </div>
-        <div className="chat-title-block">
-          <h1 id="chat-title">{label}</h1>
-          <p>
+      <ActiveChatHeader
+        resetKey={props.group.group_id}
+        leading={
+          <div className="group-icon">
+            <IconUsers size={18} />
+          </div>
+        }
+        title={label}
+        subtitle={
+          <>
             {props.group.is_admin ? `${groupText.adminBadge} · ` : ""}
             {`${props.group.member_count} member${
               props.group.member_count === 1 ? "" : "s"
             } · MLS ${props.group.state}`}
-          </p>
-        </div>
-        <div className="chat-header-actions">
-          {props.group.is_admin ? (
-            <span className="admin-pill chat-desktop-only" title={groupText.adminBadge}>
-              <IconCrown size={14} />
-              <span>{groupText.adminBadge}</span>
-            </span>
-          ) : null}
-          {inviteUri ? (
-            <button
-              className="btn btn-ghost btn-icon chat-desktop-only"
-              type="button"
-              onClick={copyGroupInvite}
-              aria-label={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
-              title={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
-            >
-              {inviteCopied ? <IconCheck size={14} /> : <IconCopy size={14} />}
-            </button>
-          ) : null}
-          <MobileSearchToggle
-            open={mobileSearchOpen}
-            onToggle={() => setMobileSearchOpen((open) => !open)}
-          />
+          </>
+        }
+        tools={props.tools}
+        beforeSearchActions={
+          <>
+            {props.group.is_admin ? (
+              <span className="admin-pill chat-desktop-only" title={groupText.adminBadge}>
+                <IconCrown size={14} />
+                <span>{groupText.adminBadge}</span>
+              </span>
+            ) : null}
+            {inviteUri ? (
+              <button
+                className="btn btn-ghost btn-icon chat-desktop-only"
+                type="button"
+                onClick={copyGroupInvite}
+                aria-label={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
+                title={inviteCopied ? groupText.copyInviteDone : groupText.copyInvite}
+              >
+                {inviteCopied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+              </button>
+            ) : null}
+          </>
+        }
+        afterSearchActions={
           <button
             className="btn btn-ghost btn-icon chat-desktop-only"
             type="button"
@@ -364,19 +333,10 @@ export function ActiveGroupChat(props: {
           >
             <IconLogout size={16} />
           </button>
-          <ChatHeaderMenu actions={menuActions} />
-        </div>
-      </header>
-
-      <GroupNotice />
-      {mobileSearchOpen ? (
-        <MobileConversationSearch
-          tools={props.tools}
-          onClose={() => setMobileSearchOpen(false)}
-        />
-      ) : null}
-      <MobileConversationFilterNotice tools={props.tools} />
-      <ConversationTools tools={props.tools} />
+        }
+        menuActions={menuActions}
+        afterHeader={<GroupNotice />}
+      />
 
       <ChatDropZone disabled={!props.ready || props.busy} onAttach={props.attachments.onSend}>
         <GroupChatList
@@ -400,54 +360,6 @@ export function ActiveGroupChat(props: {
     </>
   );
 }
-
-function useMobileSearchPanel(resetKey: string): [boolean, (value: boolean | ((open: boolean) => boolean)) => void] {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    setOpen(false);
-  }, [resetKey]);
-  return [open, setOpen];
-}
-
-function MobileSearchToggle({
-  open,
-  onToggle,
-}: {
-  open: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      className={`btn btn-ghost btn-icon chat-mobile-only${open ? " is-active" : ""}`}
-      type="button"
-      aria-label={open ? "Close message search" : chatText.searchPlaceholder}
-      title={open ? "Close message search" : chatText.searchPlaceholder}
-      onClick={onToggle}
-    >
-      <IconSearch size={16} />
-    </button>
-  );
-}
-
-function conversationMenuActions(
-  tools: ConversationToolsState,
-  actions: readonly ChatHeaderMenuAction[],
-): readonly ChatHeaderMenuAction[] {
-  const filterAction: ChatHeaderMenuAction =
-    tools.filter === "attachments"
-      ? {
-          label: chatText.filterAll,
-          icon: <IconMessageCircle size={15} />,
-          onSelect: () => tools.onFilter("all"),
-        }
-      : {
-          label: chatText.filterAttachments,
-          icon: <IconPaperclip size={15} />,
-          onSelect: () => tools.onFilter("attachments"),
-        };
-  return [filterAction, ...actions];
-}
-
 export function EmptyState({ onNew }: { onNew: () => void }) {
   return (
     <div className="chat-empty welcome-empty">
@@ -473,33 +385,6 @@ function GroupNotice() {
         <p>{groupText.noticeBody}</p>
       </div>
     </section>
-  );
-}
-
-function FingerprintBadge({
-  fingerprint,
-  confirmed,
-  onConfirm,
-}: {
-  fingerprint: string;
-  confirmed: boolean;
-  onConfirm: () => void;
-}) {
-  if (!fingerprint) {
-    return null;
-  }
-  const display = fingerprint.match(/.{1,4}/g)?.slice(0, 4).join(" ");
-  return (
-    <button
-      type="button"
-      className={`fingerprint-badge ${confirmed ? "fingerprint-badge-confirmed" : ""}`}
-      onClick={confirmed ? undefined : onConfirm}
-      title={confirmed ? inviteText.confirmedButton : inviteText.fingerprintHint}
-      aria-label={confirmed ? inviteText.confirmedButton : inviteText.confirmButton}
-    >
-      <IconShieldCheck size={12} />
-      <code>{display}</code>
-    </button>
   );
 }
 
