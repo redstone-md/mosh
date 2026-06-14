@@ -14,7 +14,7 @@ Prevent restored private DMs from becoming writable before Moss has a live peer 
 - [x] Implement incoming-only unread counts.
 - [x] Run focused tests.
 - [x] Run full verification.
-- [ ] Commit, push, rebuild binaries, and replace release assets.
+- [x] Commit, push, rebuild binaries, and replace release assets.
 
 ## Verification Plan
 
@@ -32,3 +32,6 @@ Prevent restored private DMs from becoming writable before Moss has a live peer 
 - `npm run format` passed.
 - `npm run build` passed.
 - `npm test` passed: Vitest 16 files / 81 tests; Rust 77 passed / 5 ignored.
+- Commit `1807834 fix: gate dm ready on live peer` pushed to `origin/main`.
+- `npm run build:app` passed.
+- `gh release upload v0.2.7 ... --clobber` passed and release asset digests match the local build.
