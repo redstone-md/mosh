@@ -10,7 +10,11 @@ import type {
   GroupSnapshot,
   SessionSnapshot,
 } from "../native/native-messaging-gateway";
-import { diffConversations, type ConversationCount } from "./unread";
+import {
+  countMessagesFromOthers,
+  diffConversations,
+  type ConversationCount,
+} from "./unread";
 
 interface UseUnreadNotificationsOptions {
   readonly sessions: readonly SessionSnapshot[];
@@ -70,15 +74,15 @@ export function useUnreadNotifications({
     const counts: ConversationCount[] = [
       ...sessions.map((session) => ({
         id: `dm:${session.session_id}`,
-        messageCount: session.messages.length,
+        messageCount: countMessagesFromOthers(session.messages, session.display_name),
       })),
       ...groups.map((group) => ({
         id: `group:${group.group_id}`,
-        messageCount: group.messages.length,
+        messageCount: countMessagesFromOthers(group.messages, group.display_name),
       })),
       ...channels.map((channel) => ({
         id: `channel:${channel.name}`,
-        messageCount: channel.messages.length,
+        messageCount: countMessagesFromOthers(channel.messages, channel.display_name),
       })),
     ];
     let cancelled = false;

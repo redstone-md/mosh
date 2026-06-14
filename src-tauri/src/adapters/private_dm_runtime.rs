@@ -1545,7 +1545,7 @@ impl PrivateDmSession {
         thumbnail: Option<String>,
         voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
-        if !self.peer_joined || !self.crypto.is_ready() {
+        if !self.ready_for_user_actions() {
             return Err(PrivateDmRuntimeError::NotReady);
         }
         let attachment_id = self.crypto.random_token("attachment")?;
@@ -1751,15 +1751,25 @@ impl PrivateDmSession {
     }
 
     fn state(&self) -> String {
-        if self.peer_joined && self.crypto.is_ready() {
+        if self.ready_for_user_actions() {
             "ready".to_string()
         } else {
             "waiting".to_string()
         }
     }
 
+    fn ready_for_user_actions(&self) -> bool {
+        self.peer_joined && self.crypto.is_ready() && self.has_live_peer()
+    }
+
+    fn has_live_peer(&self) -> bool {
+        self.mesh_info().is_some_and(|info| {
+            info.peer_count > 0 || info.direct_peer_count > 0 || info.relayed_peer_count > 0
+        })
+    }
+
     fn call_start(&mut self) -> Result<CallStarted, PrivateDmRuntimeError> {
-        if !self.peer_joined || !self.crypto.is_ready() {
+        if !self.ready_for_user_actions() {
             return Err(PrivateDmRuntimeError::NotReady);
         }
         if self.call.is_some() {
@@ -2107,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn restored_inbound_history_marks_session_ready() {
+    fn restored_inbound_history_waits_for_live_peer() {
         use crate::adapters::persistence::Persistence;
         use std::path::PathBuf;
 
@@ -2180,14 +2190,14 @@ mod tests {
             .expect("session should rehydrate");
 
         assert_eq!(session.peer_display_name, "Bob");
-        assert_eq!(session.state, "ready");
+        assert_eq!(session.state, "waiting");
         assert_eq!(session.messages.len(), 1);
 
         let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
-    fn decrypted_inbound_data_marks_session_ready() {
+    fn decrypted_inbound_data_without_live_peer_stays_waiting() {
         let _guard = MOSS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2248,7 +2258,8 @@ mod tests {
             .handle_data(payload)
             .expect("Alice should decrypt inbound data");
 
-        assert_eq!(session.state(), "ready");
+        assert!(session.peer_joined);
+        assert_eq!(session.state(), "waiting");
         assert_eq!(session.peer_display_name.as_deref(), Some("Bob"));
     }
 

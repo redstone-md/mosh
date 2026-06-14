@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { diffConversations, type ConversationCount } from "./unread";
+import {
+  countMessagesFromOthers,
+  diffConversations,
+  type ConversationCount,
+} from "./unread";
 
 const counts = (entries: [string, number][]): ConversationCount[] =>
   entries.map(([id, messageCount]) => ({ id, messageCount }));
@@ -52,5 +56,20 @@ describe("diffConversations", () => {
     );
     expect(result.nextLastSeen.get("a")).toBe(7);
     expect(result.nextLastSeen.get("b")).toBe(2);
+  });
+});
+
+describe("countMessagesFromOthers", () => {
+  it("ignores messages sent by the local display name", () => {
+    const count = countMessagesFromOthers(
+      [
+        { from_device: "Alice" },
+        { from_device: "Bob" },
+        { from_device: "Alice" },
+      ],
+      "Alice",
+    );
+
+    expect(count).toBe(1);
   });
 });
