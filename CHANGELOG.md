@@ -4,6 +4,45 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-06-14
+
+### Added
+- **Persistent history for public channels and private groups.** Channel and
+  private-group conversations now survive an application restart, the same way
+  private DMs already did — message history is restored on launch instead of
+  starting empty.
+- **Send retry for failed messages.** A message that fails to send can be
+  retried; the retry state is persisted, and historical messages show their
+  retry status after a restart so a stuck send is visible rather than silently
+  lost.
+- **Message metadata in the UI.** Grouped messages now show timestamps, and
+  per-message metadata is exposed without cluttering the thread.
+- **Browser demo gateway.** The app can run against a browser-safe native
+  gateway fallback, allowing a no-install demo in the browser.
+- **Clearer peer diagnostics.** Peer/connection diagnostics are reorganized into
+  a more readable hierarchy.
+
+### Fixed
+- **Mobile UX pass.** Expandable conversation rail, full-screen mobile
+  diagnostics, ordered mobile topbar controls, a stabilized and tighter compact
+  chat header, compact composer and session rail, and reduced chrome on grouped
+  messages — the small-screen layout no longer overflows or crowds the content.
+- **Send failures are surfaced.** A failed chat send now reports the error to the
+  user instead of failing quietly.
+- **Invite validation feedback.** Invalid invites are explained more clearly, and
+  onboarding invite validation is tightened.
+- **No destructive browser dialog.** The native confirm dialog was replaced with
+  an in-app confirmation; modal keyboard focus was improved.
+- **Diagnostics moved into a drawer**, message security metadata was quieted, and
+  the raw attachment file input is hidden behind the normal control.
+- Added an app favicon.
+
+### Changed
+- Large internal refactor with no behavior change: chat orchestration, composer,
+  message lists, session rail, voice-call orchestration, DM offer/lifecycle, the
+  onboarding panel, and the diagnostics drawer were split into focused hooks and
+  components. This is groundwork; users should see no functional difference.
+
 ## [0.2.6] - 2026-06-03
 
 ### Added
@@ -112,4 +151,5 @@ All notable changes to Mosh are documented here. Format follows
   DMs.
 - Secure erasure of stale overwritten bytes in the database file is out of scope.
 
+[0.2.7]: https://github.com/redstone-md/mosh/releases/tag/v0.2.7
 [0.2.0]: https://github.com/redstone-md/mosh/releases/tag/v0.2.0
