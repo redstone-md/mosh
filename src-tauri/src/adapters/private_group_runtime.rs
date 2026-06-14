@@ -473,13 +473,12 @@ impl PrivateGroupRuntime {
                                     .attachment_store
                                     .path_for(&desc.content_hash, &desc.file_name)
                                 {
-                                    let direction = if message.from_fingerprint
-                                        == rec.device_fingerprint
-                                    {
-                                        AttachmentDirection::Outgoing
-                                    } else {
-                                        AttachmentDirection::Incoming
-                                    };
+                                    let direction =
+                                        if message.from_fingerprint == rec.device_fingerprint {
+                                            AttachmentDirection::Outgoing
+                                        } else {
+                                            AttachmentDirection::Incoming
+                                        };
                                     session.attachment_slots.insert(
                                         desc.attachment_id.clone(),
                                         AttachmentSlot {
@@ -836,7 +835,9 @@ impl PrivateGroupRuntime {
                 retry_count: 0,
             };
             session.upsert_message(message);
-            session.outbound_attempts.insert(message_id.clone(), attempt);
+            session
+                .outbound_attempts
+                .insert(message_id.clone(), attempt);
             (
                 session.group_id.clone(),
                 session.data_channel.clone(),
@@ -880,14 +881,14 @@ impl PrivateGroupRuntime {
                     .groups
                     .get_mut(group_id)
                     .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
-                let retry_count = if let Some(attempt) = session.outbound_attempts.get_mut(&message_id)
-                {
-                    attempt.delivery_status = MessageDeliveryStatus::Failed;
-                    attempt.delivery_error = Some(error_text.clone());
-                    attempt.retry_count
-                } else {
-                    0
-                };
+                let retry_count =
+                    if let Some(attempt) = session.outbound_attempts.get_mut(&message_id) {
+                        attempt.delivery_status = MessageDeliveryStatus::Failed;
+                        attempt.delivery_error = Some(error_text.clone());
+                        attempt.retry_count
+                    } else {
+                        0
+                    };
                 session.mark_delivery(
                     &message_id,
                     MessageDeliveryStatus::Failed,
@@ -941,7 +942,12 @@ impl PrivateGroupRuntime {
                 .get(message_id)
                 .map(|attempt| attempt.retry_count)
                 .unwrap_or(0);
-            session.mark_delivery(message_id, MessageDeliveryStatus::Pending, None, retry_count)?;
+            session.mark_delivery(
+                message_id,
+                MessageDeliveryStatus::Pending,
+                None,
+                retry_count,
+            )?;
             session.sync_attempt_message_json(message_id)?;
             (
                 session.group_id.clone(),
@@ -969,7 +975,12 @@ impl PrivateGroupRuntime {
                     .groups
                     .get_mut(group_id)
                     .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
-                session.mark_delivery(message_id, MessageDeliveryStatus::Sent, None, retry_count)?;
+                session.mark_delivery(
+                    message_id,
+                    MessageDeliveryStatus::Sent,
+                    None,
+                    retry_count,
+                )?;
                 session.outbound_attempts.remove(message_id);
                 GroupSendResult {
                     group_id: group_id_owned,
@@ -1147,9 +1158,8 @@ impl PrivateGroupRuntime {
                 }
             }
 
-            let needs_record_refresh =
-                !self.finalized_group_records.contains(&session.group_id)
-                    && session.crypto.group_id_bytes().is_some();
+            let needs_record_refresh = !self.finalized_group_records.contains(&session.group_id)
+                && session.crypto.group_id_bytes().is_some();
 
             if has_new_messages || needs_record_refresh {
                 let _ = p.put_group_mls_snapshot(&session.group_id, &session.crypto.snapshot());
@@ -1179,14 +1189,7 @@ impl PrivateGroupRuntime {
         let Some(p) = self.persistence.as_ref().cloned() else {
             return;
         };
-        let (
-            sent_at_ms,
-            message_row,
-            attempt_row,
-            snapshot,
-            group_row,
-            needs_record_refresh,
-        ) = {
+        let (sent_at_ms, message_row, attempt_row, snapshot, group_row, needs_record_refresh) = {
             let Some(session) = self.groups.get(group_id) else {
                 return;
             };
@@ -1210,9 +1213,8 @@ impl PrivateGroupRuntime {
                 .get(message_id)
                 .and_then(|attempt| serde_json::to_vec(attempt).ok());
             let snapshot = persist_snapshot.then(|| session.crypto.snapshot());
-            let needs_record_refresh =
-                !self.finalized_group_records.contains(group_id)
-                    && session.crypto.group_id_bytes().is_some();
+            let needs_record_refresh = !self.finalized_group_records.contains(group_id)
+                && session.crypto.group_id_bytes().is_some();
             let group_row = needs_record_refresh
                 .then(|| serde_json::to_vec(&session.to_persisted_record()).ok())
                 .flatten();
@@ -1234,10 +1236,16 @@ impl PrivateGroupRuntime {
         }
         match attempt_row {
             Some(row) => {
-                let _ = p.put_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_GROUP, group_id, message_id, &row);
+                let _ = p.put_outbound_attempt(
+                    OUTBOUND_SCOPE_PRIVATE_GROUP,
+                    group_id,
+                    message_id,
+                    &row,
+                );
             }
             None => {
-                let _ = p.delete_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_GROUP, group_id, message_id);
+                let _ =
+                    p.delete_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_GROUP, group_id, message_id);
             }
         }
         if let Some(row) = group_row {
@@ -2187,7 +2195,10 @@ mod tests {
         drain_received_messages();
 
         let mut db_path: PathBuf = std::env::temp_dir();
-        db_path.push(format!("mosh-group-failed-send-{}.redb", std::process::id()));
+        db_path.push(format!(
+            "mosh-group-failed-send-{}.redb",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&db_path);
 
         let persistence =
@@ -2298,8 +2309,15 @@ mod tests {
                 .iter()
                 .filter(|message| message.message_id.as_deref() == Some(failed.message_id.as_str()))
                 .collect();
-            assert_eq!(matching.len(), 1, "retry should update, not duplicate, the row");
-            assert_eq!(matching[0].delivery_status, Some(MessageDeliveryStatus::Sent));
+            assert_eq!(
+                matching.len(),
+                1,
+                "retry should update, not duplicate, the row"
+            );
+            assert_eq!(
+                matching[0].delivery_status,
+                Some(MessageDeliveryStatus::Sent)
+            );
             assert_eq!(matching[0].retry_count, Some(1));
 
             (created.group_id, failed.message_id)

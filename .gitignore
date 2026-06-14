@@ -32,6 +32,7 @@ Thumbs.db
 .codex/*
 !.codex/.gitkeep
 .continuum/
+.aislop/
 docs/UX_UI_FIX_PLAN.md
 
 

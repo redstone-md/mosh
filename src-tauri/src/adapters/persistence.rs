@@ -804,7 +804,10 @@ mod tests {
         p.delete_group("g1").unwrap();
         p.delete_channel("general").unwrap();
 
-        assert!(p.list_outbound_attempts("private_dm", "s1").unwrap().is_empty());
+        assert!(p
+            .list_outbound_attempts("private_dm", "s1")
+            .unwrap()
+            .is_empty());
         assert!(p
             .list_outbound_attempts("private_group", "g1")
             .unwrap()
