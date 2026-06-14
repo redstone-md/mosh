@@ -365,7 +365,8 @@ impl ChannelRuntime {
                     let Ok(attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row) else {
                         continue;
                     };
-                    let Ok(mut message) = serde_json::from_str::<ChannelMessage>(&attempt.message_json)
+                    let Ok(mut message) =
+                        serde_json::from_str::<ChannelMessage>(&attempt.message_json)
                     else {
                         continue;
                     };
@@ -549,7 +550,9 @@ impl ChannelRuntime {
                 retry_count: 0,
             };
             session.upsert_message(message);
-            session.outbound_attempts.insert(message_id.clone(), attempt);
+            session
+                .outbound_attempts
+                .insert(message_id.clone(), attempt);
             (
                 session.name.clone(),
                 session.topic.clone(),
@@ -593,14 +596,14 @@ impl ChannelRuntime {
                     .channels
                     .get_mut(&normalized)
                     .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-                let retry_count = if let Some(attempt) = session.outbound_attempts.get_mut(&message_id)
-                {
-                    attempt.delivery_status = MessageDeliveryStatus::Failed;
-                    attempt.delivery_error = Some(error_text.clone());
-                    attempt.retry_count
-                } else {
-                    0
-                };
+                let retry_count =
+                    if let Some(attempt) = session.outbound_attempts.get_mut(&message_id) {
+                        attempt.delivery_status = MessageDeliveryStatus::Failed;
+                        attempt.delivery_error = Some(error_text.clone());
+                        attempt.retry_count
+                    } else {
+                        0
+                    };
                 session.mark_delivery(
                     &message_id,
                     MessageDeliveryStatus::Failed,
@@ -655,7 +658,12 @@ impl ChannelRuntime {
                 .get(message_id)
                 .map(|attempt| attempt.retry_count)
                 .unwrap_or(0);
-            session.mark_delivery(message_id, MessageDeliveryStatus::Pending, None, retry_count)?;
+            session.mark_delivery(
+                message_id,
+                MessageDeliveryStatus::Pending,
+                None,
+                retry_count,
+            )?;
             session.sync_attempt_message_json(message_id)?;
             (
                 session.name.clone(),
@@ -683,7 +691,12 @@ impl ChannelRuntime {
                     .channels
                     .get_mut(&normalized)
                     .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
-                session.mark_delivery(message_id, MessageDeliveryStatus::Sent, None, retry_count)?;
+                session.mark_delivery(
+                    message_id,
+                    MessageDeliveryStatus::Sent,
+                    None,
+                    retry_count,
+                )?;
                 session.outbound_attempts.remove(message_id);
                 ChannelSendResult {
                     name: channel_name,
@@ -1734,8 +1747,15 @@ mod tests {
                 .iter()
                 .filter(|message| message.message_id.as_deref() == Some(failed.message_id.as_str()))
                 .collect();
-            assert_eq!(matching.len(), 1, "retry should update, not duplicate, the row");
-            assert_eq!(matching[0].delivery_status, Some(MessageDeliveryStatus::Sent));
+            assert_eq!(
+                matching.len(),
+                1,
+                "retry should update, not duplicate, the row"
+            );
+            assert_eq!(
+                matching[0].delivery_status,
+                Some(MessageDeliveryStatus::Sent)
+            );
             assert_eq!(matching[0].retry_count, Some(1));
 
             failed.message_id
