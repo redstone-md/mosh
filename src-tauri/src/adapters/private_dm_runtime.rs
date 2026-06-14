@@ -18,9 +18,9 @@ use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 pub use contracts::{
     AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
     AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
-    DmOffer, InviteCreated, MeshInfo, OutgoingCall, PendingCall, PrivateDmRuntimeError,
-    SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent, StartSessionRequest,
-    MessageDeliveryStatus,
+    DmOffer, InviteCreated, MeshInfo, MessageDeliveryStatus, OutgoingCall, PendingCall,
+    PrivateDmRuntimeError, SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent,
+    StartSessionRequest,
 };
 use invite::{build_invite_uri, listen_address, ParsedInvite};
 use wire::{
@@ -269,7 +269,8 @@ impl PrivateDmRuntime {
                     let Ok(attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row) else {
                         continue;
                     };
-                    let Ok(mut message) = serde_json::from_str::<ChatMessage>(&attempt.message_json)
+                    let Ok(mut message) =
+                        serde_json::from_str::<ChatMessage>(&attempt.message_json)
                     else {
                         continue;
                     };
@@ -354,6 +355,7 @@ impl PrivateDmRuntime {
             if let Some(session) = self.sessions.get(&session_id) {
                 if let Ok(json) = serde_json::to_vec(&session.to_persisted_record()) {
                     let _ = p.put_session(&session.session_id, &json);
+                    let _ = p.put_mls_snapshot(&session.session_id, &session.crypto.snapshot());
                     self.finalized_session_records.insert(session_id.clone());
                 }
             }
@@ -436,7 +438,15 @@ impl PrivateDmRuntime {
         body: String,
     ) -> Result<SendMessageResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let (session_id_owned, data_channel, state, message_id, sent_at_ms, ciphertext_bytes, payload) = {
+        let (
+            session_id_owned,
+            data_channel,
+            state,
+            message_id,
+            sent_at_ms,
+            ciphertext_bytes,
+            payload,
+        ) = {
             let session = self.session_mut(session_id)?;
             let ciphertext = session.crypto.encrypt(body.as_bytes())?;
             let mut message = session.stamp_message(ChatMessage {
@@ -478,7 +488,9 @@ impl PrivateDmRuntime {
                 retry_count: 0,
             };
             session.upsert_message(message);
-            session.outbound_attempts.insert(message_id.clone(), attempt);
+            session
+                .outbound_attempts
+                .insert(message_id.clone(), attempt);
             (
                 session.session_id.clone(),
                 session.data_channel.clone(),
@@ -517,14 +529,14 @@ impl PrivateDmRuntime {
             Err(error) => {
                 let error_text = error.to_string();
                 let session = self.session_mut(session_id)?;
-                let retry_count = if let Some(attempt) = session.outbound_attempts.get_mut(&message_id)
-                {
-                    attempt.delivery_status = MessageDeliveryStatus::Failed;
-                    attempt.delivery_error = Some(error_text.clone());
-                    attempt.retry_count
-                } else {
-                    0
-                };
+                let retry_count =
+                    if let Some(attempt) = session.outbound_attempts.get_mut(&message_id) {
+                        attempt.delivery_status = MessageDeliveryStatus::Failed;
+                        attempt.delivery_error = Some(error_text.clone());
+                        attempt.retry_count
+                    } else {
+                        0
+                    };
                 session.mark_delivery(
                     &message_id,
                     MessageDeliveryStatus::Failed,
@@ -554,7 +566,15 @@ impl PrivateDmRuntime {
         message_id: &str,
     ) -> Result<SendMessageResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let (session_id_owned, data_channel, state, sent_at_ms, ciphertext_bytes, retry_count, payload) = {
+        let (
+            session_id_owned,
+            data_channel,
+            state,
+            sent_at_ms,
+            ciphertext_bytes,
+            retry_count,
+            payload,
+        ) = {
             let session = self.session_mut(session_id)?;
             let (payload_b64, sent_at_ms, ciphertext_bytes) = {
                 let attempt = session
@@ -576,7 +596,12 @@ impl PrivateDmRuntime {
                 .get(message_id)
                 .map(|attempt| attempt.retry_count)
                 .unwrap_or(0);
-            session.mark_delivery(message_id, MessageDeliveryStatus::Pending, None, retry_count)?;
+            session.mark_delivery(
+                message_id,
+                MessageDeliveryStatus::Pending,
+                None,
+                retry_count,
+            )?;
             session.sync_attempt_message_json(message_id)?;
             (
                 session.session_id.clone(),
@@ -601,7 +626,12 @@ impl PrivateDmRuntime {
         let result = match publish {
             Ok(()) => {
                 let session = self.session_mut(session_id)?;
-                session.mark_delivery(message_id, MessageDeliveryStatus::Sent, None, retry_count)?;
+                session.mark_delivery(
+                    message_id,
+                    MessageDeliveryStatus::Sent,
+                    None,
+                    retry_count,
+                )?;
                 session.outbound_attempts.remove(message_id);
                 SendMessageResult {
                     session_id: session_id_owned,
@@ -780,18 +810,16 @@ impl PrivateDmRuntime {
         Ok(())
     }
 
-    fn persist_outbound_state(&mut self, session_id: &str, message_id: &str, persist_snapshot: bool) {
+    fn persist_outbound_state(
+        &mut self,
+        session_id: &str,
+        message_id: &str,
+        persist_snapshot: bool,
+    ) {
         let Some(p) = self.persistence.as_ref().cloned() else {
             return;
         };
-        let (
-            sent_at_ms,
-            message_row,
-            attempt_row,
-            snapshot,
-            session_row,
-            needs_record_refresh,
-        ) = {
+        let (sent_at_ms, message_row, attempt_row, snapshot, session_row, needs_record_refresh) = {
             let Some(session) = self.sessions.get(session_id) else {
                 return;
             };
@@ -815,9 +843,8 @@ impl PrivateDmRuntime {
                 .get(message_id)
                 .and_then(|attempt| serde_json::to_vec(attempt).ok());
             let snapshot = persist_snapshot.then(|| session.crypto.snapshot());
-            let needs_record_refresh =
-                !self.finalized_session_records.contains(session_id)
-                    && session.crypto.group_id_bytes().is_some();
+            let needs_record_refresh = !self.finalized_session_records.contains(session_id)
+                && session.crypto.group_id_bytes().is_some();
             let session_row = needs_record_refresh
                 .then(|| serde_json::to_vec(&session.to_persisted_record()).ok())
                 .flatten();
@@ -839,16 +866,19 @@ impl PrivateDmRuntime {
         }
         match attempt_row {
             Some(row) => {
-                let _ = p.put_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_DM, session_id, message_id, &row);
+                let _ =
+                    p.put_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_DM, session_id, message_id, &row);
             }
             None => {
-                let _ = p.delete_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_DM, session_id, message_id);
+                let _ =
+                    p.delete_outbound_attempt(OUTBOUND_SCOPE_PRIVATE_DM, session_id, message_id);
             }
         }
         if let Some(row) = session_row {
             let _ = p.put_session(session_id, &row);
             if needs_record_refresh {
-                self.finalized_session_records.insert(session_id.to_string());
+                self.finalized_session_records
+                    .insert(session_id.to_string());
             }
         }
     }
@@ -1132,10 +1162,7 @@ impl PrivateDmSession {
         Ok(())
     }
 
-    fn sync_attempt_message_json(
-        &mut self,
-        message_id: &str,
-    ) -> Result<(), PrivateDmRuntimeError> {
+    fn sync_attempt_message_json(&mut self, message_id: &str) -> Result<(), PrivateDmRuntimeError> {
         let message_json = self
             .messages
             .iter()
@@ -2013,6 +2040,62 @@ mod tests {
     }
 
     #[test]
+    fn waiting_creator_invite_survives_restart() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!(
+            "mosh-dm-waiting-invite-{}.redb",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [29u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let (session_id, invite_uri) = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42170,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            (invite.session_id, invite.invite_uri)
+        };
+
+        let mut revived =
+            PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), Some(persistence));
+        revived.rehydrate();
+
+        let listing = revived.list_sessions().expect("listing should pass");
+        let session = listing
+            .sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .expect("waiting invite should rehydrate");
+
+        assert_eq!(session.state, "waiting");
+        assert_eq!(session.role, "alice");
+        assert_eq!(session.invite_uri.as_deref(), Some(invite_uri.as_str()));
+        assert!(session.messages.is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
     fn history_and_session_survive_restart() {
         use crate::adapters::persistence::Persistence;
         use std::path::PathBuf;
@@ -2110,10 +2193,7 @@ mod tests {
         drain_received_messages();
 
         let mut db_path: PathBuf = std::env::temp_dir();
-        db_path.push(format!(
-            "mosh-dm-failed-send-{}.redb",
-            std::process::id()
-        ));
+        db_path.push(format!("mosh-dm-failed-send-{}.redb", std::process::id()));
         let _ = std::fs::remove_file(&db_path);
 
         let persistence =
@@ -2137,7 +2217,10 @@ mod tests {
             let result = alice
                 .send_message(&invite.session_id, "hello failed history".to_string())
                 .expect("send should return failed result");
-            assert_eq!(result.delivery_status, contracts::MessageDeliveryStatus::Failed);
+            assert_eq!(
+                result.delivery_status,
+                contracts::MessageDeliveryStatus::Failed
+            );
             assert_eq!(
                 result.delivery_error.as_deref(),
                 Some("Moss error: simulated publish failure")
@@ -2227,15 +2310,24 @@ mod tests {
                 .retry_message(&invite.session_id, &failed.message_id)
                 .expect("retry should succeed");
             assert_eq!(retried.message_id, failed.message_id);
-            assert_eq!(retried.delivery_status, contracts::MessageDeliveryStatus::Sent);
+            assert_eq!(
+                retried.delivery_status,
+                contracts::MessageDeliveryStatus::Sent
+            );
 
-            let snapshot = alice.poll_session(&invite.session_id).expect("poll should pass");
+            let snapshot = alice
+                .poll_session(&invite.session_id)
+                .expect("poll should pass");
             let matching: Vec<&ChatMessage> = snapshot
                 .messages
                 .iter()
                 .filter(|message| message.message_id.as_deref() == Some(failed.message_id.as_str()))
                 .collect();
-            assert_eq!(matching.len(), 1, "retry should update, not duplicate, the row");
+            assert_eq!(
+                matching.len(),
+                1,
+                "retry should update, not duplicate, the row"
+            );
             assert_eq!(
                 matching[0].delivery_status,
                 Some(contracts::MessageDeliveryStatus::Sent)
