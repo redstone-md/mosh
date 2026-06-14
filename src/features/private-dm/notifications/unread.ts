@@ -4,6 +4,17 @@ export interface ConversationCount {
   readonly messageCount: number;
 }
 
+export interface MessageAuthor {
+  readonly from_device: string;
+}
+
+export function countMessagesFromOthers(
+  messages: readonly MessageAuthor[],
+  ownDeviceName: string,
+): number {
+  return messages.filter((message) => message.from_device !== ownDeviceName).length;
+}
+
 /** A conversation that gained `delta` messages since it was last seen. */
 export interface NewMessages {
   readonly id: string;

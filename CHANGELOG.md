@@ -30,6 +30,10 @@ All notable changes to Mosh are documented here. Format follows
   encrypted message proves the peer is already in the MLS session, the runtime
   now reports the DM as ready instead of leaving the composer stuck in
   `waiting`.
+- **Restored DMs wait for live Moss presence.** Historical MLS state no longer
+  marks a DM writable by itself after relaunch; the composer waits until Moss
+  reports a live peer, and unread notifications ignore locally-authored
+  messages.
 - **Mobile UX pass.** Expandable conversation rail, full-screen mobile
   diagnostics, ordered mobile topbar controls, a stabilized and tighter compact
   chat header, compact composer and session rail, and reduced chrome on grouped
