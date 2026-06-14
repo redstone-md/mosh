@@ -300,6 +300,9 @@ impl PrivateDmRuntime {
                 .map(|message| message.from_device.as_str())
                 .find(|name| !name.is_empty() && *name != rec.display_name)
                 .map(str::to_string);
+            if session.peer_display_name.is_some() && session.crypto.is_ready() {
+                session.peer_joined = true;
+            }
             // DUP-GUARD: re-seed persisted_counts so the next persist_session_tail
             // does NOT re-append the messages we just loaded.
             self.persisted_counts
@@ -1242,6 +1245,14 @@ impl PrivateDmSession {
         }
     }
 
+    fn note_verified_peer_activity(&mut self, from_device: &str) {
+        let is_peer = !from_device.is_empty() && from_device != self.device_id;
+        self.note_peer_name(from_device);
+        if is_peer && self.crypto.is_ready() {
+            self.peer_joined = true;
+        }
+    }
+
     fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
 
@@ -1291,9 +1302,9 @@ impl PrivateDmSession {
                 from_device,
                 manifest_ciphertext_b64,
             } if session_id == self.session_id && participant_id != self.participant_id => {
-                self.note_peer_name(&from_device);
                 let manifest_json = self.crypto.decrypt(&decode(&manifest_ciphertext_b64)?)?;
                 let manifest: AttachmentManifest = decode_json(&manifest_json)?;
+                self.note_verified_peer_activity(&from_device);
                 self.accept_incoming_manifest(from_device, manifest)
             }
             ControlEnvelope::CallOffer {
@@ -1306,9 +1317,9 @@ impl PrivateDmSession {
                 if self.call.is_some() {
                     return Ok(());
                 }
-                self.note_peer_name(&from_device);
                 let plaintext = self.crypto.decrypt(&decode(&offer_ciphertext_b64)?)?;
                 let body: CallOfferBody = decode_json(&plaintext)?;
+                self.note_verified_peer_activity(&from_device);
                 let channel = voice_call_channel(&call_id);
                 self.call = Some(CallState::ringing(
                     call_id,
@@ -1412,7 +1423,7 @@ impl PrivateDmSession {
         }
 
         let plaintext = self.crypto.decrypt(&decode(&envelope.ciphertext_b64)?)?;
-        self.note_peer_name(&envelope.from_device);
+        self.note_verified_peer_activity(&envelope.from_device);
         let message = self.stamp_message(ChatMessage {
             from_device: envelope.from_device,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
@@ -2093,6 +2104,152 @@ mod tests {
         assert!(session.messages.is_empty());
 
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn restored_inbound_history_marks_session_ready() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-dm-inbound-ready-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [31u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        let session_id = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42171,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            let message_id = "inbound-000001";
+            let sent_at_ms = 1;
+            let message = ChatMessage {
+                from_device: "Bob".to_string(),
+                body: "hello from bob".to_string(),
+                message_id: Some(message_id.to_string()),
+                sent_at_ms: Some(sent_at_ms),
+                attachment: None,
+                call_event: None,
+                delivery_status: None,
+                delivery_error: None,
+                retryable: None,
+                retry_count: None,
+            };
+            let record = contracts::PersistedMessage {
+                conversation_id: invite.session_id.clone(),
+                sent_at_ms,
+                message_id: message_id.to_string(),
+                message,
+            };
+            persistence
+                .append_message(
+                    &invite.session_id,
+                    sent_at_ms,
+                    message_id,
+                    &serde_json::to_vec(&record).expect("record should serialize"),
+                )
+                .expect("inbound message should persist");
+            invite.session_id
+        };
+
+        let mut revived =
+            PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), Some(persistence));
+        revived.rehydrate();
+
+        let listing = revived.list_sessions().expect("listing should pass");
+        let session = listing
+            .sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .expect("session should rehydrate");
+
+        assert_eq!(session.peer_display_name, "Bob");
+        assert_eq!(session.state, "ready");
+        assert_eq!(session.messages.len(), 1);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn decrypted_inbound_data_marks_session_ready() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42172,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let mut bob_crypto = MlsSessionCrypto::new("Bob").expect("Bob crypto should init");
+        let bob_participant = "bob-participant".to_string();
+        let key_package = bob_crypto
+            .key_package_bytes()
+            .expect("Bob key package should build");
+
+        let (welcome, tree) = {
+            let session = alice
+                .sessions
+                .get_mut(&invite.session_id)
+                .expect("Alice session should exist");
+            let result = session
+                .crypto
+                .add_peer(&key_package)
+                .expect("Alice should add Bob");
+            session.peer_joined = false;
+            result
+        };
+        bob_crypto
+            .join_welcome(&welcome, &tree)
+            .expect("Bob should join");
+        let ciphertext = bob_crypto
+            .encrypt(b"hello after flag loss")
+            .expect("Bob should encrypt");
+
+        let payload = serde_json::to_vec(&DataEnvelope {
+            session_id: invite.session_id.clone(),
+            participant_id: bob_participant,
+            from_device: "Bob".to_string(),
+            message_id: Some("live-inbound-000001".to_string()),
+            sent_at_ms: Some(2),
+            ciphertext_b64: encode(&ciphertext),
+        })
+        .expect("data envelope should serialize");
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+        assert_eq!(session.state(), "waiting");
+
+        session
+            .handle_data(payload)
+            .expect("Alice should decrypt inbound data");
+
+        assert_eq!(session.state(), "ready");
+        assert_eq!(session.peer_display_name.as_deref(), Some("Bob"));
     }
 
     #[test]

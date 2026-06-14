@@ -26,6 +26,10 @@ All notable changes to Mosh are documented here. Format follows
 - **Waiting private-DM invites survive restart.** Creating an invite now persists
   the creator's MLS snapshot immediately, so a waiting DM session reappears
   after relaunch and discovery can continue instead of dropping the dialog.
+- **Restored DMs become writable after inbound activity.** If an incoming
+  encrypted message proves the peer is already in the MLS session, the runtime
+  now reports the DM as ready instead of leaving the composer stuck in
+  `waiting`.
 - **Mobile UX pass.** Expandable conversation rail, full-screen mobile
   diagnostics, ordered mobile topbar controls, a stabilized and tighter compact
   chat header, compact composer and session rail, and reduced chrome on grouped
