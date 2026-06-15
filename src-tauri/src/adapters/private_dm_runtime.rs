@@ -30,6 +30,13 @@ use wire::{
 
 const OUTBOUND_SCOPE_PRIVATE_DM: &str = "private_dm";
 
+// Minimum gap between MLS handshake control re-publishes. The KeyPackage and
+// Welcome exchange is a one-shot publish, but gossip does not buffer for a peer
+// that has not meshed yet, so the first publish is routinely lost while
+// discovery is still in progress (or the link is flapping). Bob re-sends his
+// KeyPackage on this cadence until he processes the Welcome.
+const HANDSHAKE_RESEND_MS: u64 = 2000;
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -117,6 +124,13 @@ struct PrivateDmSession {
     attachment_slots: HashMap<String, AttachmentSlot>,
     outbound_attempts: HashMap<String, OutboundAttemptRecord>,
     call: Option<CallState>,
+    // MLS handshake retransmit state. Bob keeps his published KeyPackage here
+    // and re-sends it (throttled by HANDSHAKE_RESEND_MS) until he joins; Alice
+    // caches the Welcome she produced so she can re-answer a repeat KeyPackage
+    // without re-running add_members (which would advance the group epoch).
+    pending_key_package: Option<Vec<u8>>,
+    pending_welcome: Option<Vec<u8>>,
+    last_handshake_send_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -399,10 +413,16 @@ impl PrivateDmRuntime {
             from_device: request.display_name.clone(),
             key_package_b64: encode(&key_package),
         };
+        // Keep the serialized KeyPackage so the drain loop can re-publish it
+        // until the Welcome arrives. The first publish below often lands before
+        // the mesh link to Alice exists and is silently dropped.
+        let key_package_payload = serde_json::to_vec(&envelope)
+            .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
 
-        publish_json(&node, &control_channel(&invite.session_id), &envelope)?;
+        node.publish(&control_channel(&invite.session_id), &key_package_payload)
+            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
 
-        let session = PrivateDmSession::new(
+        let mut session = PrivateDmSession::new(
             SessionRole::Bob,
             request.display_name,
             participant_id,
@@ -416,6 +436,8 @@ impl PrivateDmRuntime {
             crypto,
             Arc::clone(&self.attachment_store),
         );
+        session.pending_key_package = Some(key_package_payload);
+        session.last_handshake_send_ms = now_ms();
 
         let session_id = session.session_id.clone();
         self.sessions.insert(session_id.clone(), session);
@@ -805,9 +827,14 @@ impl PrivateDmRuntime {
                 }
             }
         }
-        // Keep every active download fed without waiting on a user action.
+        // Keep every active download fed, and re-drive any incomplete MLS
+        // handshake, without waiting on a user action. The UI polls roughly
+        // once a second, so this is the heartbeat that retransmits a KeyPackage
+        // whose first publish was dropped before the mesh link formed.
+        let now = now_ms();
         for session in self.sessions.values_mut() {
             session.pump_attachment_requests();
+            session.pump_handshake(now);
         }
         self.persist_session_tail();
         Ok(())
@@ -1082,6 +1109,9 @@ impl PrivateDmSession {
             attachment_slots: HashMap::new(),
             outbound_attempts: HashMap::new(),
             call: None,
+            pending_key_package: None,
+            pending_welcome: None,
+            last_handshake_send_ms: 0,
         }
     }
 
@@ -1253,6 +1283,33 @@ impl PrivateDmSession {
         }
     }
 
+    /// True when a pending KeyPackage should be re-published: the handshake is
+    /// not complete, we still hold the payload, and the throttle window elapsed.
+    fn handshake_resend_due(&self, now_ms: u64) -> bool {
+        !self.peer_joined
+            && self.pending_key_package.is_some()
+            && now_ms.saturating_sub(self.last_handshake_send_ms) >= HANDSHAKE_RESEND_MS
+    }
+
+    /// Best-effort retransmit of the joiner's KeyPackage while the MLS handshake
+    /// is still incomplete. Driven by the inbound drain loop (≈1/s), throttled
+    /// to HANDSHAKE_RESEND_MS. Once the peer has joined the pending payload is
+    /// dropped so nothing is re-sent.
+    fn pump_handshake(&mut self, now_ms: u64) {
+        if self.peer_joined {
+            self.pending_key_package = None;
+            return;
+        }
+        if !self.handshake_resend_due(now_ms) {
+            return;
+        }
+        let Some(payload) = self.pending_key_package.clone() else {
+            return;
+        };
+        self.last_handshake_send_ms = now_ms;
+        let _ = self.node.publish(&self.control_channel, &payload);
+    }
+
     fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
 
@@ -1263,10 +1320,20 @@ impl PrivateDmSession {
                 from_device,
                 key_package_b64,
             } if self.is_alice_session(&session_id, &participant_id) => {
+                self.note_peer_name(&from_device);
+                // Bob re-sends his KeyPackage until he sees the Welcome. If we
+                // already added him, our first Welcome was likely lost before
+                // his node meshed, so re-answer with the cached copy rather than
+                // calling add_members again (which advances the group epoch).
                 if self.peer_joined {
+                    if let Some(welcome_payload) = self.pending_welcome.clone() {
+                        return self
+                            .node
+                            .publish(&self.control_channel, &welcome_payload)
+                            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()));
+                    }
                     return Ok(());
                 }
-                self.note_peer_name(&from_device);
                 let key_package = decode(&key_package_b64)?;
                 let (welcome, tree) = self.crypto.add_peer(&key_package)?;
                 self.peer_joined = true;
@@ -1277,8 +1344,13 @@ impl PrivateDmSession {
                     welcome_b64: encode(&welcome),
                     ratchet_tree_b64: encode(&tree),
                 };
+                let welcome_payload = serde_json::to_vec(&envelope)
+                    .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
+                self.pending_welcome = Some(welcome_payload.clone());
 
-                publish_json(&self.node, &self.control_channel, &envelope)
+                self.node
+                    .publish(&self.control_channel, &welcome_payload)
+                    .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
             }
             ControlEnvelope::Welcome {
                 session_id,
@@ -1294,6 +1366,8 @@ impl PrivateDmSession {
                 self.crypto
                     .join_welcome(&decode(&welcome_b64)?, &decode(&ratchet_tree_b64)?)?;
                 self.peer_joined = true;
+                // Joined: stop retransmitting the KeyPackage.
+                self.pending_key_package = None;
                 Ok(())
             }
             ControlEnvelope::AttachmentManifest {
@@ -2261,6 +2335,129 @@ mod tests {
         assert!(session.peer_joined);
         assert_eq!(session.state(), "waiting");
         assert_eq!(session.peer_display_name.as_deref(), Some("Bob"));
+    }
+
+    // D2 regression: the KeyPackage->Welcome handshake is a one-shot publish.
+    // If it lands before the mesh link forms it is lost, and nothing used to
+    // re-send it, so the session hung on "waiting" forever even after the peer
+    // joined the transport. Bob must keep the KeyPackage and re-send it until
+    // he joins.
+    #[test]
+    fn bob_retransmits_key_package_until_joined() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42180,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let mut bob = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        bob.accept_invite(AcceptInviteRequest {
+            invite_uri: invite.invite_uri.clone(),
+            display_name: "Bob".to_string(),
+            listen_port: 42181,
+            static_peer: Some("127.0.0.1:42180".to_string()),
+        })
+        .expect("Bob should accept invite");
+
+        let session = bob
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Bob session should exist");
+        assert!(
+            session.pending_key_package.is_some(),
+            "Bob retains the KeyPackage for retransmit"
+        );
+        assert!(!session.peer_joined);
+
+        // Throttle from a known baseline (accept_invite stamped real-now).
+        session.last_handshake_send_ms = 0;
+        assert!(
+            session.handshake_resend_due(HANDSHAKE_RESEND_MS + 1),
+            "resend is due once the throttle window elapses"
+        );
+        assert!(
+            !session.handshake_resend_due(HANDSHAKE_RESEND_MS - 1),
+            "resend is suppressed inside the throttle window"
+        );
+
+        // Welcome processed -> handshake complete -> stop retransmitting.
+        session.peer_joined = true;
+        session.pump_handshake(HANDSHAKE_RESEND_MS * 10);
+        assert!(
+            session.pending_key_package.is_none(),
+            "joining clears the pending KeyPackage"
+        );
+        assert!(!session.handshake_resend_due(HANDSHAKE_RESEND_MS * 100));
+    }
+
+    // D2 regression: Alice's Welcome can also be lost before Bob meshes. Since
+    // add_members cannot run twice (it would advance the group epoch), Alice
+    // must cache the Welcome and re-answer Bob's repeated KeyPackage with it.
+    #[test]
+    fn alice_caches_welcome_and_reanswers_repeat_key_package() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42182,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let mut bob_crypto = MlsSessionCrypto::new("Bob").expect("Bob crypto should init");
+        let key_package_b64 = encode(
+            &bob_crypto
+                .key_package_bytes()
+                .expect("Bob key package should build"),
+        );
+        let payload = serde_json::to_vec(&ControlEnvelope::KeyPackage {
+            session_id: invite.session_id.clone(),
+            participant_id: "bob-participant".to_string(),
+            from_device: "Bob".to_string(),
+            key_package_b64,
+        })
+        .expect("KeyPackage envelope should serialize");
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+
+        session
+            .handle_control(payload.clone())
+            .expect("first KeyPackage should add Bob");
+        assert!(session.peer_joined);
+        assert!(
+            session.pending_welcome.is_some(),
+            "Alice caches the Welcome she produced"
+        );
+        assert_eq!(session.crypto.member_count(), 2);
+
+        // Bob's retransmit must be re-answered, never trigger a second add.
+        session
+            .handle_control(payload)
+            .expect("repeat KeyPackage should re-answer with the cached Welcome");
+        assert_eq!(
+            session.crypto.member_count(),
+            2,
+            "repeat KeyPackage must not re-run add_members"
+        );
+        assert!(session.pending_welcome.is_some());
     }
 
     #[test]
