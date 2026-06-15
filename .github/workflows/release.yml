@@ -31,9 +31,12 @@ jobs:
           # Native per-arch macOS builds: each runner compiles its own arch, so
           # there is no cross-compile and moss:prepare's single-arch dylib is
           # correct. (A universal build would need a lipo'd fat dylib instead.)
-          - platform: macos-14 # Apple Silicon (arm64)
+          - platform: macos-15 # Apple Silicon (arm64)
             args: ''
-          - platform: macos-13 # Intel (x86_64)
+          # macos-13 was retired (Dec 2025); macos-15-intel is the last Intel
+          # image (x86_64), supported until ~Aug 2027. Runner OS does not set
+          # the app's minimum macOS — that's the deployment target.
+          - platform: macos-15-intel # Intel (x86_64)
             args: ''
     runs-on: ${{ matrix.platform }}
     steps:
