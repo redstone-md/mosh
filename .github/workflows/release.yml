@@ -26,8 +26,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows-only for now. Add macos-latest / ubuntu-22.04 here later.
           - platform: windows-latest
+            args: ''
+          # Native per-arch macOS builds: each runner compiles its own arch, so
+          # there is no cross-compile and moss:prepare's single-arch dylib is
+          # correct. (A universal build would need a lipo'd fat dylib instead.)
+          - platform: macos-14 # Apple Silicon (arm64)
+            args: ''
+          - platform: macos-13 # Intel (x86_64)
             args: ''
     runs-on: ${{ matrix.platform }}
     steps:
