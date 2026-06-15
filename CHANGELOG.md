@@ -4,6 +4,29 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-06-15
+
+### Fixed
+- **Private DMs no longer get stuck on "waiting" after the peer connects.** The
+  MLS handshake (KeyPackage → Welcome) was published exactly once, before the
+  Moss mesh link to the peer existed. Gossip does not buffer for an unmeshed
+  peer, so on a fresh invite the handshake frame was routinely lost and the
+  conversation hung on "waiting" even though the transport reported the peer as
+  joined. The joiner now re-sends its KeyPackage until the handshake completes,
+  and the creator caches and re-answers the Welcome, so discovery flapping or a
+  slow mesh no longer deadlocks the dialog.
+- **Waiting private-DM invites survive restart.** Creating an invite now persists
+  the creator's MLS snapshot immediately, so a waiting DM session reappears
+  after relaunch and discovery can continue instead of dropping the dialog.
+- **Restored DMs become writable after inbound activity.** If an incoming
+  encrypted message proves the peer is already in the MLS session, the runtime
+  now reports the DM as ready instead of leaving the composer stuck in
+  `waiting`.
+- **Restored DMs wait for live Moss presence.** Historical MLS state no longer
+  marks a DM writable by itself after relaunch; the composer waits until Moss
+  reports a live peer, and unread notifications ignore locally-authored
+  messages.
+
 ## [0.2.7] - 2026-06-14
 
 ### Added
@@ -23,17 +46,6 @@ All notable changes to Mosh are documented here. Format follows
   a more readable hierarchy.
 
 ### Fixed
-- **Waiting private-DM invites survive restart.** Creating an invite now persists
-  the creator's MLS snapshot immediately, so a waiting DM session reappears
-  after relaunch and discovery can continue instead of dropping the dialog.
-- **Restored DMs become writable after inbound activity.** If an incoming
-  encrypted message proves the peer is already in the MLS session, the runtime
-  now reports the DM as ready instead of leaving the composer stuck in
-  `waiting`.
-- **Restored DMs wait for live Moss presence.** Historical MLS state no longer
-  marks a DM writable by itself after relaunch; the composer waits until Moss
-  reports a live peer, and unread notifications ignore locally-authored
-  messages.
 - **Mobile UX pass.** Expandable conversation rail, full-screen mobile
   diagnostics, ordered mobile topbar controls, a stabilized and tighter compact
   chat header, compact composer and session rail, and reduced chrome on grouped
@@ -162,5 +174,6 @@ All notable changes to Mosh are documented here. Format follows
   DMs.
 - Secure erasure of stale overwritten bytes in the database file is out of scope.
 
+[0.2.8]: https://github.com/redstone-md/mosh/releases/tag/v0.2.8
 [0.2.7]: https://github.com/redstone-md/mosh/releases/tag/v0.2.7
 [0.2.0]: https://github.com/redstone-md/mosh/releases/tag/v0.2.0
