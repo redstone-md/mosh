@@ -6,6 +6,8 @@ Documented (no behavior change): **#23** `add_peer` — correct for its only cal
 
 Round 5: **#5** overlapping voice poll drains (in-flight `draining` guard), **#6** voice setup/teardown ref race (`cancelled` check after each setup await + stop the handle), plus extracted `drainCallFrames` into its own module — that drain logic is unit-tested (`call-drain.test.ts`); the in-flight guard and cancelled-after-await are lifecycle fixes covered by reasoning + typecheck (a full hook test needs fake-timers + AudioContext/MediaStream mocks). LOW **ciphertext_store** skip-bad-lines (one torn JSONL line no longer bricks the whole history).
 
+Round 7: added a fake Web Audio / WebCodecs test harness (`fake-web-audio.ts`), then fixed **#15** ringtone leak (oscillator stop backstop + close-once on ended), **#13** playback latency resync (cap drift after a stall), **#12** gap-aware decoder timestamps (`pushFrame(seq, frame)`, timestamp from masked seq so dropped frames aren't pretended contiguous). All three unit-tested against the harness.
+
 Round 6: **#17** message_id collision — new `adapters/message_id.rs` `MessageIdGen` (monotonic per-session `{ms}-{seq}`, `Cell` keeps `stamp_message` `&self`), wired into DM/group/channel. Unit-tested (`message_id` tests). The `len()`-based id is gone, so a same-ms double-stamp can no longer collide. (The persist-tail `{ts}-{idx}` fallback is untouched — it only fires for id-less messages, which is now rare since every stamped message gets a counter id.)
 
 False positives: **#14** (jitter-buffer, see below). **#10** — `sendNotification` is synchronous (`void`, not a Promise), so there is no async rejection to swallow; the existing try/catch was already correct. The tsc error on the attempted `.catch` is what surfaced it. Kept the tested `notificationBody` extraction from that pass.
@@ -39,22 +41,6 @@ Fix: persist the Sent/cleared state in the same write that records the publish o
 Claimed force-skip could emit out of order / move the cursor backwards. TDD'd it (`jitter-buffer.test.ts` "emits strictly increasing seqs across a forced skip"): the test passed on unmodified code. The invariant *all pending keys > cursor* holds — `push` rejects `seq <= cursor`, and the cursor only ever advances to a pending key (which is therefore > cursor), so the force-skip min is always > cursor. No bug; regression test kept.
 
 ## MEDIUM
-
-### 12. · Opus playback timestamp ignores gaps — `voice-call/audio-playback.ts:69-83`
-Decoder `timestamp` increments by a fixed `20_000` µs per `pushFrame` regardless of `seq`. When the jitter buffer force-skips a gap, the missing 20 ms is never accounted for → audio drifts/compresses and Opus decoder state is fed non-gap-aware timestamps on loss.
-Fix: `timestamp = Number(seq) * 20_000`.
-
-### 13. · Playback `nextStart` never resets after underrun — `voice-call/audio-playback.ts:45-47`
-`nextStart = start + buffer.duration` accumulates against `context.currentTime`. After a stall, late frames bunch up and latency grows unbounded across a call.
-Fix: if `nextStart - context.currentTime` > ~200 ms, reset `nextStart = context.currentTime`.
-
-### 14. · Jitter force-skip jumps to global-min seq — `voice-call/jitter-buffer.ts:44-49`
-On `pending.size > gapCap` with `next` missing, it jumps `next` to the smallest remaining seq without checking it's `> cursor` → can re-emit already-played territory / emit out of order.
-Fix: skip to smallest pending key strictly `> this.cursor`; guard emit with `next > cursor`.
-
-### 15. · Ringtone leak — `voice-call/ringtone.ts:37-49`
-Oscillators are `start()`ed with no stop time; the 30-beat loop only schedules envelope automation. If `stop()` is never called (auto-answer path), oscillators run indefinitely and the AudioContext is never closed.
-Fix: `osc.stop(start + 30)` and `context.close()` on the last oscillator's `onended` as a backstop.
 
 ### 18. · Admin-leave handoff lost — `private_group_runtime.rs:1055-1075`
 Admin `close` publishes a self-remove Commit + `AdminHandoff` one-shot (publish even treats `NoPeers` as success), then removes itself. If either frame is dropped by gossip, members keep `current_admin_fingerprint` pointing at the departed admin → group permanently frozen for joins/removals (all admin-gated).
