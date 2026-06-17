@@ -29,11 +29,16 @@ interface UsePrivateDmSnapshotsOptions {
   readonly onError: Dispatch<SetStateAction<string | undefined>>;
 }
 
-function nextActiveTarget(
+function targetKey(target: ChatTarget): string {
+  return target.type === "channel" ? `channel:${target.name}` : `${target.type}:${target.id}`;
+}
+
+export function nextActiveTarget(
   current: ChatTarget | null,
   sessions: readonly SessionSnapshot[],
   channels: readonly ChannelSnapshot[],
   groups: readonly GroupSnapshot[],
+  seen: ReadonlySet<string>,
 ): ChatTarget | null {
   if (current?.type === "dm" && sessions.some((session) => session.session_id === current.id)) {
     return current;
@@ -42,6 +47,13 @@ function nextActiveTarget(
     return current;
   }
   if (current?.type === "group" && groups.some((group) => group.group_id === current.id)) {
+    return current;
+  }
+  // current set but not in this snapshot. If we've never observed it, it's a
+  // freshly-created target the backend hasn't listed yet (an in-flight poll
+  // raced the create) — keep it. Only auto-switch away once it was seen and is
+  // now gone (genuinely deleted), or when there is no current at all.
+  if (current && !seen.has(targetKey(current))) {
     return current;
   }
   if (sessions.length > 0) {
@@ -68,6 +80,9 @@ export function usePrivateDmSnapshots({
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
+  // Every target id we've ever seen in a snapshot. Lets nextActiveTarget tell a
+  // never-listed (freshly created) target apart from a once-listed deleted one.
+  const seenRef = useRef(new Set<string>());
 
   const refresh = useCallback(
     async (quiet = false) => {
@@ -90,12 +105,17 @@ export function usePrivateDmSnapshots({
         setSessions(sessionList.sessions);
         setChannels(channelList.channels);
         setGroups(groupList.groups);
+        const seen = seenRef.current;
+        for (const session of sessionList.sessions) seen.add(`dm:${session.session_id}`);
+        for (const group of groupList.groups) seen.add(`group:${group.group_id}`);
+        for (const channel of channelList.channels) seen.add(`channel:${channel.name}`);
         setActive((current) =>
           nextActiveTarget(
             current,
             sessionList.sessions,
             channelList.channels,
             groupList.groups,
+            seen,
           ),
         );
       };
