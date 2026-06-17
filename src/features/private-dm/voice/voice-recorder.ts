@@ -5,6 +5,10 @@ const MIME_CANDIDATES = [
   "audio/webm;codecs=opus",
   "audio/ogg;codecs=opus",
   "audio/webm",
+  // WKWebView (macOS Tauri) supports neither webm nor ogg for MediaRecorder,
+  // only MP4/AAC. Listed last so Chromium keeps picking webm/opus.
+  "audio/mp4;codecs=mp4a.40.2",
+  "audio/mp4",
 ];
 
 /** Returns the first MediaRecorder MIME type the platform supports. */
