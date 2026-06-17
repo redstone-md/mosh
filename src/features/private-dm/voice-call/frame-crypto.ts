@@ -7,7 +7,7 @@
 
 export const CALLER_DIRECTION_BIT = 0n;
 export const CALLEE_DIRECTION_BIT = 1n << 63n;
-const SEQ_VALUE_MASK = (1n << 63n) - 1n;
+export const SEQ_VALUE_MASK = (1n << 63n) - 1n;
 
 function b64ToBytes(value: string): Uint8Array {
   const binary = atob(value);
@@ -94,7 +94,12 @@ export async function sealFrame(
   directionBit: bigint,
   payload: Uint8Array,
 ): Promise<Uint8Array> {
-  const seq = (seqValue & SEQ_VALUE_MASK) | directionBit;
+  // Never mask-wrap: a seq >= 2^63 would fold onto a low seq and reuse its
+  // AES-GCM nonce on this key+direction. Fail loudly instead.
+  if (seqValue < 0n || seqValue > SEQ_VALUE_MASK) {
+    throw new Error("call frame seq out of range");
+  }
+  const seq = seqValue | directionBit;
   const nonce = buildNonce(noncePrefixBase64, seq);
   const cipherBuffer = await crypto.subtle.encrypt(
     { name: "AES-GCM", iv: nonce },

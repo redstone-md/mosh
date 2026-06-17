@@ -79,14 +79,27 @@ impl SecureSecretStore for OsSecureSecretStore {
     }
 }
 
-fn ensure_native_store() -> Result<(), SecureStorageError> {
-    static NATIVE_STORE: OnceLock<Result<(), String>> = OnceLock::new();
+/// Runs `init` and caches a `()` marker only on success. A failure is returned
+/// without being memoized, so a transient error (locked keychain at boot) is
+/// retried on the next call instead of poisoning the store for the process.
+fn cache_on_success<E>(cell: &OnceLock<()>, init: impl FnOnce() -> Result<(), E>) -> Result<(), E> {
+    if cell.get().is_some() {
+        return Ok(());
+    }
+    let result = init();
+    if result.is_ok() {
+        let _ = cell.set(());
+    }
+    result
+}
 
-    NATIVE_STORE
-        .get_or_init(|| keyring::use_native_store(false).map_err(|error| error.to_string()))
-        .as_ref()
-        .map_err(|error| SecureStorageError::Backend(format!("{NATIVE_STORE_ERROR}: {error}")))
-        .copied()
+fn ensure_native_store() -> Result<(), SecureStorageError> {
+    static NATIVE_STORE: OnceLock<()> = OnceLock::new();
+
+    cache_on_success(&NATIVE_STORE, || {
+        keyring::use_native_store(false)
+            .map_err(|error| SecureStorageError::Backend(format!("{NATIVE_STORE_ERROR}: {error}")))
+    })
 }
 
 #[cfg(test)]
@@ -111,6 +124,20 @@ mod tests {
             .expect("native store should delete secret");
 
         assert_eq!(loaded, secret);
+    }
+
+    #[test]
+    fn cache_on_success_retries_after_error_then_caches() {
+        static CELL: OnceLock<()> = OnceLock::new();
+        // A transient failure must NOT be memoized.
+        assert!(cache_on_success(&CELL, || Err::<(), &str>("transient")).is_err());
+        // A later success caches the result.
+        assert!(cache_on_success(&CELL, || Ok::<(), &str>(())).is_ok());
+        // Once cached, the init closure is never run again.
+        assert!(cache_on_success(&CELL, || -> Result<(), &str> {
+            panic!("init must not run once cached")
+        })
+        .is_ok());
     }
 
     #[test]

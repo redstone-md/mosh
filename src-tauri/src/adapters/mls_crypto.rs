@@ -91,6 +91,11 @@ impl MlsSessionCrypto {
             .map_err(|error| MlsCryptoError::Codec(error.to_string()))
     }
 
+    /// 2-PARTY ONLY. Adds a peer and returns just `(welcome, tree)`, discarding
+    /// the commit. That is safe only because the single new member joins via the
+    /// welcome and there are no *other* existing members who would need the
+    /// commit to advance their epoch. For a group of 3+, use `add_members` and
+    /// broadcast `commit_bytes` to existing members, or they desync.
     pub fn add_peer(
         &mut self,
         key_package_bytes: &[u8],
@@ -343,7 +348,8 @@ impl MlsSessionCrypto {
         snapshot: &[u8],
         group_id: &[u8],
     ) -> Result<Self, MlsCryptoError> {
-        let provider = PersistentProvider::from_snapshot(snapshot);
+        let provider = PersistentProvider::from_snapshot(snapshot)
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
         let signer =
             SignatureKeyPair::read(provider.storage(), signer_public, SignatureScheme::ED25519)
                 .ok_or_else(|| MlsCryptoError::OpenMls("signer not found in snapshot".into()))?;

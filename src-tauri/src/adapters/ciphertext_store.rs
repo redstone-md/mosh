@@ -92,11 +92,21 @@ impl CiphertextHistoryStore for JsonlCiphertextHistoryStore {
             Err(error) => return Err(to_io_error(error)),
         };
 
-        contents
+        // Skip unparseable lines instead of failing the whole read: a torn
+        // append after a crash must not brick the entire conversation history.
+        // The bytes are authenticated MLS ciphertext, so a dropped record is
+        // recoverable, an unreadable history is not.
+        Ok(contents
             .lines()
-            .map(parse_record)
-            .filter_map(|record| filter_record(record, conversation_id))
-            .collect()
+            .filter_map(|line| match parse_record(line) {
+                Ok(record) if record.conversation_id == conversation_id => Some(record),
+                Ok(_) => None,
+                Err(error) => {
+                    eprintln!("skipping unparseable ciphertext history line: {error}");
+                    None
+                }
+            })
+            .collect())
     }
 }
 
@@ -134,17 +144,6 @@ fn parse_record(line: &str) -> Result<CiphertextRecord, CiphertextStoreError> {
     let persisted: PersistedCiphertextRecord = serde_json::from_str(line).map_err(to_json_error)?;
 
     persisted.try_into()
-}
-
-fn filter_record(
-    record: Result<CiphertextRecord, CiphertextStoreError>,
-    conversation_id: &str,
-) -> Option<Result<CiphertextRecord, CiphertextStoreError>> {
-    match record {
-        Ok(record) if record.conversation_id == conversation_id => Some(Ok(record)),
-        Ok(_) => None,
-        Err(error) => Some(Err(error)),
-    }
 }
 
 fn to_io_error(error: std::io::Error) -> CiphertextStoreError {
@@ -186,6 +185,38 @@ mod tests {
         assert!(std::fs::read_to_string(store.path())
             .expect("history should be readable")
             .contains("ciphertext_b64"));
+    }
+
+    #[test]
+    fn list_skips_unparseable_lines_instead_of_failing() {
+        // Own directory — this test writes a garbage line and must not pollute
+        // the file the other (parallel) tests read.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("ciphertext-store-skip-test");
+        let store = JsonlCiphertextHistoryStore::new(root);
+        cleanup_store(&store);
+        store
+            .append(record("msg-1", CONVERSATION_A, b"one"))
+            .expect("first append should pass");
+        // Simulate a torn/corrupt append between two good records.
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(store.path())
+                .expect("open for corrupt write");
+            writeln!(file, "{{ this is not valid json").expect("write corrupt line");
+        }
+        store
+            .append(record("msg-2", CONVERSATION_A, b"two"))
+            .expect("second append should pass");
+
+        let records = store
+            .list_for_conversation(CONVERSATION_A)
+            .expect("a corrupt line must not brick the whole history");
+        let ids: Vec<String> = records.into_iter().map(|r| r.message_id).collect();
+        assert_eq!(ids, vec!["msg-1", "msg-2"]);
     }
 
     #[test]

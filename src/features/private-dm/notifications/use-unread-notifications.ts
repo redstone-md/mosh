@@ -13,6 +13,7 @@ import type {
 import {
   countMessagesFromOthers,
   diffConversations,
+  notificationBody,
   type ConversationCount,
 } from "./unread";
 
@@ -78,11 +79,19 @@ export function useUnreadNotifications({
       })),
       ...groups.map((group) => ({
         id: `group:${group.group_id}`,
-        messageCount: countMessagesFromOthers(group.messages, group.display_name),
+        messageCount: countMessagesFromOthers(
+          group.messages,
+          group.display_name,
+          group.device_fingerprint,
+        ),
       })),
       ...channels.map((channel) => ({
         id: `channel:${channel.name}`,
-        messageCount: countMessagesFromOthers(channel.messages, channel.display_name),
+        messageCount: countMessagesFromOthers(
+          channel.messages,
+          channel.display_name,
+          channel.device_fingerprint,
+        ),
       })),
     ];
     let cancelled = false;
@@ -117,13 +126,11 @@ export function useUnreadNotifications({
       if (!focused && notifyReadyRef.current) {
         try {
           for (const { id } of diff.newMessages) {
-            const label = id.startsWith("channel:")
-              ? `#${id.slice("channel:".length)}`
-              : "New message";
-            sendNotification({ title: "Mosh", body: `${label} - new message` });
+            sendNotification(notificationBody(id));
           }
         } catch {
-          // Notification host unavailable - unread badges still update.
+          // sendNotification is synchronous (void); this guards its sync throw
+          // when the host is unavailable. Unread badges still update.
         }
       }
     })();

@@ -13,7 +13,9 @@ const FOCUSABLE_SELECTOR = [
 
 function focusableElements(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-    (element) => !element.hasAttribute("aria-hidden"),
+    // Exclude controls hidden via an ancestor (or self) aria-hidden / inert
+    // subtree, not just a direct attribute.
+    (element) => !element.closest('[aria-hidden="true"],[inert]'),
   );
 }
 
