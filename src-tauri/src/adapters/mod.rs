@@ -3,6 +3,7 @@ pub mod attachment_runtime;
 pub mod attachment_store;
 pub mod channel_runtime;
 pub mod ciphertext_store;
+pub mod message_id;
 pub mod mls_crypto;
 pub mod mls_storage;
 pub mod moss_ffi;
