@@ -100,16 +100,23 @@ function readOptionalToken(url: URL, param: string): string | null {
   return value.length >= MIN_TOKEN_LENGTH && TOKEN_PATTERN.test(value) ? value : null;
 }
 
-function readFingerprint(url: URL): string {
-  const fingerprint = url.hash.replace(/^#/, "").replace(`${FINGERPRINT_PARAM}=`, "").trim();
+function fingerprintFromHash(url: URL): string {
+  // Require the `fp=` key explicitly. A bare `#AABBCC` (no key) or an inner
+  // `fp=` elsewhere in the hash must NOT be accepted as a fingerprint — that is
+  // the identity check, so a malformed link has to fail, not silently pass.
+  const raw = new URLSearchParams(url.hash.replace(/^#/, "")).get(FINGERPRINT_PARAM)?.trim();
 
-  if (!fingerprint) {
+  if (!raw) {
     throw new InviteParseError("missing_fingerprint");
   }
 
-  const normalized = fingerprint.replace(/-/g, "").toUpperCase();
+  return raw;
+}
 
-  if (normalized.length < MIN_FINGERPRINT_LENGTH || !FINGERPRINT_PATTERN.test(fingerprint)) {
+function readFingerprint(url: URL): string {
+  const normalized = fingerprintFromHash(url).replace(/-/g, "").toUpperCase();
+
+  if (normalized.length < MIN_FINGERPRINT_LENGTH || !FINGERPRINT_PATTERN.test(normalized)) {
     throw new InviteParseError("invalid_fingerprint");
   }
 
@@ -117,18 +124,9 @@ function readFingerprint(url: URL): string {
 }
 
 function readGroupFingerprint(url: URL): string {
-  const fingerprint = url.hash.replace(/^#/, "").replace(`${FINGERPRINT_PARAM}=`, "").trim();
+  const normalized = fingerprintFromHash(url).replace(/-/g, "").toUpperCase();
 
-  if (!fingerprint) {
-    throw new InviteParseError("missing_fingerprint");
-  }
-
-  const normalized = fingerprint.replace(/-/g, "").toUpperCase();
-
-  if (
-    normalized.length !== GROUP_FINGERPRINT_LENGTH ||
-    !FINGERPRINT_PATTERN.test(fingerprint)
-  ) {
+  if (normalized.length !== GROUP_FINGERPRINT_LENGTH || !FINGERPRINT_PATTERN.test(normalized)) {
     throw new InviteParseError("invalid_fingerprint");
   }
 
