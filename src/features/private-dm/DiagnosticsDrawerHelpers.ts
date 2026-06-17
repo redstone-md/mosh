@@ -37,7 +37,11 @@ export function compactDetail(raw: string): string {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
       return Object.entries(parsed)
-        .map(([key, value]) => `${key}=${value}`)
+        .map(([key, value]) =>
+          value !== null && typeof value === "object"
+            ? `${key}=${JSON.stringify(value)}`
+            : `${key}=${value}`,
+        )
         .join(" ");
     }
     return String(parsed);
