@@ -46,9 +46,9 @@ Claimed force-skip could emit out of order / move the cursor backwards. TDD'd it
 Admin `close` publishes a self-remove Commit + `AdminHandoff` one-shot (publish even treats `NoPeers` as success), then removes itself. If either frame is dropped by gossip, members keep `current_admin_fingerprint` pointing at the departed admin → group permanently frozen for joins/removals (all admin-gated).
 Fix: gate admin departure on confirmed delivery, or let members detect a dead admin and elect the deterministic successor locally.
 
-### 21. · Snapshot auto-switch races user switch — `use-private-dm-snapshots.ts:93`, `use-private-dm-setup.ts:72`, `use-dm-offers.ts:54`
-`nextActiveTarget` runs every 1 s poll and force-selects `sessions[0]` when the current target isn't found. An in-flight poll returning before a just-created session appears resets `active` away from the chat the user just opened.
-Fix: only fall back to `sessions[0]` when `current` is null; grace period for a not-yet-listed target.
+### ~~21.~~ FIXED — Snapshot auto-switch races user switch — `use-private-dm-snapshots.ts`
+`nextActiveTarget` ran every 1 s poll and force-selected `sessions[0]` when the current target wasn't found. An in-flight poll returning before a just-created session appeared reset `active` away from the chat the user just opened.
+Fix: `nextActiveTarget` now takes a `seen` set (every id ever observed in a snapshot, maintained by `seenRef`). A non-null `current` that was never seen is kept (freshly created, poll hasn't caught up); it only auto-switches away once the target was seen and is now gone (real delete), or when `current` is null. Unit-tested (`use-private-dm-snapshots.test.ts`).
 
 ### 24. · Follow-up timer after unmount + ref-write during render — `use-private-dm-snapshots.ts:111, 117`
 `window.setTimeout(() => void followUp(true), 0)` in `finally` has no cleanup → `setState` on unmounted hook. `refreshRef.current = refresh` (:117) mutates a ref during render (StrictMode/concurrent hazard).
