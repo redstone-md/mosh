@@ -12,6 +12,14 @@ use crate::adapters::attachment_crypto::{
 // plaintext chunk must stay well under the cap to survive the round trip.
 pub const CHUNK_SIZE: u32 = 32 * 1024;
 pub const MAX_ATTACHMENT_SIZE: u64 = 50 * 1024 * 1024;
+// The manifest rides a single control-channel publish, so it faces the same
+// 64KB gossipsub cap as a chunk. Everything but the thumbnail is small and
+// bounded; a thumbnail past this budget pushes the encrypted+base64 envelope
+// over the cap and the peer silently never receives the attachment. Drop it
+// instead — the receiver can still download the full file.
+// ponytail: hard cap. If big-image previews matter, ship the thumbnail as its
+// own chunked transfer rather than inline in the manifest.
+const MAX_THUMBNAIL_B64: usize = 32 * 1024;
 const MAX_REQUEST_BATCH: usize = 64;
 
 #[derive(Debug)]
@@ -222,6 +230,9 @@ impl AttachmentRuntime {
         if self.outgoing.contains_key(&attachment_id) {
             return Err(AttachmentRuntimeError::DuplicateTransfer(attachment_id));
         }
+        // Keep the manifest under the gossipsub cap so the peer actually
+        // receives it (see MAX_THUMBNAIL_B64).
+        let thumbnail_b64 = thumbnail_b64.filter(|thumb| thumb.len() <= MAX_THUMBNAIL_B64);
         let key = random_key();
         let nonce_prefix = random_nonce_prefix();
         let chunk_count = total_size.div_ceil(u64::from(CHUNK_SIZE));
@@ -703,6 +714,46 @@ mod tests {
             }),
             Err(AttachmentRuntimeError::Empty)
         ));
+    }
+
+    #[test]
+    fn drops_thumbnail_that_would_blow_the_gossipsub_cap() {
+        let mut runtime = AttachmentRuntime::new();
+        let manifest = runtime
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "photo.jpg".to_string(),
+                mime: "image/jpeg".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload(1024),
+                thumbnail_b64: Some("A".repeat(MAX_THUMBNAIL_B64 + 1)),
+                voice: None,
+            })
+            .unwrap();
+        assert!(manifest.thumbnail_b64.is_none());
+        // Manifest must stay well under Moss's 64KB gossipsub payload cap.
+        let json = serde_json::to_vec(&manifest).unwrap();
+        assert!(json.len() < 64 * 1024, "manifest is {} bytes", json.len());
+    }
+
+    #[test]
+    fn keeps_thumbnail_within_budget() {
+        let mut runtime = AttachmentRuntime::new();
+        let manifest = runtime
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "photo.jpg".to_string(),
+                mime: "image/jpeg".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload(1024),
+                thumbnail_b64: Some("A".repeat(MAX_THUMBNAIL_B64)),
+                voice: None,
+            })
+            .unwrap();
+        assert_eq!(
+            manifest.thumbnail_b64.as_deref().map(str::len),
+            Some(MAX_THUMBNAIL_B64)
+        );
     }
 
     #[test]
