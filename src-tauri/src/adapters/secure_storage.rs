@@ -82,10 +82,7 @@ impl SecureSecretStore for OsSecureSecretStore {
 /// Runs `init` and caches a `()` marker only on success. A failure is returned
 /// without being memoized, so a transient error (locked keychain at boot) is
 /// retried on the next call instead of poisoning the store for the process.
-fn cache_on_success<E>(
-    cell: &OnceLock<()>,
-    init: impl FnOnce() -> Result<(), E>,
-) -> Result<(), E> {
+fn cache_on_success<E>(cell: &OnceLock<()>, init: impl FnOnce() -> Result<(), E>) -> Result<(), E> {
     if cell.get().is_some() {
         return Ok(());
     }
@@ -100,9 +97,8 @@ fn ensure_native_store() -> Result<(), SecureStorageError> {
     static NATIVE_STORE: OnceLock<()> = OnceLock::new();
 
     cache_on_success(&NATIVE_STORE, || {
-        keyring::use_native_store(false).map_err(|error| {
-            SecureStorageError::Backend(format!("{NATIVE_STORE_ERROR}: {error}"))
-        })
+        keyring::use_native_store(false)
+            .map_err(|error| SecureStorageError::Backend(format!("{NATIVE_STORE_ERROR}: {error}")))
     })
 }
 
@@ -138,12 +134,10 @@ mod tests {
         // A later success caches the result.
         assert!(cache_on_success(&CELL, || Ok::<(), &str>(())).is_ok());
         // Once cached, the init closure is never run again.
-        assert!(
-            cache_on_success(&CELL, || -> Result<(), &str> {
-                panic!("init must not run once cached")
-            })
-            .is_ok()
-        );
+        assert!(cache_on_success(&CELL, || -> Result<(), &str> {
+            panic!("init must not run once cached")
+        })
+        .is_ok());
     }
 
     #[test]
