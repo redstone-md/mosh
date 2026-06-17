@@ -23,7 +23,7 @@ describe("drainCallFrames", () => {
     const played: number[] = [];
 
     await drainCallFrames(source, "s", "c", key, PREFIX_B64, new JitterBuffer(), {
-      pushFrame: (p) => played.push(p[0]),
+      pushFrame: (_seq, p) => played.push(p[0]),
     });
 
     expect(played).toEqual([10, 20]);
@@ -40,7 +40,7 @@ describe("drainCallFrames", () => {
     const played: number[] = [];
 
     await drainCallFrames(source, "s", "c", key, PREFIX_B64, new JitterBuffer(), {
-      pushFrame: (p) => played.push(p[0]),
+      pushFrame: (_seq, p) => played.push(p[0]),
     });
 
     expect(played).toEqual([42]);

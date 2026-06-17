@@ -7,7 +7,7 @@
 
 export const CALLER_DIRECTION_BIT = 0n;
 export const CALLEE_DIRECTION_BIT = 1n << 63n;
-const SEQ_VALUE_MASK = (1n << 63n) - 1n;
+export const SEQ_VALUE_MASK = (1n << 63n) - 1n;
 
 function b64ToBytes(value: string): Uint8Array {
   const binary = atob(value);
