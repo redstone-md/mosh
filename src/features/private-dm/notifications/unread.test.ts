@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   countMessagesFromOthers,
   diffConversations,
+  notificationBody,
   type ConversationCount,
 } from "./unread";
 
@@ -71,5 +72,47 @@ describe("countMessagesFromOthers", () => {
     );
 
     expect(count).toBe(1);
+  });
+
+  it("counts a same-name peer's messages when fingerprints differ", () => {
+    const count = countMessagesFromOthers(
+      [
+        { from_device: "Alice", from_fingerprint: "AAAA" }, // me
+        { from_device: "Alice", from_fingerprint: "BBBB" }, // different peer, same name
+      ],
+      "Alice",
+      "AAAA",
+    );
+
+    expect(count).toBe(1);
+  });
+
+  it("excludes own messages by fingerprint even after a display-name change", () => {
+    const count = countMessagesFromOthers(
+      [
+        { from_device: "OldName", from_fingerprint: "AAAA" }, // me, before rename
+        { from_device: "Bob", from_fingerprint: "BBBB" },
+      ],
+      "NewName",
+      "AAAA",
+    );
+
+    expect(count).toBe(1);
+  });
+});
+
+describe("notificationBody", () => {
+  it("labels channel notifications with the channel name", () => {
+    expect(notificationBody("channel:general")).toEqual({
+      title: "Mosh",
+      body: "#general - new message",
+    });
+  });
+
+  it("uses a generic label for dm and group notifications", () => {
+    expect(notificationBody("dm:abc")).toEqual({
+      title: "Mosh",
+      body: "New message - new message",
+    });
   });
 });
