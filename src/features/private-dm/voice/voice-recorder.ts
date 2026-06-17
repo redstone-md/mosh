@@ -40,6 +40,7 @@ export class VoiceRecorder {
   private chunks: Blob[] = [];
   private mime = "";
   private autoStopTimer?: number;
+  private stopping?: Promise<Recording>;
 
   /** Whether voice recording is available in this environment. */
   static isSupported(): boolean {
@@ -74,7 +75,12 @@ export class VoiceRecorder {
    * microphone.
    */
   stop(): Promise<Recording> {
-    return new Promise((resolve, reject) => {
+    // Idempotent: the auto-stop timer and a manual Stop can both fire. A second
+    // recorder.stop() throws InvalidStateError, so return the in-flight promise.
+    if (this.stopping) {
+      return this.stopping;
+    }
+    this.stopping = new Promise((resolve, reject) => {
       const recorder = this.recorder;
       if (!recorder) {
         reject(new Error("Recorder was not started"));
@@ -95,6 +101,7 @@ export class VoiceRecorder {
       }
       this.clearAutoStop();
     });
+    return this.stopping;
   }
 
   /** Aborts recording and releases the microphone without producing a clip. */
