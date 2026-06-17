@@ -42,9 +42,11 @@ impl PersistentProvider {
         serde_json::to_vec(&pairs).expect("serialize mls pairs")
     }
 
-    /// Rebuild a provider from a snapshot produced by `snapshot_bytes`.
-    pub fn from_snapshot(bytes: &[u8]) -> Self {
-        let pairs: Vec<(Vec<u8>, Vec<u8>)> = serde_json::from_slice(bytes).unwrap_or_default();
+    /// Rebuild a provider from a snapshot produced by `snapshot_bytes`. Returns
+    /// an error on corrupt/truncated bytes instead of silently defaulting to an
+    /// empty store, which would mask persistence corruption as a fresh session.
+    pub fn from_snapshot(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        let pairs: Vec<(Vec<u8>, Vec<u8>)> = serde_json::from_slice(bytes)?;
         let map: HashMap<Vec<u8>, Vec<u8>> = pairs.into_iter().collect();
         let provider = Self::default();
         *provider
@@ -52,7 +54,7 @@ impl PersistentProvider {
             .values
             .write()
             .expect("mls storage lock poisoned") = map;
-        provider
+        Ok(provider)
     }
 }
 
@@ -64,6 +66,13 @@ mod tests {
     use openmls_traits::types::SignatureScheme;
 
     const CS: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+
+    #[test]
+    fn from_snapshot_rejects_corrupt_bytes() {
+        // A truncated/tampered snapshot must surface as an error, not silently
+        // restore an empty store that looks healthy.
+        assert!(PersistentProvider::from_snapshot(b"not valid json").is_err());
+    }
 
     #[test]
     fn snapshot_restores_group() {
@@ -85,7 +94,7 @@ mod tests {
             .unwrap();
 
         let snap = provider.snapshot_bytes();
-        let restored = PersistentProvider::from_snapshot(&snap);
+        let restored = PersistentProvider::from_snapshot(&snap).expect("valid snapshot restores");
         let loaded = MlsGroup::load(restored.storage(), &gid).unwrap().unwrap();
         let after = loaded
             .export_secret(restored.crypto(), "t", &[], 32)
