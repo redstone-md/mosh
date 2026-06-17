@@ -49,4 +49,15 @@ describe("frame-crypto", () => {
   it("CALLER and CALLEE direction bits differ", () => {
     expect(CALLER_DIRECTION_BIT).not.toBe(CALLEE_DIRECTION_BIT);
   });
+
+  it("rejects a seq that would overflow the 63-bit value space (no silent wrap)", async () => {
+    const key = await importCallKey(KEY_B64);
+    // 2^63 masks down to 0 — sealing it would silently reuse seq 0's nonce.
+    await expect(
+      sealFrame(key, PREFIX_B64, 1n << 63n, CALLER_DIRECTION_BIT, new Uint8Array([1])),
+    ).rejects.toThrow();
+    await expect(
+      sealFrame(key, PREFIX_B64, -1n, CALLER_DIRECTION_BIT, new Uint8Array([1])),
+    ).rejects.toThrow();
+  });
 });
