@@ -577,6 +577,17 @@ const STREAM_RESPONSE_WINDOW: u64 = 512 * 1024;
 const STREAM_DEADLINE: Duration = Duration::from_secs(30);
 const STREAM_POLL_INTERVAL: Duration = Duration::from_millis(60);
 
+/// Resolves the exclusive end of the byte window to serve. Saturating arithmetic
+/// keeps an attacker-supplied `Range` (e.g. `bytes=0-18446744073709551615`) from
+/// overflowing; the window is always capped to one `STREAM_RESPONSE_WINDOW`.
+fn resolve_request_end(start: u64, end: Option<u64>) -> u64 {
+    let window_end = start.saturating_add(STREAM_RESPONSE_WINDOW);
+    match end {
+        Some(value) => value.saturating_add(1).min(window_end),
+        None => window_end,
+    }
+}
+
 /// Parses an HTTP `Range` header into a `(start, optional inclusive end)`.
 fn parse_range_header(header: Option<&tauri::http::HeaderValue>) -> (u64, Option<u64>) {
     let Some(raw) = header.and_then(|value| value.to_str().ok()) else {
@@ -648,10 +659,7 @@ fn serve_media_stream(
     }
     let (kind, host, attachment) = (segments[0], segments[1], segments[2]);
     let (start, end) = parse_range_header(request.headers().get(tauri::http::header::RANGE));
-    let request_end = match end {
-        Some(value) => (value + 1).min(start + STREAM_RESPONSE_WINDOW),
-        None => start + STREAM_RESPONSE_WINDOW,
-    };
+    let request_end = resolve_request_end(start, end);
 
     let deadline = Instant::now() + STREAM_DEADLINE;
     loop {
@@ -1134,6 +1142,24 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_request_end_saturates_on_attacker_range() {
+        // `Range: bytes=0-18446744073709551615` must not overflow `value + 1`.
+        assert_eq!(resolve_request_end(0, Some(u64::MAX)), STREAM_RESPONSE_WINDOW);
+        // A huge start must not overflow `start + window`.
+        assert_eq!(resolve_request_end(u64::MAX, None), u64::MAX);
+    }
+
+    #[test]
+    fn resolve_request_end_honors_small_end_and_caps_to_window() {
+        assert_eq!(resolve_request_end(0, Some(99)), 100);
+        assert_eq!(
+            resolve_request_end(10, Some(u64::MAX)),
+            10 + STREAM_RESPONSE_WINDOW
+        );
+        assert_eq!(resolve_request_end(5, None), 5 + STREAM_RESPONSE_WINDOW);
+    }
 
     #[test]
     fn diagnostics_describe_the_desktop_tracer_bullet() {
