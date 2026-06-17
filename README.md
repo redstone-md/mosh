@@ -106,3 +106,6 @@ ship its source.
 
 The bundled Moss runtime (`moss/` submodule) is a separate project under the MIT
 license.
+
+Windows releases are code-signed via the SignPath Foundation — see
+[`CODE_SIGNING.md`](CODE_SIGNING.md).
