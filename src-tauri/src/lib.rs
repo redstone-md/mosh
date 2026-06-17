@@ -1146,7 +1146,10 @@ mod tests {
     #[test]
     fn resolve_request_end_saturates_on_attacker_range() {
         // `Range: bytes=0-18446744073709551615` must not overflow `value + 1`.
-        assert_eq!(resolve_request_end(0, Some(u64::MAX)), STREAM_RESPONSE_WINDOW);
+        assert_eq!(
+            resolve_request_end(0, Some(u64::MAX)),
+            STREAM_RESPONSE_WINDOW
+        );
         // A huge start must not overflow `start + window`.
         assert_eq!(resolve_request_end(u64::MAX, None), u64::MAX);
     }
