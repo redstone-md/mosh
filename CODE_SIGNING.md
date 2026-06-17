@@ -26,8 +26,9 @@ covers the Windows signing pipeline only.
   SignPath before a build is signed. Approvers are a subset of trusted
   maintainers with two-factor authentication enabled.
 
-For the current project the maintainer (`@ForeverInLaw`, `redstone-md`) acts as
-Reviewer and Approver; external contributions are merged only after review.
+The project is maintained by two co-owners of the repository —
+`@ForeverInLaw` and `@rxflex` (`redstone-md`) — who both act as Reviewers and
+Approvers. External contributions are merged only after review by a maintainer.
 
 ## Signing process
 
