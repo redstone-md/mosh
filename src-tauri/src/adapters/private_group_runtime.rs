@@ -8,6 +8,7 @@ use crate::adapters::attachment_runtime::{
     OutgoingAttachment, StreamRange, CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
+use crate::adapters::message_id::MessageIdGen;
 use crate::adapters::mls_crypto::{MlsCryptoError, MlsSessionCrypto};
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
@@ -335,8 +336,14 @@ struct GroupSession {
     node: MossNode,
     crypto: MlsSessionCrypto,
     messages: Vec<GroupMessage>,
+    message_ids: MessageIdGen,
     seen_set: HashSet<String>,
     seen_order: VecDeque<String>,
+    // Commit bytes already merged into the local MLS state, keyed by their b64.
+    // Skips gossip duplicates and the joiner's own admission commit (already
+    // carried by the Welcome) so process_commit is never re-applied.
+    // ponytail: unbounded, but commits only fire on membership change (rare).
+    processed_commits: HashSet<String>,
     control_channel: String,
     data_channel: String,
     blob_channel: String,
@@ -442,8 +449,10 @@ impl PrivateGroupRuntime {
                 node,
                 crypto,
                 messages: Vec::new(),
+                message_ids: MessageIdGen::default(),
                 seen_set: HashSet::new(),
                 seen_order: VecDeque::new(),
+                processed_commits: HashSet::new(),
                 control_channel: format!("{CONTROL_CHANNEL_PREFIX}{}", rec.group_id),
                 data_channel: format!("{DATA_CHANNEL_PREFIX}{}", rec.group_id),
                 blob_channel: format!("{BLOB_CHANNEL_PREFIX}{}", rec.group_id),
@@ -575,8 +584,10 @@ impl PrivateGroupRuntime {
             node,
             crypto,
             messages: Vec::new(),
+            message_ids: MessageIdGen::default(),
             seen_set: HashSet::new(),
             seen_order: VecDeque::new(),
+            processed_commits: HashSet::new(),
             control_channel: format!("{CONTROL_CHANNEL_PREFIX}{group_id}"),
             data_channel: format!("{DATA_CHANNEL_PREFIX}{group_id}"),
             blob_channel: format!("{BLOB_CHANNEL_PREFIX}{group_id}"),
@@ -647,8 +658,10 @@ impl PrivateGroupRuntime {
             node,
             crypto,
             messages: Vec::new(),
+            message_ids: MessageIdGen::default(),
             seen_set: HashSet::new(),
             seen_order: VecDeque::new(),
+            processed_commits: HashSet::new(),
             control_channel,
             data_channel: format!("{DATA_CHANNEL_PREFIX}{}", invite.group_id),
             blob_channel: format!("{BLOB_CHANNEL_PREFIX}{}", invite.group_id),
@@ -1112,7 +1125,15 @@ impl PrivateGroupRuntime {
                 None => continue,
             };
             if let Some(session) = self.groups.get_mut(&group_id) {
-                session.handle_moss_message(message)?;
+                // A single bad inbound frame must never abort the drain — it
+                // would also fail the caller (send/poll/list drain first). After
+                // a restart the in-memory dedup set is empty, so the mesh
+                // re-delivers already-consumed MLS messages whose decrypt fails
+                // ("secret deleted for forward secrecy"); drop and keep going,
+                // mirroring the DM runtime.
+                if let Err(error) = session.handle_moss_message(message) {
+                    eprintln!("dropping inbound group frame for {group_id}: {error}");
+                }
             }
         }
         for session in self.groups.values_mut() {
@@ -1262,7 +1283,7 @@ impl GroupSession {
         let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
         message.sent_at_ms = Some(sent_at_ms);
         if message.message_id.as_deref().unwrap_or_default().is_empty() {
-            message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
+            message.message_id = Some(self.message_ids.next(sent_at_ms));
         }
         message
     }
@@ -1391,6 +1412,22 @@ impl GroupSession {
         false
     }
 
+    /// Merge a control-channel commit exactly once. Re-delivered commits (gossip
+    /// duplicates, or the joiner's own admission commit already absorbed by the
+    /// Welcome) are no-ops instead of erroring on an already-merged epoch.
+    /// ponytail: dedups duplicates only; a commit that arrives before its
+    /// predecessor still errors and is dropped — a reorder-resync path
+    /// (request-state / commit retransmit) is the upgrade if gossip reorders.
+    fn process_commit_once(&mut self, commit_b64: String) -> Result<(), PrivateGroupError> {
+        if self.processed_commits.contains(&commit_b64) {
+            return Ok(());
+        }
+        let commit = decode(&commit_b64)?;
+        self.crypto.process_commit(&commit)?;
+        self.processed_commits.insert(commit_b64);
+        Ok(())
+    }
+
     fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateGroupError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
         let own_fp = self.crypto.fingerprint();
@@ -1437,7 +1474,7 @@ impl GroupSession {
                 from_fingerprint,
                 welcome_b64,
                 tree_b64,
-                ..
+                commit_b64,
             } if !self.joined
                 && !self.is_admin
                 && self.group_id == group_id
@@ -1447,6 +1484,11 @@ impl GroupSession {
                 self.crypto
                     .join_welcome(&decode(&welcome_b64)?, &decode(&tree_b64)?)?;
                 self.joined = true;
+                // The Welcome already carries the admission commit's state. The
+                // admin also broadcasts that same commit on the control channel
+                // for existing members, so mark it processed to skip re-applying
+                // it to ourselves (which would error on the already-merged epoch).
+                self.processed_commits.insert(commit_b64);
                 Ok(())
             }
             ControlEnvelope::Welcome {
@@ -1459,9 +1501,7 @@ impl GroupSession {
                 && self.group_id == group_id
                 && from_fingerprint == self.current_admin_fingerprint =>
             {
-                let commit = decode(&commit_b64)?;
-                self.crypto.process_commit(&commit)?;
-                Ok(())
+                self.process_commit_once(commit_b64)
             }
             ControlEnvelope::Commit {
                 group_id,
@@ -1472,9 +1512,7 @@ impl GroupSession {
                 && self.group_id == group_id
                 && from_fingerprint == self.current_admin_fingerprint =>
             {
-                let commit = decode(&commit_b64)?;
-                self.crypto.process_commit(&commit)?;
-                Ok(())
+                self.process_commit_once(commit_b64)
             }
             ControlEnvelope::AdminHandoff {
                 group_id,
