@@ -9,12 +9,11 @@ import type {
 import {
   CALLEE_DIRECTION_BIT,
   CALLER_DIRECTION_BIT,
-  bytesFromBase64,
   bytesToBase64,
   importCallKey,
-  openFrame,
   sealFrame,
 } from "./frame-crypto";
+import { drainCallFrames } from "./call-drain";
 import { JitterBuffer } from "./jitter-buffer";
 import {
   isCallAudioSupported,
@@ -130,6 +129,9 @@ export function useVoiceCallOrchestration({
       return;
     }
     let cancelled = false;
+    // Guards against overlapping poll drains: a drain RPC can outlast the 20 ms
+    // tick, and two concurrent drains would reorder / double-push frames.
+    let draining = false;
     const direction =
       activeCallDirection === "caller"
         ? CALLER_DIRECTION_BIT
@@ -139,25 +141,42 @@ export function useVoiceCallOrchestration({
     const noncePrefix = activeCallNoncePrefix;
     void (async () => {
       try {
-        callKeyRef.current = await importCallKey(activeCallKey);
+        const key = await importCallKey(activeCallKey);
+        if (cancelled) {
+          return;
+        }
+        callKeyRef.current = key;
         callSeqRef.current = 0n;
         callMutedRef.current = false;
         setCallMuted(false);
         callJitterRef.current = new JitterBuffer();
-        callPlaybackRef.current = await startVoicePlayback();
-        callCaptureRef.current = await startVoiceCapture((frame) => {
+
+        const playback = await startVoicePlayback();
+        // The effect may have torn down during the await; don't leak the handle
+        // or clobber a newer effect run's refs.
+        if (cancelled) {
+          void playback.stop();
+          return;
+        }
+        callPlaybackRef.current = playback;
+
+        const capture = await startVoiceCapture((frame) => {
           if (cancelled || !callKeyRef.current || callMutedRef.current) {
             return;
           }
+          // Snapshot+increment the seq synchronously: sealFrame is async, so
+          // two frames in flight would otherwise read the same seq and reuse
+          // the AES-GCM nonce on this key+direction.
+          const seq = callSeqRef.current;
+          callSeqRef.current += 1n;
           void (async () => {
             const seal = await sealFrame(
               callKeyRef.current!,
               noncePrefix,
-              callSeqRef.current,
+              seq,
               direction,
               frame,
             );
-            callSeqRef.current += 1n;
             try {
               await gateway.callSendFrame(
                 sessionId,
@@ -169,34 +188,33 @@ export function useVoiceCallOrchestration({
             }
           })();
         });
+        if (cancelled) {
+          void capture.stop();
+          return;
+        }
+        callCaptureRef.current = capture;
+
         callPollRef.current = window.setInterval(() => {
-          void (async () => {
-            try {
-              const frames = await gateway.callDrainFrames(sessionId, callId);
-              if (frames.length === 0 || !callKeyRef.current) {
-                return;
-              }
-              for (const frameB64 of frames) {
-                const opened = await openFrame(
-                  callKeyRef.current,
-                  noncePrefix,
-                  bytesFromBase64(frameB64),
-                );
-                if (opened) {
-                  callJitterRef.current?.push({
-                    seq: opened.seq,
-                    payload: opened.payload,
-                  });
-                }
-              }
-              const ready = callJitterRef.current?.drainReady() ?? [];
-              for (const buffered of ready) {
-                callPlaybackRef.current?.pushFrame(buffered.payload);
-              }
-            } catch (err) {
-              console.warn("[voice-call] poll failed", err);
-            }
-          })();
+          const currentKey = callKeyRef.current;
+          const jitter = callJitterRef.current;
+          const sink = callPlaybackRef.current;
+          if (draining || !currentKey || !jitter || !sink) {
+            return;
+          }
+          draining = true;
+          void drainCallFrames(
+            gateway,
+            sessionId,
+            callId,
+            currentKey,
+            noncePrefix,
+            jitter,
+            sink,
+          )
+            .catch((err) => console.warn("[voice-call] poll failed", err))
+            .finally(() => {
+              draining = false;
+            });
         }, CALL_FRAME_POLL_MS);
       } catch (err) {
         onError(err instanceof Error ? err.message : "Voice call setup failed");

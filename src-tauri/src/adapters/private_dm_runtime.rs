@@ -11,6 +11,7 @@ use crate::adapters::attachment_runtime::{
     CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
+use crate::adapters::message_id::MessageIdGen;
 use crate::adapters::mls_crypto::MlsSessionCrypto;
 use crate::adapters::outbound_delivery::OutboundAttemptRecord;
 use crate::adapters::persistence::Persistence;
@@ -114,6 +115,7 @@ struct PrivateDmSession {
     node: MossNode,
     crypto: MlsSessionCrypto,
     messages: Vec<ChatMessage>,
+    message_ids: MessageIdGen,
     seen_moss_messages: HashSet<String>,
     seen_order: VecDeque<String>,
     control_channel: String,
@@ -1099,6 +1101,7 @@ impl PrivateDmSession {
             node,
             crypto,
             messages: Vec::new(),
+            message_ids: MessageIdGen::default(),
             seen_moss_messages: HashSet::new(),
             seen_order: VecDeque::new(),
             control_channel,
@@ -1138,7 +1141,7 @@ impl PrivateDmSession {
         let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
         message.sent_at_ms = Some(sent_at_ms);
         if message.message_id.as_deref().unwrap_or_default().is_empty() {
-            message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
+            message.message_id = Some(self.message_ids.next(sent_at_ms));
         }
         message
     }
@@ -1439,16 +1442,12 @@ impl PrivateDmSession {
                 session_id,
                 participant_id,
                 call_id,
-                reason,
+                reason: _,
             } if session_id == self.session_id && participant_id != self.participant_id => {
                 if let Some(call) = self.call.as_ref() {
                     if call.call_id == call_id {
                         let duration = call.duration_ms(now_ms());
-                        let kind = if duration == 0 && reason == "no_answer" {
-                            "missed"
-                        } else {
-                            "completed"
-                        };
+                        let kind = call.end_kind();
                         let _ = self.node.unsubscribe_voice_call(&call.call_id);
                         let remote = call.remote_device.clone();
                         let call_id_owned = call.call_id.clone();
@@ -1933,11 +1932,7 @@ impl PrivateDmSession {
         }
         let duration = call.duration_ms(now_ms());
         let _ = self.node.unsubscribe_voice_call(&call.call_id);
-        let kind = if call.phase != CallPhase::Active {
-            "missed"
-        } else {
-            "completed"
-        };
+        let kind = call.end_kind();
         let remote = call.remote_device.clone();
         let call_id_owned = call.call_id.clone();
         self.append_call_event_message(&remote, kind, duration, &call_id_owned);

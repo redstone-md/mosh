@@ -1,4 +1,4 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { type ChatTarget } from "./chat-actions";
 import type {
   ChannelSnapshot,
@@ -37,6 +37,19 @@ export function useDmOffers({
   const [offeredFingerprints, setOfferedFingerprints] = useState<ReadonlySet<string>>(
     new Set(),
   );
+
+  // The offered set tracks the *current* conversation only; reset it when the
+  // active host changes so a fingerprint offered in one channel/group doesn't
+  // stay marked as offered in another.
+  const hostKey =
+    active && active.type !== "dm"
+      ? `${active.type}:${active.type === "channel" ? active.name : active.id}`
+      : null;
+  const prevHostKey = useRef(hostKey);
+  if (prevHostKey.current !== hostKey) {
+    prevHostKey.current = hostKey;
+    setOfferedFingerprints(new Set());
+  }
 
   const offerDm = (targetFingerprint: string) => {
     if (!active || active.type === "dm" || offeredFingerprints.has(targetFingerprint)) {

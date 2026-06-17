@@ -4,6 +4,42 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-06-17
+
+### Fixed
+- **Voice-call audio is encrypted with a unique nonce per frame.** A flaw in the
+  call frame crypto could reuse an AES-GCM nonce across frames, which weakens
+  the encryption of live call audio. Each frame now derives a unique nonce, and
+  an out-of-range frame sequence is rejected instead of silently wrapping.
+- **Call audio recovers cleanly after a network stall.** Playback scheduling
+  could drift further and further ahead of real time once a backlog built up,
+  so audio lagged for the rest of the call; it now resyncs to the present.
+  Frames lost in transit no longer make the remaining speech sound stretched —
+  the decoder is told where the gaps are.
+- **The ringtone always stops.** An incoming-call tone could keep oscillators
+  and its audio context alive after the call was answered or dismissed; it now
+  stops and tears down reliably.
+- **Calls are labelled missed vs. completed correctly** in the call history.
+- **You're no longer pulled out of a chat you just opened.** The roster refresh
+  that runs every second could yank the view back to the first conversation if
+  it completed before a just-created chat appeared in the list. It now keeps the
+  chat you opened until it's confirmed gone.
+- **Messages sent in the same millisecond can't collide.** Outgoing messages now
+  get a monotonic id, so two sent in quick succession are no longer mistaken for
+  one another.
+- **Unread counts follow device identity, not display name**, so peers sharing a
+  display name no longer miscount notifications.
+- **A private group keeps working when a single frame is malformed.** One bad
+  frame no longer halts delivery, and a re-applied membership change is ignored
+  instead of erroring.
+- **Stricter invite validation.** An invite fingerprint must be a properly
+  anchored, well-formed value before it's accepted.
+- **Corrupted local data fails safe.** One unparseable line in stored history is
+  skipped instead of dropping the whole conversation, and a corrupted MLS
+  snapshot surfaces an error instead of silently emptying secure storage.
+- **Keyboard focus stays inside open dialogs** — the focus trap now ignores
+  `aria-hidden`/`inert` content.
+
 ## [0.2.9] - 2026-06-17
 
 ### Fixed

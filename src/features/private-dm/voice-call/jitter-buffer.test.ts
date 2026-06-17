@@ -36,4 +36,17 @@ describe("JitterBuffer", () => {
     expect(drained[0]).toBe(2);
     expect(drained[drained.length - 1]).toBe(12);
   });
+
+  it("emits strictly increasing seqs across a forced skip (#14)", () => {
+    const buf = new JitterBuffer(3);
+    // gap at 2 and 3; pile enough on the far side to exceed the cap
+    buf.push({ seq: 1n, payload: new Uint8Array([1]) });
+    for (let i = 4; i <= 9; i += 1) {
+      buf.push({ seq: BigInt(i), payload: new Uint8Array([i]) });
+    }
+    const drained = buf.drainReady().map((f) => Number(f.seq));
+    for (let i = 1; i < drained.length; i += 1) {
+      expect(drained[i]).toBeGreaterThan(drained[i - 1]);
+    }
+  });
 });

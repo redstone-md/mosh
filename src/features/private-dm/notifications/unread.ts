@@ -6,13 +6,34 @@ export interface ConversationCount {
 
 export interface MessageAuthor {
   readonly from_device: string;
+  readonly from_fingerprint?: string;
 }
 
+/**
+ * Counts messages not authored by the local participant. When both an own
+ * fingerprint and the message's fingerprint are present (channels/groups),
+ * identity is compared by fingerprint — display names are not unique, so a
+ * same-named peer must still count, and a renamed self must not. DMs carry no
+ * fingerprint and fall back to the display name (2-party, unambiguous).
+ */
 export function countMessagesFromOthers(
   messages: readonly MessageAuthor[],
   ownDeviceName: string,
+  ownFingerprint?: string,
 ): number {
-  return messages.filter((message) => message.from_device !== ownDeviceName).length;
+  return messages.filter((message) =>
+    ownFingerprint && message.from_fingerprint
+      ? message.from_fingerprint !== ownFingerprint
+      : message.from_device !== ownDeviceName,
+  ).length;
+}
+
+/** Builds the toast title/body for a conversation that gained messages. */
+export function notificationBody(id: string): { title: string; body: string } {
+  const label = id.startsWith("channel:")
+    ? `#${id.slice("channel:".length)}`
+    : "New message";
+  return { title: "Mosh", body: `${label} - new message` };
 }
 
 /** A conversation that gained `delta` messages since it was last seen. */

@@ -102,6 +102,16 @@ impl CallState {
             .collect()
     }
 
+    /// Call-log classification: a call that never reached `Active` is "missed",
+    /// regardless of who hung up or why; only an answered call is "completed".
+    pub fn end_kind(&self) -> &'static str {
+        if self.phase != CallPhase::Active {
+            "missed"
+        } else {
+            "completed"
+        }
+    }
+
     pub fn duration_ms(&self, now_ms: u64) -> u64 {
         if self.started_at_ms == 0 || now_ms < self.started_at_ms {
             0
@@ -156,6 +166,21 @@ mod tests {
         callee.push_frame(callee_frame);
         callee.push_frame(caller_frame.clone());
         assert_eq!(callee.drain_frames(), vec![caller_frame]);
+    }
+
+    #[test]
+    fn end_kind_is_missed_until_active_regardless_of_reason() {
+        // A call that never reached Active is "missed" however it ends — a peer
+        // hangup ("hangup") of an unanswered call must not log as "completed".
+        let mut ringing = CallState::ringing("c".into(), "k".into(), "n".into(), "peer".into());
+        assert_eq!(ringing.end_kind(), "missed");
+        let mut outgoing = CallState::outgoing("c".into(), "k".into(), "n".into(), "peer".into());
+        assert_eq!(outgoing.end_kind(), "missed");
+
+        ringing.become_active(1_000);
+        outgoing.become_active(1_000);
+        assert_eq!(ringing.end_kind(), "completed");
+        assert_eq!(outgoing.end_kind(), "completed");
     }
 
     #[test]

@@ -4,9 +4,17 @@
  */
 
 const TARGET_SAMPLE_RATE = 48_000;
+// If scheduling has drifted more than this far ahead of the wall clock (e.g.
+// after a network stall buffered a backlog), resync to now instead of letting
+// playback latency grow without bound for the rest of the call.
+const PLAYBACK_RESYNC_S = 0.2;
+
+import { SEQ_VALUE_MASK } from "./frame-crypto";
+
+const FRAME_DURATION_US = 20_000;
 
 export interface VoicePlaybackHandle {
-  pushFrame(frame: Uint8Array): void;
+  pushFrame(seq: bigint, frame: Uint8Array): void;
   stop(): Promise<void>;
 }
 
@@ -42,7 +50,10 @@ export async function startVoicePlayback(): Promise<VoicePlaybackHandle> {
       const source = context.createBufferSource();
       source.buffer = buffer;
       source.connect(context.destination);
-      const start = Math.max(context.currentTime, nextStart);
+      let start = Math.max(context.currentTime, nextStart);
+      if (start - context.currentTime > PLAYBACK_RESYNC_S) {
+        start = context.currentTime;
+      }
       source.start(start);
       nextStart = start + buffer.duration;
     },
@@ -66,15 +77,17 @@ export async function startVoicePlayback(): Promise<VoicePlaybackHandle> {
     }
   ).EncodedAudioChunk;
 
-  let timestamp = 0;
   return {
-    pushFrame(frame: Uint8Array) {
+    pushFrame(seq: bigint, frame: Uint8Array) {
+      // Derive the timestamp from the real seq (dropping the direction bit) so
+      // gaps left by dropped/force-skipped frames are preserved; a fixed
+      // increment would tell the decoder lost frames were contiguous.
+      const timestamp = Number((seq & SEQ_VALUE_MASK) * BigInt(FRAME_DURATION_US));
       const chunk = new EncodedAudioChunkCtor({
         type: "key",
         timestamp,
         data: frame,
       });
-      timestamp += 20_000;
       try {
         decoder.decode(chunk);
       } catch (error) {
