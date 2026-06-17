@@ -4,6 +4,16 @@ Mosh is a desktop-first, decentralized, end-to-end-encrypted messenger. It is
 built with Tauri v2 (Rust) and React + TypeScript, uses OpenMLS for message-layer
 encryption, and discovers peers over the Moss mesh runtime — no central server.
 
+## Download
+
+Installers for Windows and macOS are published on the
+[**Releases**](https://github.com/redstone-md/mosh/releases) page.
+
+Windows builds are code-signed using a certificate from the **SignPath
+Foundation**. Free code signing is provided by [SignPath.io](https://signpath.io),
+certificate by the [SignPath Foundation](https://signpath.org). See
+[`CODE_SIGNING.md`](CODE_SIGNING.md) for the signing policy.
+
 ## Features
 
 - **Private 1:1 DMs** — invite-URI onboarding with out-of-band fingerprint
@@ -106,6 +116,3 @@ ship its source.
 
 The bundled Moss runtime (`moss/` submodule) is a separate project under the MIT
 license.
-
-Windows releases are code-signed via the SignPath Foundation — see
-[`CODE_SIGNING.md`](CODE_SIGNING.md).
