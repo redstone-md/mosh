@@ -80,6 +80,7 @@ export function usePrivateDmSnapshots({
   const pollInFlight = useRef(false);
   const pollPending = useRef(false);
   const refreshRef = useRef<((quiet?: boolean) => Promise<void>) | null>(null);
+  const followUpTimer = useRef<number | undefined>(undefined);
   // Every target id we've ever seen in a snapshot. Lets nextActiveTarget tell a
   // never-listed (freshly created) target apart from a once-listed deleted one.
   const seenRef = useRef(new Set<string>());
@@ -128,18 +129,23 @@ export function usePrivateDmSnapshots({
         if (pollPending.current && refreshRef.current) {
           pollPending.current = false;
           const followUp = refreshRef.current;
-          window.setTimeout(() => void followUp(true), 0);
+          followUpTimer.current = window.setTimeout(() => void followUp(true), 0);
         }
       }
     },
     [gateway, onError, runOperation, setActive],
   );
-  refreshRef.current = refresh;
 
   useEffect(() => {
+    refreshRef.current = refresh;
     void refresh(true);
     const intervalId = window.setInterval(() => void refresh(true), AUTO_POLL_MS);
-    return () => window.clearInterval(intervalId);
+    return () => {
+      window.clearInterval(intervalId);
+      if (followUpTimer.current !== undefined) {
+        window.clearTimeout(followUpTimer.current);
+      }
+    };
   }, [refresh]);
 
   return {

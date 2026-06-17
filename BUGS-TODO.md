@@ -50,9 +50,9 @@ Fix: gate admin departure on confirmed delivery, or let members detect a dead ad
 `nextActiveTarget` ran every 1 s poll and force-selected `sessions[0]` when the current target wasn't found. An in-flight poll returning before a just-created session appeared reset `active` away from the chat the user just opened.
 Fix: `nextActiveTarget` now takes a `seen` set (every id ever observed in a snapshot, maintained by `seenRef`). A non-null `current` that was never seen is kept (freshly created, poll hasn't caught up); it only auto-switches away once the target was seen and is now gone (real delete), or when `current` is null. Unit-tested (`use-private-dm-snapshots.test.ts`).
 
-### 24. · Follow-up timer after unmount + ref-write during render — `use-private-dm-snapshots.ts:111, 117`
-`window.setTimeout(() => void followUp(true), 0)` in `finally` has no cleanup → `setState` on unmounted hook. `refreshRef.current = refresh` (:117) mutates a ref during render (StrictMode/concurrent hazard).
-Fix: store the timeout id and clear it in cleanup; assign `refreshRef` in an effect.
+### ~~24.~~ FIXED — Follow-up timer after unmount + ref-write during render — `use-private-dm-snapshots.ts`
+`window.setTimeout(() => void followUp(true), 0)` in `finally` had no cleanup → a coalesced follow-up poll ran on an unmounted hook. `refreshRef.current = refresh` was assigned during render (StrictMode/concurrent hazard).
+Fix: store the timeout id in `followUpTimer` and clear it in the effect cleanup; assign `refreshRef` inside the effect instead of during render. Unit-tested (`use-private-dm-snapshots.test.ts` "does not fire a coalesced follow-up poll after unmount").
 
 ---
 
