@@ -25,6 +25,22 @@ export function startRingtone(): RingtoneHandle {
   osc2.start();
 
   const start = context.currentTime;
+  let closed = false;
+  const closeOnce = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    void context.close();
+  };
+  // Backstop: even if stop() is never called (e.g. the call auto-resolves on a
+  // path that forgets the ringer), end the oscillators after the ring pattern
+  // and close the context on the last one so we never leak an AudioContext.
+  const ringEnd = start + 30;
+  osc1.stop(ringEnd);
+  osc2.stop(ringEnd);
+  osc2.onended = closeOnce;
+
   for (let beat = 0; beat < 30; beat += 1) {
     const ringStart = start + beat * 1.0;
     gain.gain.setValueAtTime(0.0001, ringStart);
@@ -45,7 +61,7 @@ export function startRingtone(): RingtoneHandle {
     } catch {
       // already stopped
     }
-    void context.close();
+    closeOnce();
   };
 
   return { stop };
