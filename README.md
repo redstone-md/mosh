@@ -77,6 +77,11 @@ npm run format      # check Rust formatting
 
 ## Persistence & Privacy
 
+**Mosh collects no user data.** There is no central server, no telemetry, no
+analytics, and no crash reporting. Nothing leaves your device except
+end-to-end-encrypted messages exchanged directly with your peers over the
+decentralized Moss mesh. All local data is stored encrypted, as described below.
+
 Private-DM history and MLS session state persist across restarts, encrypted at
 rest:
 
