@@ -96,3 +96,16 @@ See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
   `src-tauri/moss-runtime/`.
 
 Do not commit built Moss shared-library binaries or generated credentials.
+
+## License
+
+Mosh is free software licensed under the **GNU General Public License v3.0 or
+later** (`GPL-3.0-or-later`) — see [`LICENSE`](LICENSE). You may use, study,
+share, and modify it; any distributed derivative must remain under the GPL and
+ship its source.
+
+The bundled Moss runtime (`moss/` submodule) is a separate project under the MIT
+license.
+
+Windows releases are code-signed via the SignPath Foundation — see
+[`CODE_SIGNING.md`](CODE_SIGNING.md).
