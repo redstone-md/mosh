@@ -8,7 +8,7 @@ export interface CallFrameSource {
 
 /** Where decoded, reordered frames go (the playback handle, narrowed). */
 export interface CallFrameSink {
-  pushFrame(payload: Uint8Array): void;
+  pushFrame(seq: bigint, payload: Uint8Array): void;
 }
 
 /**
@@ -36,6 +36,6 @@ export async function drainCallFrames(
     }
   }
   for (const buffered of jitter.drainReady()) {
-    playback.pushFrame(buffered.payload);
+    playback.pushFrame(buffered.seq, buffered.payload);
   }
 }
