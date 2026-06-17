@@ -4,6 +4,23 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-06-17
+
+### Fixed
+- **Voice messages can be recorded on macOS.** The recorder only offered the
+  WebM/Ogg Opus containers, which the macOS WebView (WebKit) cannot capture, so
+  it reported recording as unsupported and the microphone button never appeared.
+  It now falls back to MP4/AAC on WebKit while keeping WebM/Opus on Windows, and
+  the macOS bundle ships an `NSMicrophoneUsageDescription` so the system grants
+  microphone access.
+- **Attachments with a large preview are delivered again.** An attachment's
+  manifest — including its inline thumbnail — rides a single gossip publish that
+  caps at 64KB. A heavy thumbnail pushed the encrypted manifest past the cap, so
+  the peer silently never received it even though the sender saw the message as
+  sent. Oversized thumbnails are now dropped from the manifest (the file is
+  still downloadable in full), keeping every attachment under the transport
+  limit.
+
 ## [0.2.8] - 2026-06-15
 
 ### Fixed
