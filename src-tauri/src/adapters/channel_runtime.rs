@@ -9,6 +9,7 @@ use crate::adapters::attachment_runtime::{
     OutgoingAttachment, StreamRange, CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
+use crate::adapters::message_id::MessageIdGen;
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
@@ -233,6 +234,7 @@ struct ChannelSession {
     static_peer: Option<String>,
     node: MossNode,
     messages: Vec<ChannelMessage>,
+    message_ids: MessageIdGen,
     seen_set: HashSet<String>,
     seen_order: VecDeque<String>,
     attachment_store: Arc<AttachmentStore>,
@@ -308,6 +310,7 @@ impl ChannelRuntime {
                 static_peer: rec.static_peer.clone(),
                 node,
                 messages: Vec::new(),
+                message_ids: MessageIdGen::default(),
                 seen_set: HashSet::new(),
                 seen_order: VecDeque::new(),
                 attachment_store: Arc::clone(&self.attachment_store),
@@ -431,6 +434,7 @@ impl ChannelRuntime {
             static_peer,
             node,
             messages: Vec::new(),
+            message_ids: MessageIdGen::default(),
             seen_set: HashSet::new(),
             seen_order: VecDeque::new(),
             attachment_store: Arc::clone(&self.attachment_store),
@@ -959,7 +963,7 @@ impl ChannelSession {
         let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
         message.sent_at_ms = Some(sent_at_ms);
         if message.message_id.as_deref().unwrap_or_default().is_empty() {
-            message.message_id = Some(format!("{sent_at_ms}-{:06}", self.messages.len()));
+            message.message_id = Some(self.message_ids.next(sent_at_ms));
         }
         message
     }
