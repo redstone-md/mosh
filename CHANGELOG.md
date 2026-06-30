@@ -4,6 +4,20 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-30
+
+### Changed
+- **Bundled Moss core upgraded to v0.4.0 (DPI-resistant flag-day).** All
+  peer-to-peer UDP traffic is now obfuscated by a keyed scramble codec so it
+  is indistinguishable from random UDP — Mosh now connects on networks that
+  fingerprint-block protocols like WireGuard (notably Russian DPI). Discovery
+  also gained the BitTorrent mainline DHT, a persistent peer cache for warm
+  reconnect, and faster tracker bootstrap.
+- **Network compatibility break:** the wire format changed, so this build does
+  **not** interoperate with Mosh ≤ 0.2.x or older relays. Everyone on a mesh
+  must update together. Message confidentiality is unchanged (OpenMLS + Noise);
+  the codec is an anti-censorship wrapper, not the encryption layer.
+
 ## [0.2.10] - 2026-06-17
 
 ### Fixed
