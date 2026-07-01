@@ -44,6 +44,8 @@ pub enum ControlEnvelope {
         participant_id: String,
         from_device: String,
         key_package_b64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moss_peer_id: Option<String>,
     },
     Welcome {
         session_id: String,
@@ -51,6 +53,8 @@ pub enum ControlEnvelope {
         from_device: String,
         welcome_b64: String,
         ratchet_tree_b64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moss_peer_id: Option<String>,
     },
     /// Carries an AttachmentManifest encrypted as an MLS application message,
     /// so the per-attachment AES key never crosses the wire in the clear.
@@ -212,6 +216,26 @@ mod tests {
             serde_json::from_slice::<ControlEnvelope>(&bytes).unwrap(),
             ControlEnvelope::CallEnd { .. }
         ));
+    }
+
+    #[test]
+    fn key_package_carries_optional_moss_peer_id() {
+        let with = ControlEnvelope::KeyPackage {
+            session_id: "s".into(),
+            participant_id: "p".into(),
+            from_device: "d".into(),
+            key_package_b64: "a2V5".into(),
+            moss_peer_id: Some("ab".repeat(32)),
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains(&"ab".repeat(32)));
+        let back: ControlEnvelope = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, ControlEnvelope::KeyPackage { moss_peer_id: Some(_), .. }));
+
+        // Old peers omit the field entirely — must still decode (None).
+        let legacy = r#"{"type":"KeyPackage","session_id":"s","participant_id":"p","from_device":"d","key_package_b64":"a2V5"}"#;
+        let back: ControlEnvelope = serde_json::from_str(legacy).unwrap();
+        assert!(matches!(back, ControlEnvelope::KeyPackage { moss_peer_id: None, .. }));
     }
 
     #[test]
