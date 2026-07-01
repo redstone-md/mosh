@@ -1,5 +1,6 @@
 mod contracts;
 mod invite;
+mod relay;
 mod wire;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -80,6 +81,8 @@ pub struct PrivateDmRuntime {
     // group_id, so the tail-persist loop refreshes each record only once.
     finalized_session_records: HashSet<String>,
     sessions: HashMap<String, PrivateDmSession>,
+    relay_ref: relay::RelayRef,
+    relay_node: Option<MossNode>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -158,7 +161,33 @@ impl PrivateDmRuntime {
             persisted_counts: HashMap::new(),
             finalized_session_records: HashSet::new(),
             sessions: HashMap::new(),
+            relay_ref: relay::RelayRef::default(),
+            relay_node: None,
         }
+    }
+
+    /// Bring the shared relay node up on first demand and increment its
+    /// refcount; later callers just bump the count and get the same node.
+    fn ensure_relay_up(&mut self) -> Result<&MossNode, PrivateDmRuntimeError> {
+        if self.relay_ref.acquire() == 1 {
+            self.relay_node = Some(relay::start_relay_node(&self.moss)?);
+        }
+        self.relay_node
+            .as_ref()
+            .ok_or_else(|| PrivateDmRuntimeError::Moss("relay node missing".into()))
+    }
+
+    /// Decrement the relay refcount; the last release drops (and thus stops)
+    /// the shared node.
+    fn release_relay(&mut self) {
+        if self.relay_ref.release() == 0 {
+            // Drop stops the node (MossNode::drop → Moss_Stop).
+            self.relay_node = None;
+        }
+    }
+
+    fn relay_node(&self) -> Option<&MossNode> {
+        self.relay_node.as_ref()
     }
 
     /// Rebuild sessions + history from the encrypted store. Best-effort: a bad
