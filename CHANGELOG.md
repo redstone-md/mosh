@@ -4,6 +4,20 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-01
+
+### Fixed
+- **CGNAT peers no longer flap connect/disconnect.** Bundled Moss core bumped
+  to `23d53e5`, pulling two NAT reachability fixes. Previously a node behind
+  carrier-grade NAT (common on Russian ISPs) labelled *itself* publicly
+  reachable purely from its STUN reflexive address and broadcast that to the
+  mesh; peers then hammered a direct mapping that dies and re-opens on a new
+  port each attempt, producing rapid `peer_joined`/`peer_left` churn.
+  Reachability now requires a real inbound probe, and genuine carrier NAT is
+  detected observationally (varying mapped port → symmetric) instead of from
+  address shape. Both peers must run ≥ 0.3.1 for the fix to take effect on a
+  given link.
+
 ## [0.3.0] - 2026-06-30
 
 ### Changed
