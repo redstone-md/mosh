@@ -63,7 +63,7 @@ Why not the alternatives:
 
 | # | Sub-project | Repo | Depends | One-line |
 |---|---|---|---|---|
-| **S1** | moss: relay-mesh connect-by-peer-id | `moss` | — | Reuse Mesh TURN. Add: a client establishes a relayed transport to a *known target peer-id* on the relay mesh, exposed as a normal session; join/leave the relay mesh on demand. |
+| **S1** | moss: relay-by-peer-id FFI | `moss` | — | Audit found Mesh TURN by peer-id (`OpenRelaySessionAny`/`RelaySendTo`, E2E via SuperNode) already exists. S1 shrinks to `SeedKnownPeer(peerID, noiseStatic)` + FFI exports (`Moss_SeedKnownPeer`/`Moss_RelaySendTo`/`Moss_SetRelayCallback`). Relay-mesh membership is a second moss node run by mosh, not a core change. |
 | **S2** | mosh: dual-path DM transport | `mosh` | S1 | Keep per-DM direct; on NAT failure join the relay mesh and carry the DM session over the relayed connection to the peer's relay-mesh peer-id (from the invite). |
 | **S3** | MossSpore: relay-mesh supernode + scale | `MossSpore` | S2 | Run a spore on the relay mesh (it auto-promotes to SuperNode); bundled bootstrap spore list in mosh; mass-deploy docs, health/metrics. Minimal daemon code. |
 
