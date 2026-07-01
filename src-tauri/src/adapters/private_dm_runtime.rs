@@ -867,6 +867,7 @@ impl PrivateDmRuntime {
                 }
             }
         }
+        self.drain_relay();
         // Keep every active download fed, and re-drive any incomplete MLS
         // handshake, without waiting on a user action. The UI polls roughly
         // once a second, so this is the heartbeat that retransmits a KeyPackage
@@ -878,6 +879,45 @@ impl PrivateDmRuntime {
         }
         self.persist_session_tail();
         Ok(())
+    }
+
+    /// Reconstruct the direct-path `MossReceivedMessage` shape for frames that
+    /// arrived over the point-to-point relay instead of pubsub, and feed them
+    /// through the same `handle_moss_message` dedup/dispatch as the direct
+    /// path — the relay callback has no channel, so `RelayFrame` re-tags it.
+    fn drain_relay(&mut self) {
+        for inbound in crate::adapters::moss_ffi::drain_relay_frames() {
+            let frame: wire::RelayFrame = match decode_json(&inbound.data) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("dropping malformed relay frame: {e}");
+                    continue;
+                }
+            };
+            let Some(session) = self.sessions.get_mut(&frame.session_id) else {
+                continue;
+            };
+            // Authenticate: the frame's sender must be the peer we exchanged
+            // ids with. Unknown/mismatched sender => drop (anti-spoof). If we
+            // have not learned peer_moss_id yet, accept and pin it (first
+            // relay frame can precede a resent handshake).
+            match session.peer_moss_id.as_deref() {
+                Some(known) if known != inbound.sender_hex => {
+                    eprintln!("dropping relay frame: sender {} != peer", inbound.sender_hex);
+                    continue;
+                }
+                None => session.peer_moss_id = Some(inbound.sender_hex.clone()),
+                _ => {}
+            }
+            let channel = frame.channel_kind.channel_for(&frame.session_id);
+            let message = MossReceivedMessage {
+                channel,
+                payload: frame.bytes,
+            };
+            if let Err(e) = session.handle_moss_message(message) {
+                eprintln!("dropping relayed frame for {}: {e}", frame.session_id);
+            }
+        }
     }
 
     fn persist_outbound_state(
