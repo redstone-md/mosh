@@ -94,6 +94,29 @@ jobs:
       - name: Cargo test (nextest)
         run: cargo nextest run --profile ci --manifest-path src-tauri/Cargo.toml
 
+      # Pull the tag's section out of CHANGELOG.md so the GitHub release shows
+      # the actual notes, not a "see CHANGELOG" pointer. Git Bash on the Windows
+      # runner provides awk/sed just like the macOS runners.
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          tag='${{ github.event.inputs.tag || github.ref_name }}'
+          version="${tag#v}"
+          section="$(awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { p=1; next }
+            p && /^## \[/ { exit }
+            p { print }
+          ' CHANGELOG.md | sed -e '/./,$!d')"
+          if [ -z "$section" ]; then
+            section="See CHANGELOG.md for release notes."
+          fi
+          {
+            echo 'body<<CHANGELOG_EOF'
+            printf '%s\n' "$section"
+            echo 'CHANGELOG_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build installers & upload to release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -101,7 +124,7 @@ jobs:
         with:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: 'Mosh ${{ github.event.inputs.tag || github.ref_name }}'
-          releaseBody: 'See CHANGELOG.md for release notes.'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
