@@ -75,6 +75,41 @@ DM whose invite `fingerprint` matches. No new invite fields.
 - No user config for the common case (advanced pin/add bootstrap spores deferred,
   YAGNI).
 
+## Reality gaps (mosh code audit) + resolutions
+
+The audit found three gaps the first draft glossed. Each has a chosen resolution:
+
+1. **No remote moss peer-id anywhere.** `Moss_RelaySendTo` targets
+   `hex(ed25519 pub)` (64 lc hex, from `Moss_GetPublicKey`), but the invite
+   `fingerprint` is the **MLS-signer** fingerprint (16 B → 32 uc hex, from
+   `MlsSessionCrypto::fingerprint`) — wrong key, wrong length. No struct stores the
+   peer's moss peer-id.
+   → **Resolution:** exchange each device's moss peer-id in the existing MLS
+   control handshake (add `moss_peer_id` to the `KeyPackage` / `Welcome`
+   `ControlEnvelope` variants in `wire.rs`), captured from `session.node.public_key_hex()`,
+   and store `peer_moss_id: Option<String>` on `PrivateDmSession`. The control
+   handshake already runs over the per-DM mesh at setup, before relay is ever
+   needed. **No invite change** (invite stays `mesh/session/#fp`).
+
+2. **Inbound dispatch is channel-keyed; relay frames carry no channel.**
+   `drain_inbound` routes by `message.channel` (`mls-control/…` etc.); the relay
+   callback delivers `(sender_id, data)` only.
+   → **Resolution:** frame relayed payloads as a tiny tagged wrapper
+   `RelayFrame{ session_id, channel_kind ∈ {control,data,blob}, bytes }` (bincode/
+   json). A new relay drain (parallel to `drain_inbound`) maps `sender_id →
+   session` (via `peer_moss_id`), reconstructs the channel, and calls the existing
+   `handle_moss_message` — so all MLS/dedup logic downstream is unchanged.
+
+3. **Direct = pubsub (`node.publish(channel)`); relay = point-to-point
+   (`RelaySendTo(peerID)`) on a different node.**
+   → **Resolution:** a single send chokepoint per DM: `route_send(kind, payload)`
+   that either `session.node.publish(channel, payload)` (direct) or
+   `relayNode.relay_send_to(peer_moss_id, RelayFrame{…})` (relayed). The three
+   existing publish sites (control/data/blob) call it.
+
+Consequence: S2 is a real protocol change (control-envelope + a relay frame
+format + a second node + a parallel drain + routing), not a thin wrapper.
+
 ## Failure handling
 
 - **No relay reachable** → DM stays `DISCOVER` / "connecting"; retries. No worse
@@ -97,5 +132,7 @@ DM whose invite `fingerprint` matches. No new invite fields.
 
 - **Fallback, not always-on** — direct stays preferred; relay is last resort.
 - **moss owns dialing, mosh owns policy** — smallest FFI surface.
-- **No new invite secret/field** — peer-id + static key come from the existing
-  fingerprint; existing invites stay valid.
+- **Peer moss-id via the MLS control handshake, not the invite** — the invite
+  `fingerprint` is the MLS-signer fingerprint, not the moss peer-id. Exchange the
+  64-hex moss peer-id in the `KeyPackage`/`Welcome` control envelope; invite format
+  unchanged, existing invites stay valid.
