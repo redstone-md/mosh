@@ -107,6 +107,8 @@ struct PrivateDmSession {
     session_id: String,
     mesh_id: String,
     fingerprint: String,
+    // ponytail: not persisted, relearned on next handshake resend
+    peer_moss_id: Option<String>,
     invite_uri: Option<String>,
     // Transport coordinates kept so the persisted session record can be
     // rebuilt verbatim (notably to refresh the joiner's group_id after join).
@@ -449,6 +451,7 @@ impl PrivateDmRuntime {
             participant_id: participant_id.clone(),
             from_device: request.display_name.clone(),
             key_package_b64: encode(&key_package),
+            moss_peer_id: node.public_key_hex(),
         };
         // Keep the serialized KeyPackage so the drain loop can re-publish it
         // until the Welcome arrives. The first publish below often lands before
@@ -1128,6 +1131,7 @@ impl PrivateDmSession {
             session_id,
             mesh_id,
             fingerprint,
+            peer_moss_id: None,
             invite_uri,
             listen_port,
             static_peer,
@@ -1313,6 +1317,15 @@ impl PrivateDmSession {
         }
     }
 
+    /// Remember the peer's moss relay peer-id, learned from the first
+    /// KeyPackage/Welcome that carries it. Sticky: once set, later handshake
+    /// retransmits never overwrite it.
+    fn note_peer_moss_id(&mut self, id: Option<String>) {
+        if let Some(id) = id {
+            self.peer_moss_id.get_or_insert(id);
+        }
+    }
+
     fn note_verified_peer_activity(&mut self, from_device: &str) {
         let is_peer = !from_device.is_empty() && from_device != self.device_id;
         self.note_peer_name(from_device);
@@ -1357,8 +1370,10 @@ impl PrivateDmSession {
                 participant_id,
                 from_device,
                 key_package_b64,
+                moss_peer_id,
             } if self.is_alice_session(&session_id, &participant_id) => {
                 self.note_peer_name(&from_device);
+                self.note_peer_moss_id(moss_peer_id);
                 // Bob re-sends his KeyPackage until he sees the Welcome. If we
                 // already added him, our first Welcome was likely lost before
                 // his node meshed, so re-answer with the cached copy rather than
@@ -1381,6 +1396,7 @@ impl PrivateDmSession {
                     from_device: self.device_id.clone(),
                     welcome_b64: encode(&welcome),
                     ratchet_tree_b64: encode(&tree),
+                    moss_peer_id: self.node.public_key_hex(),
                 };
                 let welcome_payload = serde_json::to_vec(&envelope)
                     .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
@@ -1396,11 +1412,13 @@ impl PrivateDmSession {
                 from_device,
                 welcome_b64,
                 ratchet_tree_b64,
+                moss_peer_id,
             } if self.is_bob_session(&session_id, &participant_id) => {
                 if self.peer_joined {
                     return Ok(());
                 }
                 self.note_peer_name(&from_device);
+                self.note_peer_moss_id(moss_peer_id);
                 self.crypto
                     .join_welcome(&decode(&welcome_b64)?, &decode(&ratchet_tree_b64)?)?;
                 self.peer_joined = true;
@@ -2460,6 +2478,7 @@ mod tests {
             participant_id: "bob-participant".to_string(),
             from_device: "Bob".to_string(),
             key_package_b64,
+            moss_peer_id: None,
         })
         .expect("KeyPackage envelope should serialize");
 
@@ -2488,6 +2507,52 @@ mod tests {
             "repeat KeyPackage must not re-run add_members"
         );
         assert!(session.pending_welcome.is_some());
+    }
+
+    // Task 3: the moss peer-id rides along in the KeyPackage so Alice can
+    // learn Bob's relay address without a separate exchange.
+    #[test]
+    fn handle_control_captures_peer_moss_id_from_key_package() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42183,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let mut bob_crypto = MlsSessionCrypto::new("Bob").expect("Bob crypto should init");
+        let key_package_b64 = encode(
+            &bob_crypto
+                .key_package_bytes()
+                .expect("Bob key package should build"),
+        );
+        let bob_moss_peer_id = "ab".repeat(32);
+        let payload = serde_json::to_vec(&ControlEnvelope::KeyPackage {
+            session_id: invite.session_id.clone(),
+            participant_id: "bob-participant".to_string(),
+            from_device: "Bob".to_string(),
+            key_package_b64,
+            moss_peer_id: Some(bob_moss_peer_id.clone()),
+        })
+        .expect("KeyPackage envelope should serialize");
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+
+        session
+            .handle_control(payload)
+            .expect("KeyPackage should add Bob");
+        assert_eq!(session.peer_moss_id, Some(bob_moss_peer_id));
     }
 
     #[test]
