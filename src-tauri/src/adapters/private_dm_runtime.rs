@@ -169,9 +169,15 @@ impl PrivateDmRuntime {
     /// Bring the shared relay node up on first demand and increment its
     /// refcount; later callers just bump the count and get the same node.
     fn ensure_relay_up(&mut self) -> Result<&MossNode, PrivateDmRuntimeError> {
-        if self.relay_ref.acquire() == 1 {
+        // Start BEFORE bumping the refcount. Incrementing first would leak a
+        // ref on a transient dll init/start failure — the count would stick
+        // above zero while the node stayed None, and every later call would
+        // return "relay node missing" forever. Node presence is the source of
+        // truth for "started"; the count only tracks how many DMs rely on it.
+        if self.relay_node.is_none() {
             self.relay_node = Some(relay::start_relay_node(&self.moss)?);
         }
+        self.relay_ref.acquire();
         self.relay_node
             .as_ref()
             .ok_or_else(|| PrivateDmRuntimeError::Moss("relay node missing".into()))
