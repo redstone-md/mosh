@@ -23,26 +23,33 @@ keys from the invite) is unchanged.
 
 ## What is added
 
-1. **Relay-mesh presence, on demand.** When a DM has no direct peer after the
-   direct-attempt budget, mosh calls S1 `JoinRelayMesh` (ref-counted; one presence
-   shared by all relayed DMs). Cheap and only while needed.
+1. **A shared relay-mesh node.** mosh runs one extra moss node via
+   `Moss_Init("moss-relay/1", …)` + `Moss_Start`, config `static_peers` = the
+   bundled spore list (S3) so it connects to SuperNode spores. Ref-counted: started
+   when the first DM needs relay, stopped when the last relayed DM closes. This is
+   the "relay-mesh membership" — moss needs no `JoinRelayMesh` (one node = one
+   mesh, so membership is just a second Init).
 
-2. **Targeted relayed dial.** The DM's peer is addressed on the relay mesh by the
-   peer-id derived from the **static key already in the invite fingerprint**. mosh
-   calls S1 `Moss_ConnectRelayed(handle, target_peer_id, remote_static_key)`; the
-   returned session feeds the same subscribe/publish path the DM already uses.
+2. **Point-to-point relayed messages.** The DM peer is addressed by its moss
+   peer-id = `hex(ed25519 pub)` = the invite `fingerprint` (no new invite field,
+   no key seeding — the peer's Noise static arrives via announce flooding, S1).
+   - Send: `Moss_RelaySendTo(relayHandle, peerID_B, mls_ciphertext, len)`.
+   - Receive: `Moss_SetRelayCallback(relayHandle, cb)` delivers `(senderPeerID,
+     ciphertext)` to the same DM message handler the direct path uses.
+   DM messages ride point-to-point relay frames — **not** pubsub — so no DM topic
+   is published on the shared relay mesh (no metadata leak).
 
 3. **Fallback state machine per DM** (`private_dm_runtime`):
 
 ```
-        ┌── direct connected ─────────────► DIRECT (steady)
+        ┌── direct connected ─────────────► DIRECT (steady, per-DM mesh)
 DISCOVER┤
         └── no direct peer after T_fallback ─► RELAYED
-RELAYED: JoinRelayMesh (ref-counted) → ConnectRelayed(peerID, static) → run the
-         DM's MLS/Noise session over the returned transport.
-Any state: if a direct path later appears, migrate to it and drop the relay
-         (existing moss migration; direct always wins — also fixes the current
-         "fragile outbound replaces stable inbound" thrash by preferring direct).
+RELAYED: ensure relay-mesh node up (ref-counted) → route this DM's outgoing MLS
+         messages through Moss_RelaySendTo(peerID_B); deliver inbound via the
+         relay callback demultiplexed by senderPeerID → DM.
+Any state: if the per-DM mesh reports a direct peer, switch routing back to direct
+         and drop relay use for this DM (direct always preferred).
 ```
 
 `T_fallback` ≈ the existing direct budget (hole-punch attempts + handshake
@@ -50,15 +57,15 @@ timeout) so relay fires only after direct genuinely fails.
 
 ## FFI / boundary
 
-moss owns the mechanics (S1); mosh owns policy (when to fall back, which peer-id,
-reading status). Consumed additions:
+moss owns the mechanics (S1, already merged); mosh owns policy (when to fall back,
+which peer-id, demultiplexing inbound relay frames by sender). Consumed S1
+exports:
 
-- `Moss_ConnectRelayed(handle, target_peer_id, remote_static_key)` (S1).
-- `path ∈ {direct, relayed}` + `relay_supernode` in the existing network-stats
-  struct.
+- `Moss_RelaySendTo(handle, target_peer_id, data, len) -> i32`.
+- `Moss_SetRelayCallback(handle, cb)` — `cb(sender_id[32], data, len)`.
 
-No new invite fields: the peer-id and static key come from the invite's existing
-`fingerprint`.
+The relay callback carries only the 32-byte sender peer-id; mosh maps it to the
+DM whose invite `fingerprint` matches. No new invite fields.
 
 ## UI / observability
 
