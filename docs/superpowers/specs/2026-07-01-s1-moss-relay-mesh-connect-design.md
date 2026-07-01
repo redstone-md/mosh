@@ -26,56 +26,43 @@ existing relay over the C FFI plus one seeding helper, so mosh (S2) can drive it
 
 ## The two real gaps
 
-1. **Out-of-band peer seeding.** A peer-id is `hex(ed25519 public key)`
-   (`localPeerID`), but the relay E2E crypto and `registerRelayedPeerLocked`
-   require the *other* key — the peer's 32-byte **Noise static** — to be present in
-   `knownPeers[peerID].noiseStatic`. On a large shared relay mesh a specific peer
-   is not gossip-discovered, so both keys must be injected from the invite before
-   the first relay attempt.
+1. ~~Out-of-band peer seeding.~~ **RESOLVED — no seeding needed.** A follow-up
+   code audit (mutation test in review) proved the peer's Noise static is already
+   delivered by moss's signed peer-announce propagation: `handleKnownPeerEnvelope`
+   stores `AdvertisedNoiseStatic` into `knownPeers[peerID].noiseStatic` **and
+   re-broadcasts** (`broadcastToAll`). Whenever two peers share a SuperNode (the
+   precondition for relaying), that SuperNode floods each peer's announce to the
+   other, so A learns B's Noise static without any manual seed. A `SeedKnownPeer`
+   helper would be dead code. Only the target **peer-id** is needed to address the
+   relay, and that is `hex(ed25519 pub)` = the invite's existing `fingerprint`.
 
 2. **No relay FFI.** `cmd/moss-ffi` exports Init/Start/Subscribe/Publish/Connect/
-   callbacks but nothing for relay send/receive or peer seeding.
+   callbacks but nothing for relay send/receive.
 
 Relay-mesh *membership* is **not** a moss change: a moss node is one mesh, so the
 relay mesh is simply a second `Moss_Init("moss-relay/1", …)` node that mosh runs
 (S2), with the bundled spore list passed as `static_peers` so both endpoints share
-a SuperNode. moss needs no `JoinRelayMesh` method.
+a SuperNode. moss needs no `JoinRelayMesh` method and no `SeedKnownPeer`.
 
-## Additions (small)
+## Additions (small) — FFI only
 
-### moss core — one method
-
-`internal/mesh/node_relay_api.go`:
-
-```go
-// SeedKnownPeer injects a peer's identity learned out-of-band (e.g. from a Mosh
-// invite) so a relay session can be opened to it before gossip discovery.
-// peerID is hex(ed25519 pub); noiseStatic is the 32-byte Noise static pub.
-func (n *Node) SeedKnownPeer(peerID string, noiseStatic []byte) error
-```
-
-It validates `len(noiseStatic)==32` and a well-formed hex peerID, then under
-`n.mu` sets `knownPeers[peerID]` (create or update) with `id=peerID`,
-`noiseStatic=copy`, `natTrusted=false`, `lastSeen=now`. It does **not** mark the
-peer relay-capable or reachable — it only supplies the static key the relay path
-needs. Idempotent.
-
-### moss FFI — three exports (`cmd/moss-ffi/main.go`)
+### moss FFI — two exports (`cmd/moss-ffi/main.go`)
 
 ```c
-int32_t Moss_SeedKnownPeer(MossHandle h, const char* peer_id, const uint8_t* noise_static /*32*/);
 int32_t Moss_RelaySendTo(MossHandle h, const char* target_peer_id, const uint8_t* data, int32_t len);
 void    Moss_SetRelayCallback(MossHandle h, MossRelayCallback cb);   // delivers inbound relay frames
 ```
 
-- `Moss_SeedKnownPeer` → `node.SeedKnownPeer` (copies 32 bytes from C).
-- `Moss_RelaySendTo` → `node.RelaySendTo(peerID, data, node handshake timeout)`.
+- `Moss_RelaySendTo` → `node.RelaySendTo(peerID, data, timeout)`. Reaches the peer
+  by its peer-id (from the invite); the peer's Noise static is already present via
+  announce propagation. Returns `MOSS_ERR_RELAY_FAILED` when no relay route exists.
 - `Moss_SetRelayCallback` → `node.SetRelayCallback`, marshalling `(senderPeerID,
   data)` to C like the existing `Moss_SetCallback` does for messages.
 
 `MossRelayCallback` typedef added to the cgo preamble alongside the existing
 callback typedefs; the delivery goroutine rule (invoke from a Go goroutine, never
-a C thread) matches `Moss_SetCallback`.
+a C thread) matches `Moss_SetCallback`. `Node.RelaySendTo` / `SetRelayCallback`
+and the E2E relay path already exist and are unchanged.
 
 ### mesh-info (observability, optional)
 
