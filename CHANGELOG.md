@@ -4,6 +4,16 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-07-02
+
+### Fixed
+- **Relay fallback can actually find a relay.** Bundled Moss core bumped to
+  `f3bb2fb`: a relay SuperNode now periodically re-advertises its status, so a
+  client that joins the shared relay mesh *after* the relay came online learns it
+  can route through it (previously the one-shot promotion notice was missed and
+  relay selection found nothing). Without this, the 0.4.0 relay-fallback path was
+  inert for the common case; direct-capable DMs were unaffected either way.
+
 ## [0.4.1] - 2026-07-02
 
 ### Fixed
