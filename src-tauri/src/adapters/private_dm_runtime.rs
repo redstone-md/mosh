@@ -764,8 +764,14 @@ impl PrivateDmRuntime {
         voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let session = self.session_mut(session_id)?;
-        session.send_attachment(file_name, mime, bytes, thumbnail, voice)
+        // Disjoint field borrows: hold `relay_node` (field) alongside the
+        // mutable session borrow so the manifest send can route when Relayed.
+        let relay = self.relay_node.as_ref();
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or(PrivateDmRuntimeError::MissingSession)?;
+        session.send_attachment(file_name, mime, bytes, thumbnail, voice, relay)
     }
 
     /// Begins (or retries) downloading a peer's attachment.
@@ -1791,6 +1797,7 @@ impl PrivateDmSession {
         bytes: Vec<u8>,
         thumbnail: Option<String>,
         voice: Option<VoiceMeta>,
+        relay_node: Option<&MossNode>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         if !self.ready_for_user_actions() {
             return Err(PrivateDmRuntimeError::NotReady);
@@ -1819,7 +1826,13 @@ impl PrivateDmSession {
             from_device: self.device_id.clone(),
             manifest_ciphertext_b64: encode(&ciphertext),
         };
-        publish_json(&self.node, &self.control_channel, &envelope)?;
+        // Manifest carries the per-attachment AES key on the control channel;
+        // route it through the chokepoint so it follows the same path as the
+        // handshake/data/blob traffic when the session is Relayed. At Discover
+        // this publishes to the identical control channel `publish_json` used.
+        let payload = serde_json::to_vec(&envelope)
+            .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
+        self.route_send(wire::ChannelKind::Control, &payload, relay_node)?;
 
         let descriptor = descriptor_of(&manifest);
         self.attachment_slots.insert(
@@ -2052,6 +2065,9 @@ impl PrivateDmSession {
             call_id: call_id.clone(),
             offer_ciphertext_b64: encode(&ciphertext),
         };
+        // Call* signaling stays on the direct node until voice-relay is in
+        // scope. Relaying signaling alone would negotiate a call whose media
+        // path (out of S2 scope) is still pubsub-only, i.e. no audio.
         publish_json(&self.node, &self.control_channel, &envelope)?;
         Ok(CallStarted {
             session_id: self.session_id.clone(),
@@ -2074,6 +2090,7 @@ impl PrivateDmSession {
             participant_id: self.participant_id.clone(),
             call_id: call_id.to_string(),
         };
+        // Stays direct until voice-relay is in scope (see call_start).
         publish_json(&self.node, &self.control_channel, &envelope)
     }
 
