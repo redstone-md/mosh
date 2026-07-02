@@ -102,6 +102,9 @@ struct AttachmentSlot {
 
 struct PrivateDmSession {
     role: SessionRole,
+    // Transport chosen for outbound control/data/blob frames. Always `Discover`
+    // in Task 5 (routes direct); Task 6 flips it to `Relayed` for hard-NAT peers.
+    path: DmPath,
     device_id: String,
     participant_id: String,
     session_id: String,
@@ -144,6 +147,19 @@ struct PrivateDmSession {
 enum SessionRole {
     Alice,
     Bob,
+}
+
+/// Which transport a session's outbound control/data/blob frames take.
+/// Task 5 only ever leaves this at `Discover` (init) — every path routes
+/// identically to today's direct pubsub publish. Task 6 adds the transitions
+/// to `Relayed` for hard-NAT peers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DmPath {
+    /// Direct not yet decided; still hole-punching. Send goes direct (best
+    /// effort) until we fall back.
+    Discover,
+    Direct,
+    Relayed,
 }
 
 impl PrivateDmRuntime {
@@ -459,6 +475,9 @@ impl PrivateDmRuntime {
         let key_package_payload = serde_json::to_vec(&envelope)
             .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
 
+        // One-shot create-time KeyPackage: the session (and its DmPath) does not
+        // exist yet, and this always runs while the path would be Discover, which
+        // route_send maps to this exact direct publish. Kept direct on purpose.
         node.publish(&control_channel(&invite.session_id), &key_package_payload)
             .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
 
@@ -505,7 +524,6 @@ impl PrivateDmRuntime {
         self.drain_inbound()?;
         let (
             session_id_owned,
-            data_channel,
             state,
             message_id,
             sent_at_ms,
@@ -558,7 +576,6 @@ impl PrivateDmRuntime {
                 .insert(message_id.clone(), attempt);
             (
                 session.session_id.clone(),
-                session.data_channel.clone(),
                 session.state(),
                 message_id,
                 sent_at_ms,
@@ -569,11 +586,11 @@ impl PrivateDmRuntime {
         self.persist_outbound_state(session_id, &message_id, true);
 
         let publish = {
+            // Disjoint field borrows: `relay_node` reads only the field, so it
+            // coexists with the immutable session borrow taken by `session_ref`.
+            let relay = self.relay_node.as_ref();
             let session = self.session_ref(session_id)?;
-            session
-                .node
-                .publish(&data_channel, &payload)
-                .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
+            session.route_send(wire::ChannelKind::Data, &payload, relay)
         };
 
         let result = match publish {
@@ -633,7 +650,6 @@ impl PrivateDmRuntime {
         self.drain_inbound()?;
         let (
             session_id_owned,
-            data_channel,
             state,
             sent_at_ms,
             ciphertext_bytes,
@@ -670,7 +686,6 @@ impl PrivateDmRuntime {
             session.sync_attempt_message_json(message_id)?;
             (
                 session.session_id.clone(),
-                session.data_channel.clone(),
                 session.state(),
                 sent_at_ms,
                 ciphertext_bytes,
@@ -681,11 +696,11 @@ impl PrivateDmRuntime {
         self.persist_outbound_state(session_id, message_id, false);
 
         let publish = {
+            // Disjoint field borrows: `relay_node` reads only the field, so it
+            // coexists with the immutable session borrow taken by `session_ref`.
+            let relay = self.relay_node.as_ref();
             let session = self.session_ref(session_id)?;
-            session
-                .node
-                .publish(&data_channel, &payload)
-                .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
+            session.route_send(wire::ChannelKind::Data, &payload, relay)
         };
 
         let result = match publish {
@@ -760,9 +775,15 @@ impl PrivateDmRuntime {
         attachment_id: &str,
     ) -> Result<(), PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let session = self.session_mut(session_id)?;
+        // Disjoint field borrows: hold `relay_node` (field) alongside the
+        // mutable session borrow so pump_attachment_requests can route.
+        let relay = self.relay_node.as_ref();
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or(PrivateDmRuntimeError::MissingSession)?;
         session.start_attachment_download(attachment_id)?;
-        session.pump_attachment_requests();
+        session.pump_attachment_requests(relay);
         Ok(())
     }
 
@@ -785,14 +806,20 @@ impl PrivateDmRuntime {
         end: u64,
     ) -> Result<StreamRange, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let session = self.session_mut(session_id)?;
+        // Disjoint field borrows: hold `relay_node` (field) alongside the
+        // mutable session borrow so pump_attachment_requests can route.
+        let relay = self.relay_node.as_ref();
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or(PrivateDmRuntimeError::MissingSession)?;
         if let Some(slot) = session.attachment_slots.get_mut(attachment_id) {
             slot.download_requested = true;
             slot.cancelled = false;
         }
         let _ = session.attachments.start_download(attachment_id);
         let outcome = session.attachments.stream_range(attachment_id, start, end);
-        session.pump_attachment_requests();
+        session.pump_attachment_requests(relay);
         Ok(outcome)
     }
 
@@ -852,16 +879,20 @@ impl PrivateDmRuntime {
             // fails with "secret deleted to preserve forward secrecy". That is
             // expected, so drop the frame and keep going.
             if let Some(session_id) = channel_session_id(&message.channel).map(str::to_string) {
+                // Disjoint field borrows: `relay_node` (field) alongside the
+                // mutable `sessions` borrow — see route_send threading.
+                let relay = self.relay_node.as_ref();
                 if let Some(session) = self.sessions.get_mut(&session_id) {
-                    if let Err(error) = session.handle_moss_message(message) {
+                    if let Err(error) = session.handle_moss_message(message, relay) {
                         eprintln!("dropping inbound frame for {session_id}: {error}");
                     }
                 }
                 continue;
             }
             if wire::channel_call_id(&message.channel).is_some() {
+                let relay = self.relay_node.as_ref();
                 for session in self.sessions.values_mut() {
-                    if let Err(error) = session.handle_moss_message(message.clone()) {
+                    if let Err(error) = session.handle_moss_message(message.clone(), relay) {
                         eprintln!("dropping inbound call frame: {error}");
                     }
                 }
@@ -873,9 +904,10 @@ impl PrivateDmRuntime {
         // once a second, so this is the heartbeat that retransmits a KeyPackage
         // whose first publish was dropped before the mesh link formed.
         let now = now_ms();
+        let relay = self.relay_node.as_ref();
         for session in self.sessions.values_mut() {
-            session.pump_attachment_requests();
-            session.pump_handshake(now);
+            session.pump_attachment_requests(relay);
+            session.pump_handshake(now, relay);
         }
         self.persist_session_tail();
         Ok(())
@@ -914,7 +946,10 @@ impl PrivateDmRuntime {
                 channel,
                 payload: frame.bytes,
             };
-            if let Err(e) = session.handle_moss_message(message) {
+            // Disjoint field borrow: `relay_node` field alongside the mutable
+            // `session` borrow held out of `self.sessions`.
+            let relay = self.relay_node.as_ref();
+            if let Err(e) = session.handle_moss_message(message, relay) {
                 eprintln!("dropping relayed frame for {}: {e}", frame.session_id);
             }
         }
@@ -1166,6 +1201,7 @@ impl PrivateDmSession {
         let blob_channel = blob_channel(&session_id);
         Self {
             role,
+            path: DmPath::Discover,
             device_id,
             participant_id,
             session_id,
@@ -1296,16 +1332,17 @@ impl PrivateDmSession {
     fn handle_moss_message(
         &mut self,
         message: MossReceivedMessage,
+        relay_node: Option<&MossNode>,
     ) -> Result<(), PrivateDmRuntimeError> {
         if self.has_seen_message(&message) {
             return Ok(());
         }
         if message.channel == self.control_channel {
-            self.handle_control(message.payload)
+            self.handle_control(message.payload, relay_node)
         } else if message.channel == self.data_channel {
             self.handle_data(message.payload)
         } else if message.channel == self.blob_channel {
-            self.handle_blob(message.payload)
+            self.handle_blob(message.payload, relay_node)
         } else if wire::channel_call_id(&message.channel).is_some() {
             self.handle_voice_call_frame(&message.channel, message.payload)
         } else {
@@ -1382,11 +1419,46 @@ impl PrivateDmSession {
             && now_ms.saturating_sub(self.last_handshake_send_ms) >= HANDSHAKE_RESEND_MS
     }
 
+    /// The single outbound chokepoint for control/data/blob frames. `Direct`
+    /// and `Discover` publish on the session's own pubsub channel exactly as
+    /// before; `Relayed` wraps the payload in a `RelayFrame` and sends it
+    /// point-to-point over the shared relay node to the peer's moss-id.
+    fn route_send(
+        &self,
+        kind: wire::ChannelKind,
+        payload: &[u8],
+        relay_node: Option<&MossNode>,
+    ) -> Result<(), PrivateDmRuntimeError> {
+        match self.path {
+            DmPath::Direct | DmPath::Discover => self
+                .node
+                .publish(&kind.channel_for(&self.session_id), payload)
+                .map_err(|e| PrivateDmRuntimeError::Moss(e.to_string())),
+            DmPath::Relayed => {
+                let peer = self.peer_moss_id.as_deref().ok_or_else(|| {
+                    PrivateDmRuntimeError::Moss("relayed send: peer moss-id unknown".into())
+                })?;
+                let node = relay_node.ok_or_else(|| {
+                    PrivateDmRuntimeError::Moss("relayed send: relay node down".into())
+                })?;
+                let frame = wire::RelayFrame {
+                    session_id: self.session_id.clone(),
+                    channel_kind: kind,
+                    bytes: payload.to_vec(),
+                };
+                let bytes = serde_json::to_vec(&frame)
+                    .map_err(|e| PrivateDmRuntimeError::Codec(e.to_string()))?;
+                node.relay_send_to(peer, &bytes)
+                    .map_err(|e| PrivateDmRuntimeError::Moss(e.to_string()))
+            }
+        }
+    }
+
     /// Best-effort retransmit of the joiner's KeyPackage while the MLS handshake
     /// is still incomplete. Driven by the inbound drain loop (≈1/s), throttled
     /// to HANDSHAKE_RESEND_MS. Once the peer has joined the pending payload is
     /// dropped so nothing is re-sent.
-    fn pump_handshake(&mut self, now_ms: u64) {
+    fn pump_handshake(&mut self, now_ms: u64, relay_node: Option<&MossNode>) {
         if self.peer_joined {
             self.pending_key_package = None;
             return;
@@ -1398,10 +1470,14 @@ impl PrivateDmSession {
             return;
         };
         self.last_handshake_send_ms = now_ms;
-        let _ = self.node.publish(&self.control_channel, &payload);
+        let _ = self.route_send(wire::ChannelKind::Control, &payload, relay_node);
     }
 
-    fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
+    fn handle_control(
+        &mut self,
+        payload: Vec<u8>,
+        relay_node: Option<&MossNode>,
+    ) -> Result<(), PrivateDmRuntimeError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
 
         match envelope {
@@ -1420,10 +1496,11 @@ impl PrivateDmSession {
                 // calling add_members again (which advances the group epoch).
                 if self.peer_joined {
                     if let Some(welcome_payload) = self.pending_welcome.clone() {
-                        return self
-                            .node
-                            .publish(&self.control_channel, &welcome_payload)
-                            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()));
+                        return self.route_send(
+                            wire::ChannelKind::Control,
+                            &welcome_payload,
+                            relay_node,
+                        );
                     }
                     return Ok(());
                 }
@@ -1442,9 +1519,7 @@ impl PrivateDmSession {
                     .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
                 self.pending_welcome = Some(welcome_payload.clone());
 
-                self.node
-                    .publish(&self.control_channel, &welcome_payload)
-                    .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
+                self.route_send(wire::ChannelKind::Control, &welcome_payload, relay_node)
             }
             ControlEnvelope::Welcome {
                 session_id,
@@ -1610,7 +1685,11 @@ impl PrivateDmSession {
         Ok(())
     }
 
-    fn handle_blob(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
+    fn handle_blob(
+        &mut self,
+        payload: Vec<u8>,
+        relay_node: Option<&MossNode>,
+    ) -> Result<(), PrivateDmRuntimeError> {
         let envelope: BlobEnvelope = decode_json(&payload)?;
         match envelope {
             BlobEnvelope::Request {
@@ -1623,7 +1702,9 @@ impl PrivateDmSession {
                         participant_id: self.participant_id.clone(),
                         frame,
                     };
-                    publish_json(&self.node, &self.blob_channel, &chunk)?;
+                    let bytes = serde_json::to_vec(&chunk)
+                        .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
+                    self.route_send(wire::ChannelKind::Blob, &bytes, relay_node)?;
                 }
                 Ok(())
             }
@@ -1803,7 +1884,7 @@ impl PrivateDmSession {
         Ok(())
     }
 
-    fn pump_attachment_requests(&mut self) {
+    fn pump_attachment_requests(&mut self, relay_node: Option<&MossNode>) {
         let active: Vec<String> = self
             .attachment_slots
             .iter()
@@ -1821,7 +1902,9 @@ impl PrivateDmSession {
                     participant_id: self.participant_id.clone(),
                     request,
                 };
-                let _ = publish_json(&self.node, &self.blob_channel, &envelope);
+                if let Ok(bytes) = serde_json::to_vec(&envelope) {
+                    let _ = self.route_send(wire::ChannelKind::Blob, &bytes, relay_node);
+                }
             }
         }
     }
@@ -2049,6 +2132,7 @@ impl PrivateDmSession {
         if call.call_id != call_id || call.phase != CallPhase::Active {
             return Ok(());
         }
+        // ponytail: voice stays direct-only; relay carries control/data/blob, add voice relay when a hard-NAT call actually needs it
         self.node
             .publish(&voice_call_channel(call_id), &frame)
             .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
@@ -2479,7 +2563,7 @@ mod tests {
 
         // Welcome processed -> handshake complete -> stop retransmitting.
         session.peer_joined = true;
-        session.pump_handshake(HANDSHAKE_RESEND_MS * 10);
+        session.pump_handshake(HANDSHAKE_RESEND_MS * 10, None);
         assert!(
             session.pending_key_package.is_none(),
             "joining clears the pending KeyPackage"
@@ -2528,7 +2612,7 @@ mod tests {
             .expect("Alice session should exist");
 
         session
-            .handle_control(payload.clone())
+            .handle_control(payload.clone(), None)
             .expect("first KeyPackage should add Bob");
         assert!(session.peer_joined);
         assert!(
@@ -2539,7 +2623,7 @@ mod tests {
 
         // Bob's retransmit must be re-answered, never trigger a second add.
         session
-            .handle_control(payload)
+            .handle_control(payload, None)
             .expect("repeat KeyPackage should re-answer with the cached Welcome");
         assert_eq!(
             session.crypto.member_count(),
@@ -2590,9 +2674,46 @@ mod tests {
             .expect("Alice session should exist");
 
         session
-            .handle_control(payload)
+            .handle_control(payload, None)
             .expect("KeyPackage should add Bob");
         assert_eq!(session.peer_moss_id, Some(bob_moss_peer_id));
+    }
+
+    // Task 5: a Relayed session with no peer moss-id (and no relay node) must
+    // error rather than silently fall back to the direct pubsub publish.
+    #[test]
+    fn route_send_relayed_without_peer_id_errors_not_publishes() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42190,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+
+        // Direct/Discover still publishes on the direct node (unchanged path).
+        session.path = DmPath::Direct;
+        session
+            .route_send(wire::ChannelKind::Data, b"x", None)
+            .expect("direct route_send should publish on the direct node");
+
+        // Relayed with no peer moss-id: error, do NOT publish on the direct node.
+        session.path = DmPath::Relayed;
+        session.peer_moss_id = None;
+        let err = session.route_send(wire::ChannelKind::Data, b"x", None);
+        assert!(err.is_err(), "relayed send needs a peer_moss_id + relay node");
     }
 
     #[test]
