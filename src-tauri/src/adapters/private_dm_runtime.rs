@@ -553,14 +553,7 @@ impl PrivateDmRuntime {
         body: String,
     ) -> Result<SendMessageResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let (
-            session_id_owned,
-            state,
-            message_id,
-            sent_at_ms,
-            ciphertext_bytes,
-            payload,
-        ) = {
+        let (session_id_owned, state, message_id, sent_at_ms, ciphertext_bytes, payload) = {
             let session = self.session_mut(session_id)?;
             let ciphertext = session.crypto.encrypt(body.as_bytes())?;
             let mut message = session.stamp_message(ChatMessage {
@@ -679,14 +672,7 @@ impl PrivateDmRuntime {
         message_id: &str,
     ) -> Result<SendMessageResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        let (
-            session_id_owned,
-            state,
-            sent_at_ms,
-            ciphertext_bytes,
-            retry_count,
-            payload,
-        ) = {
+        let (session_id_owned, state, sent_at_ms, ciphertext_bytes, retry_count, payload) = {
             let session = self.session_mut(session_id)?;
             let (payload_b64, sent_at_ms, ciphertext_bytes) = {
                 let attempt = session
@@ -982,7 +968,10 @@ impl PrivateDmRuntime {
             // relay frame can precede a resent handshake).
             match session.peer_moss_id.as_deref() {
                 Some(known) if known != inbound.sender_hex => {
-                    eprintln!("dropping relay frame: sender {} != peer", inbound.sender_hex);
+                    eprintln!(
+                        "dropping relay frame: sender {} != peer",
+                        inbound.sender_hex
+                    );
                     continue;
                 }
                 None => session.peer_moss_id = Some(inbound.sender_hex.clone()),
@@ -1018,7 +1007,12 @@ impl PrivateDmRuntime {
         let mut releases: Vec<String> = Vec::new();
         for (id, session) in self.sessions.iter_mut() {
             let elapsed = now_ms.saturating_sub(session.discover_started_ms);
-            let next = next_path(session.path, session.has_direct_peer(), elapsed, T_FALLBACK_MS);
+            let next = next_path(
+                session.path,
+                session.has_direct_peer(),
+                elapsed,
+                T_FALLBACK_MS,
+            );
             if next == session.path {
                 continue;
             }
@@ -2386,19 +2380,31 @@ mod tests {
 
     #[test]
     fn discover_falls_back_after_budget_without_direct() {
-        assert_eq!(next_path(DmPath::Discover, false, 9_999, 10_000), DmPath::Discover);
-        assert_eq!(next_path(DmPath::Discover, false, 10_000, 10_000), DmPath::Relayed);
+        assert_eq!(
+            next_path(DmPath::Discover, false, 9_999, 10_000),
+            DmPath::Discover
+        );
+        assert_eq!(
+            next_path(DmPath::Discover, false, 10_000, 10_000),
+            DmPath::Relayed
+        );
     }
 
     #[test]
     fn direct_peer_always_wins() {
-        assert_eq!(next_path(DmPath::Relayed, true, 99_999, 10_000), DmPath::Direct);
+        assert_eq!(
+            next_path(DmPath::Relayed, true, 99_999, 10_000),
+            DmPath::Direct
+        );
         assert_eq!(next_path(DmPath::Discover, true, 1, 10_000), DmPath::Direct);
     }
 
     #[test]
     fn relayed_stays_relayed_while_no_direct() {
-        assert_eq!(next_path(DmPath::Relayed, false, 99_999, 10_000), DmPath::Relayed);
+        assert_eq!(
+            next_path(DmPath::Relayed, false, 99_999, 10_000),
+            DmPath::Relayed
+        );
     }
 
     // Real two-node loopback handshake; the gossipsub mesh occasionally fails
@@ -2848,7 +2854,10 @@ mod tests {
         session.path = DmPath::Relayed;
         session.peer_moss_id = None;
         let err = session.route_send(wire::ChannelKind::Data, b"x", None);
-        assert!(err.is_err(), "relayed send needs a peer_moss_id + relay node");
+        assert!(
+            err.is_err(),
+            "relayed send needs a peer_moss_id + relay node"
+        );
     }
 
     #[test]
