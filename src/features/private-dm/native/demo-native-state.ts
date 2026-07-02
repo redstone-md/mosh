@@ -278,6 +278,7 @@ export function sessionSnapshot(overrides: Partial<SessionSnapshot>): SessionSna
     display_name: DEMO_DEVICE,
     peer_display_name: "",
     state: "ready",
+    path: "direct",
     invite_uri: null,
     fingerprint: PEER_FINGERPRINT,
     attachments: [],

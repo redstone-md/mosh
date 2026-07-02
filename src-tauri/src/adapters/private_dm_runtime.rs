@@ -185,6 +185,18 @@ pub enum DmPath {
     Relayed,
 }
 
+impl DmPath {
+    /// Wire label for the diagnostics UI. `Discover` reads as "connecting"
+    /// because the transport is still being decided (best-effort direct).
+    fn as_str(self) -> &'static str {
+        match self {
+            DmPath::Discover => "connecting",
+            DmPath::Direct => "direct",
+            DmPath::Relayed => "relayed",
+        }
+    }
+}
+
 impl PrivateDmRuntime {
     pub fn new(moss: MossFfiRuntime, attachment_store: Arc<AttachmentStore>) -> Self {
         Self::from_shared(Arc::new(moss), attachment_store, None)
@@ -2023,6 +2035,7 @@ impl PrivateDmSession {
             display_name: self.device_id.clone(),
             peer_display_name: self.peer_display_name.clone().unwrap_or_default(),
             state: self.state(),
+            path: self.path.as_str().to_string(),
             invite_uri: self.invite_uri.clone(),
             fingerprint: self.fingerprint.clone(),
             messages: self.messages.clone(),
@@ -3436,4 +3449,19 @@ mod tests {
 
         panic!("message did not arrive");
     }
+
+    // NOTE — S2 spec "Testing" defines two live integration scenarios that are
+    // NOT committed as tests here because they need infrastructure that does not
+    // exist until S3:
+    //   1. Two DM nodes with the direct path blocked connect via an in-process
+    //      SuperNode on `moss-relay/1`, exchange MLS messages (assert
+    //      `path == "relayed"`), then unblock direct and migrate to `"direct"`.
+    //   2. CGNAT-flap regression: with a SuperNode present reach steady
+    //      `relayed`; with none, degrade to `connecting` (no join/leave storm).
+    // Both require a local SuperNode bound to the relay mesh plus an injectable
+    // bootstrap-spore list (`RELAY_BOOTSTRAP_SPORES` is empty until S3). Rather
+    // than commit `unimplemented!()` stub tests, the scenarios are tracked in
+    // the S2 plan/ledger as an S3 deliverable. The transport logic they would
+    // exercise IS unit-covered: `next_path` (migration rules), `route_send`
+    // (direct vs relayed), the relay-drain auth path, and the ref-count edges.
 }
