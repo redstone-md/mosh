@@ -4,6 +4,31 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-02
+
+### Added
+- **Direct messages now reach peers behind hard NAT.** When a one-to-one chat
+  can't hold a direct link — the case for a peer on carrier-grade NAT, common on
+  Russian mobile ISPs — Mosh transparently falls back to relaying the
+  conversation through a volunteer relay SuperNode instead of leaving the chat
+  stuck on "connecting". The relay only ever forwards ciphertext: messages stay
+  end-to-end encrypted (OpenMLS + Noise) and the relay operator cannot read
+  them. If a direct path later becomes possible the chat silently migrates back
+  to it.
+- **A "Path" row in the DM diagnostics drawer** shows whether a conversation is
+  `direct`, `relayed via supernode`, or still `connecting`, and notes that
+  relayed traffic stays end-to-end encrypted.
+
+### Changed
+- **Bundled Moss core bumped to `c02acb4`** for the relay-by-peer-id transport
+  the fallback is built on (`Moss_RelaySendTo` + relay callback).
+
+### Notes
+- The relay fallback stays **inert until at least one public relay SuperNode is
+  reachable** on the shared relay mesh. Standing up that pool ships separately
+  (the MossSpore project); until a spore is live, hard-NAT DMs degrade to
+  "connecting" exactly as before — direct-capable chats are unaffected.
+
 ## [0.3.1] - 2026-07-01
 
 ### Fixed
