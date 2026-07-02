@@ -88,6 +88,7 @@ export function snapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnaps
     display_name: "mosh-bob",
     peer_display_name: "Alice",
     state: "ready",
+    path: "direct",
     invite_uri: INVITE,
     fingerprint: FINGERPRINT,
     messages: [{ from_device: "Alice", body: "hello from moss" }],

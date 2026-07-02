@@ -40,6 +40,7 @@ use crate::adapters::moss_runtime::{MossDynamicRuntime, MossRuntimeError};
 
 const MOSS_OK: i32 = 0;
 const MOSS_ERR_NO_PEERS: i32 = -6;
+const MOSS_ERR_RELAY_FAILED: i32 = -11;
 const DEFAULT_WAIT_MS: u64 = 3000;
 const POLL_MS: u64 = 50;
 // Moss_GetPublicKey returns a fixed-size Ed25519 public key. Keep this in
@@ -69,11 +70,15 @@ type KeyStoreLoadCallback = unsafe extern "C" fn(*mut u8, u32) -> u32;
 type KeyStoreSaveCallback = unsafe extern "C" fn(*const u8, u32);
 type MossSetKeyStore =
     unsafe extern "C" fn(Option<KeyStoreLoadCallback>, Option<KeyStoreSaveCallback>) -> i32;
+type RelaySendTo = unsafe extern "C" fn(MossHandle, *const c_char, *const u8, i32) -> i32;
+type RelayCallback = unsafe extern "C" fn(*const u8, *const u8, u32);
+type MossSetRelayCallback = unsafe extern "C" fn(MossHandle, Option<RelayCallback>) -> i32;
 
 const EVENT_RING_CAPACITY: usize = 64;
 
 static RECEIVED_MESSAGES: Mutex<Vec<MossReceivedMessage>> = Mutex::new(Vec::new());
 static EVENT_LOG: Mutex<Vec<MossEvent>> = Mutex::new(Vec::new());
+static RELAY_INBOX: Mutex<Vec<RelayInbound>> = Mutex::new(Vec::new());
 #[cfg(test)]
 static TEST_PUBLISH_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 
@@ -109,6 +114,12 @@ pub struct MossReceivedMessage {
     pub payload: Vec<u8>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RelayInbound {
+    pub sender_hex: String,
+    pub data: Vec<u8>,
+}
+
 #[derive(Debug)]
 pub enum MossFfiError {
     Runtime(MossRuntimeError),
@@ -117,6 +128,7 @@ pub enum MossFfiError {
     Operation { name: &'static str, code: i32 },
     DeliveryTimeout,
     InjectedPublishFailure(String),
+    RelayFailed,
 }
 
 impl std::fmt::Display for MossFfiError {
@@ -128,6 +140,7 @@ impl std::fmt::Display for MossFfiError {
             Self::Operation { name, code } => write!(formatter, "Moss {name} failed: {code}"),
             Self::DeliveryTimeout => write!(formatter, "Moss delivery timed out"),
             Self::InjectedPublishFailure(message) => write!(formatter, "{message}"),
+            Self::RelayFailed => write!(formatter, "relay send failed"),
         }
     }
 }
@@ -160,6 +173,13 @@ impl Drop for TestPublishFailureGuard {
     }
 }
 
+/// Test-only shim that drives `on_moss_relay` directly, so tests exercise the
+/// real hex-encode + queue logic instead of a parallel mock.
+#[cfg(test)]
+pub(crate) fn push_relay_for_test(sender_id: [u8; 32], data: Vec<u8>) {
+    unsafe { on_moss_relay(sender_id.as_ptr(), data.as_ptr(), data.len() as u32) };
+}
+
 pub struct MossFfiRuntime {
     _library: ManuallyDrop<Library>,
     init: MossInit,
@@ -175,6 +195,8 @@ pub struct MossFfiRuntime {
     get_public_key: MossGetPublicKey,
     free: MossFree,
     set_key_store: MossSetKeyStore,
+    relay_send_to: RelaySendTo,
+    set_relay_callback: MossSetRelayCallback,
 }
 
 pub struct MossNode {
@@ -231,6 +253,8 @@ impl MossFfiRuntime {
             get_public_key: load_symbol(&library, b"Moss_GetPublicKey\0")?,
             free: load_symbol(&library, b"Moss_Free\0")?,
             set_key_store: load_symbol(&library, b"Moss_SetKeyStore\0")?,
+            relay_send_to: load_symbol(&library, b"Moss_RelaySendTo\0")?,
+            set_relay_callback: load_symbol(&library, b"Moss_SetRelayCallback\0")?,
             _library: ManuallyDrop::new(library),
         })
     }
@@ -341,6 +365,25 @@ impl MossNode {
         })
     }
 
+    pub fn set_relay_callback(&self) -> Result<(), MossFfiError> {
+        check_code("set_relay_callback", unsafe {
+            (self.runtime.set_relay_callback)(self.handle, Some(on_moss_relay))
+        })
+    }
+
+    pub fn relay_send_to(&self, target_peer_hex: &str, payload: &[u8]) -> Result<(), MossFfiError> {
+        let target = c_string(target_peer_hex)?;
+        let code = unsafe {
+            (self.runtime.relay_send_to)(
+                self.handle,
+                target.as_ptr(),
+                payload.as_ptr(),
+                payload.len() as i32,
+            )
+        };
+        check_relay_code(code)
+    }
+
     pub fn mesh_info_json(&self) -> Option<String> {
         let ptr = unsafe { (self.runtime.get_mesh_info)(self.handle) };
         if ptr.is_null() {
@@ -392,6 +435,13 @@ pub fn drain_received_messages() -> Vec<MossReceivedMessage> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::mem::take(&mut *messages)
+}
+
+pub fn drain_relay_frames() -> Vec<RelayInbound> {
+    let mut frames = RELAY_INBOX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::mem::take(&mut *frames)
 }
 
 pub fn drain_messages_where<F>(predicate: F) -> Vec<MossReceivedMessage>
@@ -527,6 +577,17 @@ fn check_publish_code(code: i32) -> Result<(), MossFfiError> {
     }
 }
 
+fn check_relay_code(code: i32) -> Result<(), MossFfiError> {
+    match code {
+        c if c == MOSS_OK => Ok(()),
+        c if c == MOSS_ERR_RELAY_FAILED => Err(MossFfiError::RelayFailed),
+        other => Err(MossFfiError::Operation {
+            name: "relay_send_to",
+            code: other,
+        }),
+    }
+}
+
 fn symbol_name(name: &[u8]) -> String {
     let name = name.strip_suffix(&[0]).unwrap_or(name);
 
@@ -552,6 +613,28 @@ unsafe extern "C" fn on_moss_message(
         .lock()
         .expect("Moss message lock poisoned")
         .push(MossReceivedMessage { channel, payload });
+}
+
+/// C ABI callback: sender_id is raw 32 bytes; data/len is the RelayFrame payload.
+unsafe extern "C" fn on_moss_relay(sender_id: *const u8, data: *const u8, len: u32) {
+    if sender_id.is_null() {
+        return;
+    }
+    let sender = unsafe { std::slice::from_raw_parts(sender_id, MOSS_PUBKEY_LEN) };
+    let sender_hex: String = sender.iter().map(|byte| format!("{byte:02x}")).collect();
+    let payload = if data.is_null() || len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len as usize) }.to_vec()
+    };
+
+    RELAY_INBOX
+        .lock()
+        .expect("Moss relay lock poisoned")
+        .push(RelayInbound {
+            sender_hex,
+            data: payload,
+        });
 }
 
 /// Moss identity load callback. A probe call (null buffer / zero capacity)
@@ -714,6 +797,29 @@ mod tests {
         format!(
             r#"{{"trackers":[],"listen_port":{port},"static_peers":{peers},"gossipsub":{{"heartbeat_ms":50}},"nat":{{"upnp_enabled":false,"natpmp_enabled":false,"pcp_enabled":false}}}}"#
         )
+    }
+
+    #[test]
+    fn relay_inbound_queue_roundtrips_sender_and_data() {
+        // The Go callback delivers raw 32-byte sender_id; the queue must expose it
+        // as 64-char lowercase hex so it matches MossNode::public_key_hex().
+        let sender = [0xABu8; 32];
+        push_relay_for_test(sender, b"hello".to_vec());
+        let drained = drain_relay_frames();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].sender_hex, "ab".repeat(32));
+        assert_eq!(drained[0].sender_hex.len(), 64);
+        assert_eq!(drained[0].data, b"hello");
+        assert!(drain_relay_frames().is_empty(), "drain must consume");
+    }
+
+    #[test]
+    fn relay_failed_code_maps_to_error() {
+        assert!(matches!(
+            check_relay_code(-11),
+            Err(MossFfiError::RelayFailed)
+        ));
+        assert!(check_relay_code(0).is_ok());
     }
 
     fn build_test_moss_library() -> std::path::PathBuf {

@@ -236,6 +236,8 @@ export interface SessionSnapshot {
   /** The remote peer's display name (empty until first inbound frame). */
   readonly peer_display_name: string;
   readonly state: string;
+  /** Transport path: "direct", "relayed", or "connecting". Relayed is E2E. */
+  readonly path: string;
   readonly invite_uri: string | null;
   readonly fingerprint: string;
   readonly messages: readonly ChatMessage[];

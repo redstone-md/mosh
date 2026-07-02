@@ -39,6 +39,10 @@ pub struct SessionSnapshot {
     /// Empty until the first inbound frame from the peer is seen.
     pub peer_display_name: String,
     pub state: String,
+    /// Which transport this DM currently uses: "direct", "relayed", or
+    /// "connecting". Relayed traffic is still E2E — the supernode sees only
+    /// ciphertext.
+    pub path: String,
     pub invite_uri: Option<String>,
     pub fingerprint: String,
     pub messages: Vec<ChatMessage>,

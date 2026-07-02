@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { compactDetail } from "./DiagnosticsDrawerHelpers";
+import { compactDetail, pathLabel } from "./DiagnosticsDrawerHelpers";
+
+describe("pathLabel", () => {
+  it("labels relayed with the via-supernode suffix", () => {
+    expect(pathLabel("relayed")).toBe("relayed via supernode");
+  });
+
+  it("passes direct and connecting through as-is", () => {
+    expect(pathLabel("direct")).toBe("direct");
+    expect(pathLabel("connecting")).toBe("connecting");
+  });
+
+  it("falls back to unknown for empty, passes unrecognized paths through", () => {
+    expect(pathLabel("")).toBe("unknown");
+    expect(pathLabel("weird")).toBe("weird");
+  });
+});
 
 describe("compactDetail", () => {
   it("renders flat key=value pairs", () => {
