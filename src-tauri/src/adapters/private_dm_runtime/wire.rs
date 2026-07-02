@@ -257,12 +257,24 @@ mod tests {
         let json = serde_json::to_string(&with).unwrap();
         assert!(json.contains(&"ab".repeat(32)));
         let back: ControlEnvelope = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, ControlEnvelope::KeyPackage { moss_peer_id: Some(_), .. }));
+        assert!(matches!(
+            back,
+            ControlEnvelope::KeyPackage {
+                moss_peer_id: Some(_),
+                ..
+            }
+        ));
 
         // Old peers omit the field entirely — must still decode (None).
         let legacy = r#"{"type":"KeyPackage","session_id":"s","participant_id":"p","from_device":"d","key_package_b64":"a2V5"}"#;
         let back: ControlEnvelope = serde_json::from_str(legacy).unwrap();
-        assert!(matches!(back, ControlEnvelope::KeyPackage { moss_peer_id: None, .. }));
+        assert!(matches!(
+            back,
+            ControlEnvelope::KeyPackage {
+                moss_peer_id: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -276,7 +288,10 @@ mod tests {
         let back: RelayFrame = serde_json::from_slice(&json).unwrap();
         assert_eq!(back.session_id, "sess1");
         assert_eq!(back.bytes, b"ct");
-        assert_eq!(back.channel_kind.channel_for("sess1"), control_channel("sess1"));
+        assert_eq!(
+            back.channel_kind.channel_for("sess1"),
+            control_channel("sess1")
+        );
         assert_eq!(ChannelKind::Data.channel_for("s"), data_channel("s"));
         assert_eq!(ChannelKind::Blob.channel_for("s"), blob_channel("s"));
     }

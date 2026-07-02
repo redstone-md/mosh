@@ -3,8 +3,8 @@
 //! last relayed DM releases it. No JoinRelayMesh — one node = one mesh, so
 //! membership is just a second Moss_Init.
 
-use crate::adapters::moss_ffi::{MossFfiRuntime, MossNode, MossNodeConfig};
 use super::contracts::PrivateDmRuntimeError;
+use crate::adapters::moss_ffi::{MossFfiRuntime, MossNode, MossNodeConfig};
 use std::sync::Arc;
 
 pub const RELAY_MESH_ID: &str = "moss-relay/1";

@@ -631,7 +631,10 @@ unsafe extern "C" fn on_moss_relay(sender_id: *const u8, data: *const u8, len: u
     RELAY_INBOX
         .lock()
         .expect("Moss relay lock poisoned")
-        .push(RelayInbound { sender_hex, data: payload });
+        .push(RelayInbound {
+            sender_hex,
+            data: payload,
+        });
 }
 
 /// Moss identity load callback. A probe call (null buffer / zero capacity)
