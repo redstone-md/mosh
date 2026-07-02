@@ -4,6 +4,16 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-02
+
+### Fixed
+- **NAT detection works on IPv4-only networks.** Bundled Moss core bumped to
+  `adb5a96`: STUN and peer address resolution is now forced to IPv4 to match
+  Moss's IPv4-only transport. Previously, on a network with no IPv6 route, a STUN
+  hostname could resolve to an IPv6 address that the v4 socket can't reach, so
+  NAT detection stalled at "unknown" — affecting the relay-fallback path for
+  peers on IPv4-only carriers.
+
 ## [0.4.0] - 2026-07-02
 
 ### Added
