@@ -39,6 +39,25 @@ const OUTBOUND_SCOPE_PRIVATE_DM: &str = "private_dm";
 // KeyPackage on this cadence until he processes the Welcome.
 const HANDSHAKE_RESEND_MS: u64 = 2000;
 
+// How long a session stays in Discover (best-effort direct) before it gives up
+// on hole-punching and falls back to the shared relay. Sized to the existing
+// direct budget (hole-punch + MLS handshake).
+const T_FALLBACK_MS: u64 = 10_000;
+
+/// Pure fallback decision: given the current transport, whether a genuine direct
+/// peer exists, and how long discovery has run, pick the next transport. Direct
+/// always wins from any state; otherwise Discover falls back to Relayed once the
+/// budget elapses, and every other state is sticky.
+fn next_path(current: DmPath, has_direct: bool, elapsed_ms: u64, t_fallback: u64) -> DmPath {
+    if has_direct {
+        return DmPath::Direct; // direct always preferred, from any state
+    }
+    match current {
+        DmPath::Discover if elapsed_ms >= t_fallback => DmPath::Relayed,
+        other => other,
+    }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -105,6 +124,10 @@ struct PrivateDmSession {
     // Transport chosen for outbound control/data/blob frames. Always `Discover`
     // in Task 5 (routes direct); Task 6 flips it to `Relayed` for hard-NAT peers.
     path: DmPath,
+    // Wall clock when discovery started; the fallback budget is measured from
+    // here, so a session that never finds a direct peer flips to Relayed after
+    // T_FALLBACK_MS.
+    discover_started_ms: u64,
     device_id: String,
     participant_id: String,
     session_id: String,
@@ -208,10 +231,6 @@ impl PrivateDmRuntime {
             // Drop stops the node (MossNode::drop → Moss_Stop).
             self.relay_node = None;
         }
-    }
-
-    fn relay_node(&self) -> Option<&MossNode> {
-        self.relay_node.as_ref()
     }
 
     /// Rebuild sessions + history from the encrypted store. Best-effort: a bad
@@ -905,11 +924,15 @@ impl PrivateDmRuntime {
             }
         }
         self.drain_relay();
+        let now = now_ms();
+        // Advance the fallback state machine before the pump loop: a session that
+        // flips to Relayed here brings the shared relay node up, so its handshake
+        // resend below routes over the relay in the same tick.
+        self.pump_transports(now);
         // Keep every active download fed, and re-drive any incomplete MLS
         // handshake, without waiting on a user action. The UI polls roughly
         // once a second, so this is the heartbeat that retransmits a KeyPackage
         // whose first publish was dropped before the mesh link formed.
-        let now = now_ms();
         let relay = self.relay_node.as_ref();
         for session in self.sessions.values_mut() {
             session.pump_attachment_requests(relay);
@@ -958,6 +981,53 @@ impl PrivateDmRuntime {
             if let Err(e) = session.handle_moss_message(message, relay) {
                 eprintln!("dropping relayed frame for {}: {e}", frame.session_id);
             }
+        }
+    }
+
+    /// Drive the per-session fallback state machine: flip stuck-in-Discover
+    /// sessions to Relayed once the direct budget elapses, and migrate any
+    /// session back to Direct the moment a real direct peer appears.
+    ///
+    /// The relay refcount (`ensure_relay_up`/`release_relay`) needs `&mut self`,
+    /// which cannot overlap the `self.sessions` iteration, so the decision is
+    /// split in two: first collect the session ids that need a relay
+    /// acquire/release, then apply the refcount changes afterward. A session
+    /// only actually enters `Relayed` if `ensure_relay_up` succeeds — on failure
+    /// it stays `Discover` and retries next tick, so it never sits in `Relayed`
+    /// with no relay node (which would make every send error).
+    fn pump_transports(&mut self, now_ms: u64) {
+        let mut acquires: Vec<String> = Vec::new();
+        let mut releases: Vec<String> = Vec::new();
+        for (id, session) in self.sessions.iter_mut() {
+            let elapsed = now_ms.saturating_sub(session.discover_started_ms);
+            let next = next_path(session.path, session.has_direct_peer(), elapsed, T_FALLBACK_MS);
+            if next == session.path {
+                continue;
+            }
+            match (session.path, next) {
+                // Entering Relayed needs the shared relay node up first; defer the
+                // path commit to the apply phase so it only flips on success.
+                (_, DmPath::Relayed) => acquires.push(id.clone()),
+                // Leaving Relayed (direct won): drop our relay ref, migrate now.
+                (DmPath::Relayed, _) => {
+                    releases.push(id.clone());
+                    session.path = next;
+                }
+                // Discover -> Direct: no relay involvement, migrate immediately.
+                _ => session.path = next,
+            }
+        }
+        for id in &acquires {
+            // ensure_relay_up starts the node before bumping the refcount, so an
+            // Err acquired nothing — leave the session Discover to retry.
+            if self.ensure_relay_up().is_ok() {
+                if let Some(session) = self.sessions.get_mut(id) {
+                    session.path = DmPath::Relayed;
+                }
+            }
+        }
+        for _ in &releases {
+            self.release_relay();
         }
     }
 
@@ -1208,6 +1278,7 @@ impl PrivateDmSession {
         Self {
             role,
             path: DmPath::Discover,
+            discover_started_ms: now_ms(),
             device_id,
             participant_id,
             session_id,
@@ -2030,6 +2101,17 @@ impl PrivateDmSession {
         })
     }
 
+    /// True when a genuine DIRECT peer exists on the per-DM mesh, i.e. a peer we
+    /// reached without moss's internal relay. The per-DM node lives on the secret
+    /// per-DM `mesh_id` (separate from the shared `moss-relay/1` node), and moss
+    /// reports `direct_peer_count` for peers where `!peer.relayed`, so a non-zero
+    /// count means a real hole-punched link — the signal to migrate to / stay
+    /// Direct. Kept a single method so the signal is swappable.
+    fn has_direct_peer(&self) -> bool {
+        self.mesh_info()
+            .is_some_and(|info| info.direct_peer_count > 0)
+    }
+
     fn call_start(&mut self) -> Result<CallStarted, PrivateDmRuntimeError> {
         if !self.ready_for_user_actions() {
             return Err(PrivateDmRuntimeError::NotReady);
@@ -2281,6 +2363,23 @@ mod tests {
                 .as_nanos()
         ));
         Arc::new(AttachmentStore::new(&path).expect("attachment store should init"))
+    }
+
+    #[test]
+    fn discover_falls_back_after_budget_without_direct() {
+        assert_eq!(next_path(DmPath::Discover, false, 9_999, 10_000), DmPath::Discover);
+        assert_eq!(next_path(DmPath::Discover, false, 10_000, 10_000), DmPath::Relayed);
+    }
+
+    #[test]
+    fn direct_peer_always_wins() {
+        assert_eq!(next_path(DmPath::Relayed, true, 99_999, 10_000), DmPath::Direct);
+        assert_eq!(next_path(DmPath::Discover, true, 1, 10_000), DmPath::Direct);
+    }
+
+    #[test]
+    fn relayed_stays_relayed_while_no_direct() {
+        assert_eq!(next_path(DmPath::Relayed, false, 99_999, 10_000), DmPath::Relayed);
     }
 
     // Real two-node loopback handshake; the gossipsub mesh occasionally fails
