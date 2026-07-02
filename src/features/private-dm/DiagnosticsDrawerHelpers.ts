@@ -29,6 +29,22 @@ export function relayBreakdown(mesh: MeshInfo): string {
   return `${mesh.relay_capable_peer_count} capable / ${mesh.relay_route_count} routes`;
 }
 
+// Human label for a DM's transport path. "relayed" gets the "via supernode"
+// suffix to make clear the path is a Mesh-TURN relay (still E2E — the supernode
+// only sees ciphertext).
+export function pathLabel(path: string): string {
+  switch (path) {
+    case "relayed":
+      return "relayed via supernode";
+    case "direct":
+      return "direct";
+    case "connecting":
+      return "connecting";
+    default:
+      return path || "unknown";
+  }
+}
+
 export function compactDetail(raw: string): string {
   if (!raw) {
     return "";

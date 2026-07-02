@@ -44,6 +44,8 @@ pub enum ControlEnvelope {
         participant_id: String,
         from_device: String,
         key_package_b64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moss_peer_id: Option<String>,
     },
     Welcome {
         session_id: String,
@@ -51,6 +53,8 @@ pub enum ControlEnvelope {
         from_device: String,
         welcome_b64: String,
         ratchet_tree_b64: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        moss_peer_id: Option<String>,
     },
     /// Carries an AttachmentManifest encrypted as an MLS application message,
     /// so the per-attachment AES key never crosses the wire in the clear.
@@ -134,6 +138,33 @@ pub fn decode_json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, Priv
     serde_json::from_slice(bytes).map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChannelKind {
+    Control,
+    Data,
+    Blob,
+}
+
+impl ChannelKind {
+    pub fn channel_for(&self, session_id: &str) -> String {
+        match self {
+            ChannelKind::Control => control_channel(session_id),
+            ChannelKind::Data => data_channel(session_id),
+            ChannelKind::Blob => blob_channel(session_id),
+        }
+    }
+}
+
+/// Point-to-point relay payload. The direct path routes by pubsub channel; the
+/// relay callback carries only (sender_id, bytes), so we re-tag the channel
+/// here and reconstruct the exact MossReceivedMessage on the far side.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RelayFrame {
+    pub session_id: String,
+    pub channel_kind: ChannelKind,
+    pub bytes: Vec<u8>,
+}
+
 pub fn encode(bytes: &[u8]) -> String {
     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
 }
@@ -212,6 +243,57 @@ mod tests {
             serde_json::from_slice::<ControlEnvelope>(&bytes).unwrap(),
             ControlEnvelope::CallEnd { .. }
         ));
+    }
+
+    #[test]
+    fn key_package_carries_optional_moss_peer_id() {
+        let with = ControlEnvelope::KeyPackage {
+            session_id: "s".into(),
+            participant_id: "p".into(),
+            from_device: "d".into(),
+            key_package_b64: "a2V5".into(),
+            moss_peer_id: Some("ab".repeat(32)),
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains(&"ab".repeat(32)));
+        let back: ControlEnvelope = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back,
+            ControlEnvelope::KeyPackage {
+                moss_peer_id: Some(_),
+                ..
+            }
+        ));
+
+        // Old peers omit the field entirely — must still decode (None).
+        let legacy = r#"{"type":"KeyPackage","session_id":"s","participant_id":"p","from_device":"d","key_package_b64":"a2V5"}"#;
+        let back: ControlEnvelope = serde_json::from_str(legacy).unwrap();
+        assert!(matches!(
+            back,
+            ControlEnvelope::KeyPackage {
+                moss_peer_id: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn relay_frame_roundtrips_and_rebuilds_channel() {
+        let frame = RelayFrame {
+            session_id: "sess1".into(),
+            channel_kind: ChannelKind::Control,
+            bytes: b"ct".to_vec(),
+        };
+        let json = serde_json::to_vec(&frame).unwrap();
+        let back: RelayFrame = serde_json::from_slice(&json).unwrap();
+        assert_eq!(back.session_id, "sess1");
+        assert_eq!(back.bytes, b"ct");
+        assert_eq!(
+            back.channel_kind.channel_for("sess1"),
+            control_channel("sess1")
+        );
+        assert_eq!(ChannelKind::Data.channel_for("s"), data_channel("s"));
+        assert_eq!(ChannelKind::Blob.channel_for("s"), blob_channel("s"));
     }
 
     #[test]
