@@ -25,6 +25,9 @@ export function SessionDiagnostics({ session }: { session: SessionSnapshot }) {
         <Row k="Peer" v={session.peer_display_name || "unknown"} />
         <Row k="MLS state" v={stateLabels[session.state] ?? session.state} />
         <Row k="Path" v={pathLabel(session.path)} />
+        {session.path === "relayed" ? (
+          <Row k="Encryption" v="E2E — supernode sees only ciphertext" />
+        ) : null}
         <Row k="Role" v={session.role} />
         <Row k="Display" v={session.display_name} />
         <Row k="Session" v={shorten(session.session_id, 14)} />
