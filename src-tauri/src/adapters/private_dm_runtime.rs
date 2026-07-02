@@ -887,7 +887,13 @@ impl PrivateDmRuntime {
         session_id: &str,
     ) -> Result<CloseSessionResult, PrivateDmRuntimeError> {
         match self.sessions.remove(session_id) {
-            Some(_) => {
+            Some(session) => {
+                // A relayed session holds a ref on the shared relay node; drop
+                // it so the node's refcount stays accurate and it can stop once
+                // the last relayed DM closes.
+                if session.path == DmPath::Relayed {
+                    self.release_relay();
+                }
                 // Purge persisted state too, otherwise the conversation
                 // re-appears on the next launch via rehydrate.
                 self.persisted_counts.remove(session_id);
