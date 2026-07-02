@@ -11,7 +11,7 @@ describe("pathLabel", () => {
     expect(pathLabel("connecting")).toBe("connecting");
   });
 
-  it("falls back to unknown for an empty/unrecognized path", () => {
+  it("falls back to unknown for empty, passes unrecognized paths through", () => {
     expect(pathLabel("")).toBe("unknown");
     expect(pathLabel("weird")).toBe("weird");
   });
