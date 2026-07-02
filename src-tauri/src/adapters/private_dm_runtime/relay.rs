@@ -29,13 +29,12 @@ impl RelayRef {
         self.count = self.count.saturating_sub(1);
         self.count
     }
-    pub fn is_active(&self) -> bool {
-        self.count > 0
-    }
 }
 
 /// Bring up the shared relay node: Init on RELAY_MESH_ID, wire the relay
-/// callback + message callback, Start, then dial each bootstrap spore.
+/// callback (no pubsub/message callback — the relay mesh carries only
+/// point-to-point relay frames, never a DM topic), Start, then dial each
+/// bootstrap spore.
 pub fn start_relay_node(moss: &Arc<MossFfiRuntime>) -> Result<MossNode, PrivateDmRuntimeError> {
     let node = moss
         .init_default_node(RELAY_MESH_ID, &MossNodeConfig::default())
@@ -62,13 +61,11 @@ mod tests {
         assert_eq!(r.acquire(), 2);
         assert_eq!(r.release(), 1);
         assert_eq!(r.release(), 0, "last release signals stop");
-        assert!(!r.is_active());
     }
 
     #[test]
     fn release_below_zero_saturates() {
         let mut r = RelayRef::default();
         assert_eq!(r.release(), 0);
-        assert!(!r.is_active());
     }
 }

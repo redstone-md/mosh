@@ -40,6 +40,7 @@ use crate::adapters::moss_runtime::{MossDynamicRuntime, MossRuntimeError};
 
 const MOSS_OK: i32 = 0;
 const MOSS_ERR_NO_PEERS: i32 = -6;
+const MOSS_ERR_RELAY_FAILED: i32 = -11;
 const DEFAULT_WAIT_MS: u64 = 3000;
 const POLL_MS: u64 = 50;
 // Moss_GetPublicKey returns a fixed-size Ed25519 public key. Keep this in
@@ -579,7 +580,7 @@ fn check_publish_code(code: i32) -> Result<(), MossFfiError> {
 fn check_relay_code(code: i32) -> Result<(), MossFfiError> {
     match code {
         c if c == MOSS_OK => Ok(()),
-        -11 => Err(MossFfiError::RelayFailed),
+        c if c == MOSS_ERR_RELAY_FAILED => Err(MossFfiError::RelayFailed),
         other => Err(MossFfiError::Operation {
             name: "relay_send_to",
             code: other,
