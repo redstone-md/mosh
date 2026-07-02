@@ -8,9 +8,12 @@ use super::contracts::PrivateDmRuntimeError;
 use std::sync::Arc;
 
 pub const RELAY_MESH_ID: &str = "moss-relay/1";
-/// Bundled SuperNode spores the relay node dials on start. Filled by S3;
-/// empty here means "no relay reachable" → DM stays "connecting" (Failure
-/// handling in the spec), never a join/leave storm.
+/// Bundled well-known relay-mesh SuperNode spores, dialed on relay-node start
+/// to seed `sha1("moss-relay/1")` discovery before the live SuperNode set is
+/// learned from the mesh. This is DATA, not a trust anchor — SuperNodes are
+/// untrusted (relay is E2E), so a stale/hostile entry only wastes one dial.
+/// Fill with real `host:port` addresses after deploying spores (S3) and ship
+/// the update via an app release. Empty = relay simply has nobody to dial yet.
 pub const RELAY_BOOTSTRAP_SPORES: &[&str] = &[];
 
 #[derive(Default)]
@@ -67,5 +70,22 @@ mod tests {
     fn release_below_zero_saturates() {
         let mut r = RelayRef::default();
         assert_eq!(r.release(), 0);
+    }
+
+    #[test]
+    fn bootstrap_spores_are_well_formed() {
+        // Fill RELAY_BOOTSTRAP_SPORES with real spore addresses after deploying
+        // them (see the S3 plan's ops step). Whatever is listed must be a dialable
+        // host:port so start_relay_node's connect loop never chokes on a typo.
+        for addr in RELAY_BOOTSTRAP_SPORES {
+            let (host, port) = addr
+                .rsplit_once(':')
+                .unwrap_or_else(|| panic!("bootstrap spore {addr:?} missing :port"));
+            assert!(!host.is_empty(), "bootstrap spore {addr:?} has empty host");
+            assert!(
+                port.parse::<u16>().is_ok(),
+                "bootstrap spore {addr:?} has non-numeric port"
+            );
+        }
     }
 }
