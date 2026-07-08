@@ -4,12 +4,20 @@ const INVITE_PREFIX: &str = "mosh://invite";
 const TRACKER_BOOTSTRAP: &str = "default-public-trackers";
 /// `crypto.fingerprint()` is 16 bytes → 32 hex chars.
 const FINGERPRINT_HEX_LEN: usize = 32;
+/// Moss peer ids are 32-byte Ed25519 public keys → 64 hex chars.
+const MOSS_PEER_ID_HEX_LEN: usize = 64;
 
 pub struct ParsedInvite {
     pub mesh_id: String,
     pub session_id: String,
     pub peer_address: Option<String>,
     pub fingerprint: String,
+    /// Creator's moss peer id, when the invite carries one. Lets the joiner
+    /// relay-send the MLS handshake to a hard-NAT creator before any direct
+    /// window (or handshake reply) has taught it the peer's id. Malformed
+    /// values are dropped, not fatal: the id is routing data, not identity —
+    /// the fingerprint stays the trust anchor.
+    pub peer_moss_id: Option<String>,
 }
 
 impl ParsedInvite {
@@ -28,6 +36,12 @@ impl ParsedInvite {
             session_id: query(&url, "session")?,
             peer_address: optional_query(&url, "peer"),
             fingerprint: parse_fingerprint(url.fragment())?,
+            peer_moss_id: optional_query(&url, "moss")
+                .map(|id| id.to_lowercase())
+                .filter(|id| {
+                    id.len() == MOSS_PEER_ID_HEX_LEN
+                        && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }),
         })
     }
 }
@@ -50,8 +64,16 @@ fn parse_fingerprint(fragment: Option<&str>) -> Result<String, PrivateDmRuntimeE
     Ok(normalized)
 }
 
-pub fn build_invite_uri(mesh_id: &str, session_id: &str, fingerprint: &str) -> String {
-    format!("{INVITE_PREFIX}?mesh={mesh_id}&session={session_id}#fp={fingerprint}")
+pub fn build_invite_uri(
+    mesh_id: &str,
+    session_id: &str,
+    fingerprint: &str,
+    moss_peer_id: Option<&str>,
+) -> String {
+    let moss = moss_peer_id
+        .map(|id| format!("&moss={id}"))
+        .unwrap_or_default();
+    format!("{INVITE_PREFIX}?mesh={mesh_id}&session={session_id}{moss}#fp={fingerprint}")
 }
 
 pub fn listen_address() -> String {
@@ -78,11 +100,29 @@ mod tests {
 
     #[test]
     fn parse_accepts_a_valid_invite_and_normalizes_the_fingerprint() {
-        let uri = build_invite_uri("mesh-1", "sess-1", FP);
+        let uri = build_invite_uri("mesh-1", "sess-1", FP, None);
         let parsed = ParsedInvite::parse(&uri).expect("valid invite parses");
         assert_eq!(parsed.mesh_id, "mesh-1");
         assert_eq!(parsed.session_id, "sess-1");
         assert_eq!(parsed.fingerprint, FP);
+        assert_eq!(parsed.peer_moss_id, None);
+    }
+
+    #[test]
+    fn parse_roundtrips_the_creator_moss_peer_id() {
+        let moss_id = "ab".repeat(32);
+        let uri = build_invite_uri("mesh-1", "sess-1", FP, Some(&moss_id));
+        let parsed = ParsedInvite::parse(&uri).expect("valid invite parses");
+        assert_eq!(parsed.peer_moss_id, Some(moss_id));
+    }
+
+    #[test]
+    fn parse_drops_a_malformed_moss_peer_id_without_failing() {
+        for bad in ["short", &"zz".repeat(32), &"ab".repeat(33)] {
+            let uri = format!("mosh://invite?mesh=m&session=s&moss={bad}#fp={FP}");
+            let parsed = ParsedInvite::parse(&uri).expect("invite still parses");
+            assert_eq!(parsed.peer_moss_id, None, "{bad} must be dropped");
+        }
     }
 
     #[test]

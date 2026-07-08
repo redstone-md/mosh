@@ -4,6 +4,24 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-07-08
+
+### Fixed
+- **A transient hole punch no longer kills the relay path for good.** The DM
+  transport state machine treated `direct` as terminal: the moment a single
+  direct peer appeared — which behind symmetric NAT happens for a few seconds
+  per punch before the mapping dies — a relayed conversation dropped its relay
+  and switched to direct, then had no way back when the punch collapsed. The
+  chat stayed stuck flapping on a dead direct path with the MLS handshake
+  never completing. Now a relayed conversation only migrates to direct after
+  the direct link has held for 30 s, and a direct conversation falls back to
+  the relay once its peer has been gone for 5 s.
+- **Hard-NAT joiners can complete the handshake entirely over the relay.** The
+  invite link now carries the creator's moss peer id, so the joining side can
+  relay the MLS handshake through a SuperNode even when no direct window ever
+  opens. Old invites still parse; they just rely on the handshake exchange to
+  learn the id, as before.
+
 ## [0.4.2] - 2026-07-02
 
 ### Fixed
