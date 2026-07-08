@@ -44,16 +44,39 @@ const HANDSHAKE_RESEND_MS: u64 = 2000;
 // direct budget (hole-punch + MLS handshake).
 const T_FALLBACK_MS: u64 = 10_000;
 
-/// Pure fallback decision: given the current transport, whether a genuine direct
-/// peer exists, and how long discovery has run, pick the next transport. Direct
-/// always wins from any state; otherwise Discover falls back to Relayed once the
-/// budget elapses, and every other state is sticky.
-fn next_path(current: DmPath, has_direct: bool, elapsed_ms: u64, t_fallback: u64) -> DmPath {
-    if has_direct {
-        return DmPath::Direct; // direct always preferred, from any state
-    }
+// How long a direct peer must be continuously present before a Relayed session
+// trusts it enough to leave the relay. Symmetric-NAT hole punches routinely
+// hold for seconds (observed up to ~30s) before the mapping dies, and every
+// false migration drops the relay ref. Discover -> Direct stays instant: there
+// is no relay to lose from Discover.
+const T_DIRECT_STABLE_MS: u64 = 30_000;
+
+// How long the direct peer set must stay continuously empty before a Direct
+// session falls back to the relay. Bridges momentary re-punch gaps without
+// stranding the session on a dead path.
+const T_DIRECT_LOST_MS: u64 = 5_000;
+
+/// Pure fallback decision. `direct_now` is the instantaneous direct-peer
+/// signal; `direct_stable` / `direct_gone` are its debounced edges (signal held
+/// continuously for T_DIRECT_STABLE_MS present / T_DIRECT_LOST_MS absent).
+/// Discover promotes on the raw signal (nothing to lose), Relayed only on the
+/// stable edge (a transient hole punch must not tear down a working relay),
+/// and Direct demotes to Relayed once the peer is confirmed gone. Direct used
+/// to be terminal, so one transient punch behind symmetric NAT released the
+/// relay and stranded the pair on a dead direct path forever.
+fn next_path(
+    current: DmPath,
+    direct_now: bool,
+    direct_stable: bool,
+    direct_gone: bool,
+    elapsed_ms: u64,
+    t_fallback: u64,
+) -> DmPath {
     match current {
+        DmPath::Discover if direct_now => DmPath::Direct,
         DmPath::Discover if elapsed_ms >= t_fallback => DmPath::Relayed,
+        DmPath::Relayed if direct_stable => DmPath::Direct,
+        DmPath::Direct if direct_gone => DmPath::Relayed,
         other => other,
     }
 }
@@ -128,6 +151,12 @@ struct PrivateDmSession {
     // here, so a session that never finds a direct peer flips to Relayed after
     // T_FALLBACK_MS.
     discover_started_ms: u64,
+    // Direct-peer observation edge tracker driven by pump_transports: the last
+    // sampled has_direct_peer() value and when it last flipped. next_path's
+    // hysteresis (T_DIRECT_STABLE_MS / T_DIRECT_LOST_MS) is measured from the
+    // flip, so a signal must HOLD, not merely appear, to move the path.
+    direct_present: bool,
+    direct_flip_ms: u64,
     device_id: String,
     participant_id: String,
     session_id: String,
@@ -426,7 +455,6 @@ impl PrivateDmRuntime {
         let mesh_id = crypto.random_token("mesh")?;
         let participant_id = crypto.random_token("participant")?;
         let fingerprint = crypto.fingerprint();
-        let invite_uri = build_invite_uri(&mesh_id, &session_id, &fingerprint);
         let node = start_node(
             &self.moss,
             &mesh_id,
@@ -434,6 +462,15 @@ impl PrivateDmRuntime {
             request.listen_port,
             request.static_peer,
         )?;
+        // Embed our moss peer id so a hard-NAT joiner can relay-send the MLS
+        // handshake before any direct window exists (identity is per-device,
+        // so the per-DM node id equals our relay-mesh id).
+        let invite_uri = build_invite_uri(
+            &mesh_id,
+            &session_id,
+            &fingerprint,
+            node.public_key_hex().as_deref(),
+        );
 
         let session = PrivateDmSession::new(
             SessionRole::Alice,
@@ -526,6 +563,14 @@ impl PrivateDmRuntime {
             crypto,
             Arc::clone(&self.attachment_store),
         );
+        // Pre-seed the creator's moss id from the invite so route_send can
+        // relay the handshake even if no direct window ever opens; a later
+        // KeyPackage/Welcome exchange would only confirm the same value
+        // (note_peer_moss_id keeps the first one). Tamper trade-off: a wrong
+        // id here makes drain_relay drop the real peer's frames until the
+        // session is recreated — availability only, never identity, since the
+        // fingerprint still gates MLS.
+        session.peer_moss_id = invite.peer_moss_id;
         session.pending_key_package = Some(key_package_payload);
         session.last_handshake_send_ms = now_ms();
 
@@ -992,8 +1037,10 @@ impl PrivateDmRuntime {
     }
 
     /// Drive the per-session fallback state machine: flip stuck-in-Discover
-    /// sessions to Relayed once the direct budget elapses, and migrate any
-    /// session back to Direct the moment a real direct peer appears.
+    /// sessions to Relayed once the direct budget elapses, migrate Relayed
+    /// sessions to Direct only once a direct peer has proven stable, and drop
+    /// Direct sessions back to Relayed when their direct peer stays gone
+    /// (see next_path for the hysteresis rules).
     ///
     /// The relay refcount (`ensure_relay_up`/`release_relay`) needs `&mut self`,
     /// which cannot overlap the `self.sessions` iteration, so the decision is
@@ -1006,10 +1053,18 @@ impl PrivateDmRuntime {
         let mut acquires: Vec<String> = Vec::new();
         let mut releases: Vec<String> = Vec::new();
         for (id, session) in self.sessions.iter_mut() {
+            let has_direct = session.has_direct_peer();
+            if has_direct != session.direct_present {
+                session.direct_present = has_direct;
+                session.direct_flip_ms = now_ms;
+            }
+            let held = now_ms.saturating_sub(session.direct_flip_ms);
             let elapsed = now_ms.saturating_sub(session.discover_started_ms);
             let next = next_path(
                 session.path,
-                session.has_direct_peer(),
+                has_direct,
+                has_direct && held >= T_DIRECT_STABLE_MS,
+                !has_direct && held >= T_DIRECT_LOST_MS,
                 elapsed,
                 T_FALLBACK_MS,
             );
@@ -1031,7 +1086,8 @@ impl PrivateDmRuntime {
         }
         for id in &acquires {
             // ensure_relay_up starts the node before bumping the refcount, so an
-            // Err acquired nothing — leave the session Discover to retry.
+            // Err acquired nothing — leave the session on its current path
+            // (Discover or Direct) to retry next tick.
             if self.ensure_relay_up().is_ok() {
                 if let Some(session) = self.sessions.get_mut(id) {
                     session.path = DmPath::Relayed;
@@ -1291,6 +1347,8 @@ impl PrivateDmSession {
             role,
             path: DmPath::Discover,
             discover_started_ms: now_ms(),
+            direct_present: false,
+            direct_flip_ms: now_ms(),
             device_id,
             participant_id,
             session_id,
@@ -2378,31 +2436,72 @@ mod tests {
         Arc::new(AttachmentStore::new(&path).expect("attachment store should init"))
     }
 
+    // next_path(current, direct_now, direct_stable, direct_gone, elapsed, t_fallback)
+
     #[test]
     fn discover_falls_back_after_budget_without_direct() {
         assert_eq!(
-            next_path(DmPath::Discover, false, 9_999, 10_000),
+            next_path(DmPath::Discover, false, false, false, 9_999, 10_000),
             DmPath::Discover
         );
         assert_eq!(
-            next_path(DmPath::Discover, false, 10_000, 10_000),
+            next_path(DmPath::Discover, false, false, true, 10_000, 10_000),
             DmPath::Relayed
         );
     }
 
     #[test]
-    fn direct_peer_always_wins() {
+    fn discover_promotes_on_the_raw_direct_signal() {
+        // No relay to lose from Discover, so promotion needs no stability.
         assert_eq!(
-            next_path(DmPath::Relayed, true, 99_999, 10_000),
+            next_path(DmPath::Discover, true, false, false, 1, 10_000),
             DmPath::Direct
         );
-        assert_eq!(next_path(DmPath::Discover, true, 1, 10_000), DmPath::Direct);
+        // Even past the fallback budget, a live direct peer wins.
+        assert_eq!(
+            next_path(DmPath::Discover, true, false, false, 99_999, 10_000),
+            DmPath::Direct
+        );
+    }
+
+    #[test]
+    fn relayed_ignores_a_transient_direct_peer() {
+        // A hole punch that lives a few seconds must not tear down a working
+        // relay — symmetric NAT produces exactly such short-lived punches.
+        assert_eq!(
+            next_path(DmPath::Relayed, true, false, false, 99_999, 10_000),
+            DmPath::Relayed
+        );
+    }
+
+    #[test]
+    fn relayed_migrates_once_direct_is_stable() {
+        assert_eq!(
+            next_path(DmPath::Relayed, true, true, false, 99_999, 10_000),
+            DmPath::Direct
+        );
     }
 
     #[test]
     fn relayed_stays_relayed_while_no_direct() {
         assert_eq!(
-            next_path(DmPath::Relayed, false, 99_999, 10_000),
+            next_path(DmPath::Relayed, false, false, true, 99_999, 10_000),
+            DmPath::Relayed
+        );
+    }
+
+    #[test]
+    fn direct_survives_a_momentary_peer_dropout() {
+        assert_eq!(
+            next_path(DmPath::Direct, false, false, false, 99_999, 10_000),
+            DmPath::Direct
+        );
+    }
+
+    #[test]
+    fn direct_falls_back_to_relay_once_the_peer_is_confirmed_gone() {
+        assert_eq!(
+            next_path(DmPath::Direct, false, false, true, 99_999, 10_000),
             DmPath::Relayed
         );
     }
@@ -2648,6 +2747,54 @@ mod tests {
         assert!(session.peer_joined);
         assert_eq!(session.state(), "waiting");
         assert_eq!(session.peer_display_name.as_deref(), Some("Bob"));
+    }
+
+    // The invite embeds the creator's moss peer id and accept_invite must copy
+    // it onto the session, or a hard-NAT joiner cannot relay the handshake
+    // before the first direct window teaches it the id.
+    #[test]
+    fn accept_invite_preseeds_peer_moss_id_from_the_invite() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42190,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+        assert!(
+            invite.invite_uri.contains("&moss="),
+            "invite must carry the creator moss id: {}",
+            invite.invite_uri
+        );
+
+        let mut bob = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        bob.accept_invite(AcceptInviteRequest {
+            invite_uri: invite.invite_uri.clone(),
+            display_name: "Bob".to_string(),
+            listen_port: 42191,
+            static_peer: Some("127.0.0.1:42190".to_string()),
+        })
+        .expect("Bob should accept invite");
+
+        let alice_id = alice
+            .sessions
+            .get(&invite.session_id)
+            .expect("Alice session should exist")
+            .node
+            .public_key_hex()
+            .expect("Alice node should expose its key");
+        let bob_session = bob
+            .sessions
+            .get(&invite.session_id)
+            .expect("Bob session should exist");
+        assert_eq!(bob_session.peer_moss_id.as_deref(), Some(alice_id.as_str()));
     }
 
     // D2 regression: the KeyPackage->Welcome handshake is a one-shot publish.
