@@ -225,7 +225,11 @@ export function PrivateDmScreen({
   );
   const missingRosterMembers =
     activeGroup && activeGroupOrg && selfIsOrgAdmin
-      ? computeMissingRosterMembers(activeGroupOrg, activeGroup.member_peer_ids)
+      ? computeMissingRosterMembers(
+          activeGroupOrg,
+          activeGroup.member_peer_ids,
+          orgs.offeredGroupInvites.get(activeGroup.group_id),
+        )
       : [];
   const orgAddPrompt =
     activeGroup && activeGroupOrg && missingRosterMembers.length > 0

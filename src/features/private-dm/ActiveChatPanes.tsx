@@ -361,8 +361,10 @@ export function ActiveGroupChat(props: {
             {props.orgAddPrompt && props.orgAddPrompt.count > 0 ? (
               <div className="org-add-banner">
                 <span>
-                  {props.orgAddPrompt.count} roster member
-                  {props.orgAddPrompt.count === 1 ? "" : "s"} not in this group
+                  {props.orgAddPrompt.count}{" "}
+                  {props.orgAddPrompt.count === 1
+                    ? orgText.missingOne
+                    : orgText.missingMany}
                 </span>
                 <button
                   type="button"

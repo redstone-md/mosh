@@ -68,10 +68,15 @@ export class DemoNativeState {
 
   joinOrg(request: JoinOrgRequest): OrgSnapshot {
     const orgPubkey = request.bundle_uri.split("#org=")[1] ?? this.next("demo-org");
+    if (this.orgs.some((org) => org.org_pubkey === orgPubkey)) {
+      throw new Error(`already joined org ${orgPubkey}`);
+    }
     const ownPeerId = "aa11bb22cc33dd44ee55ff6600112233aa11bb22cc33dd44ee55ff6600112233";
     const org: OrgSnapshot = {
       org_pubkey: orgPubkey,
-      org_name: /name=([^&#]+)/.exec(request.bundle_uri)?.[1] ?? "demo org",
+      org_name: decodeURIComponent(
+        /name=([^&#]+)/.exec(request.bundle_uri)?.[1] ?? "demo org",
+      ),
       mesh_id: "demo-org-mesh",
       own_peer_id: ownPeerId,
       confirmation_code: "aa11-bb22-cc33",

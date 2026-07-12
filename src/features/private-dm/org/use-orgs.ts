@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import type { ChatTarget } from "../chat-actions";
@@ -39,8 +40,32 @@ export function useOrgs({
   setShowSetup: Dispatch<SetStateAction<boolean>>;
 }) {
   const [orgs, setOrgs] = useState<readonly OrgSnapshot[]>([]);
+  // Members already offered a given group this session, so the add-prompt
+  // neither miscounts pending invitees nor spams duplicate offers per click.
+  const [offeredGroupInvites, setOfferedGroupInvites] = useState<
+    ReadonlyMap<string, ReadonlySet<string>>
+  >(new Map());
+  const refreshEpoch = useRef(0);
+
+  const markGroupInvited = useCallback(
+    (groupId: string, memberPeerIds: readonly string[]) => {
+      setOfferedGroupInvites((current) => {
+        const next = new Map(current);
+        const merged = new Set(next.get(groupId) ?? []);
+        for (const peerId of memberPeerIds) {
+          merged.add(peerId);
+        }
+        next.set(groupId, merged);
+        return next;
+      });
+    },
+    [],
+  );
 
   const refreshOrgs = useCallback(async () => {
+    // Monotonic epoch: a slow interval poll must not overwrite the fresher
+    // snapshot a mutation (accept/dismiss) just wrote.
+    const epoch = ++refreshEpoch.current;
     try {
       const listed = await gateway.listOrgs();
       // Poll each org: the backend drains roster gossip and re-publishes the
@@ -48,7 +73,9 @@ export function useOrgs({
       const polled = await Promise.all(
         listed.map((org) => gateway.pollOrg(org.org_pubkey).catch(() => org)),
       );
-      setOrgs(polled);
+      if (epoch === refreshEpoch.current) {
+        setOrgs(polled);
+      }
     } catch {
       // Runtime unavailable (demo/startup): keep the previous snapshot.
     }
@@ -150,16 +177,18 @@ export function useOrgs({
   // (spec §5: a default #general is just the first ad-hoc group).
   const createOrgGroup = (org: OrgSnapshot, label: string) =>
     run("setup", async () => {
+      const invited = org.members
+        .filter((member) => !member.is_self)
+        .map((member) => member.moss_peer_id);
       const created = await gateway.orgCreateGroup({
         org_pubkey: org.org_pubkey,
         label: label.trim() || null,
-        member_peer_ids: org.members
-          .filter((member) => !member.is_self)
-          .map((member) => member.moss_peer_id),
+        member_peer_ids: invited,
         display_name: requestBase.display_name,
         listen_port: requestBase.listen_port,
         static_peer: requestBase.static_peer,
       });
+      markGroupInvited(created.group_id, invited);
       setActive({ type: "group", id: created.group_id });
       setShowSetup(false);
       await refresh(true);
@@ -172,6 +201,7 @@ export function useOrgs({
   ) =>
     run("offer", async () => {
       await gateway.orgGroupInviteMembers(orgPubkey, groupId, memberPeerIds);
+      markGroupInvited(groupId, memberPeerIds);
     });
 
   // DM sessions whose org link points at a peer no longer in that org's
@@ -180,6 +210,7 @@ export function useOrgs({
 
   return {
     orgs,
+    offeredGroupInvites,
     refreshOrgs,
     joinOrg,
     leaveOrg,
@@ -199,6 +230,11 @@ export function computeRevokedDmBadges(
 ): ReadonlyMap<string, string> {
   const badges = new Map<string, string>();
   for (const org of orgs) {
+    // No verified roster (fresh join, restart before first gossip): absence
+    // of a member proves nothing — never badge.
+    if (org.roster_version === null) {
+      continue;
+    }
     for (const link of org.dm_links) {
       if (!link.session_id) {
         continue;
@@ -219,9 +255,11 @@ export function computeRevokedDmBadges(
 export function computeMissingRosterMembers(
   org: OrgSnapshot,
   groupMemberPeerIds: readonly string[],
+  alreadyOffered?: ReadonlySet<string>,
 ): string[] {
   return org.members
     .filter((member) => !member.is_self)
     .filter((member) => !groupMemberPeerIds.includes(member.moss_peer_id))
+    .filter((member) => !alreadyOffered?.has(member.moss_peer_id))
     .map((member) => member.moss_peer_id);
 }

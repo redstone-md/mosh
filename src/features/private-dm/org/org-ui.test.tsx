@@ -1,10 +1,14 @@
-import { render, screen } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { detectInvite } from "../invite/invite-detection";
-import { ORG_PUBKEY, orgSnapshot } from "../private-dm-test-utils";
+import { createGateway, ORG_PUBKEY, orgSnapshot } from "../private-dm-test-utils";
 import { OrgSection } from "./OrgSection";
-import { computeMissingRosterMembers, computeRevokedDmBadges } from "./use-orgs";
+import {
+  computeMissingRosterMembers,
+  computeRevokedDmBadges,
+  useOrgs,
+} from "./use-orgs";
 
 const ORG_BUNDLE = `mosh://org?mesh=orgmesh-1&name=acme#org=${"a".repeat(64)}`;
 
@@ -23,6 +27,13 @@ function noopHandlers() {
 describe("org bundle detection", () => {
   it("detects a valid bundle", () => {
     expect(detectInvite(ORG_BUNDLE).kind).toBe("org");
+  });
+
+  it("rejects the casings and hosts the Rust parser rejects", () => {
+    expect(detectInvite(ORG_BUNDLE.replace("mosh", "MOSH")).kind).toBe("unknown");
+    expect(
+      detectInvite(ORG_BUNDLE.replace("mosh://org", "mosh://organization")).kind,
+    ).toBe("unknown");
   });
 
   it("rejects bundles missing routing or a malformed key", () => {
@@ -85,6 +96,76 @@ describe("OrgSection", () => {
   });
 });
 
+describe("OrgSection group offers", () => {
+  it("accepts and dismisses org group offers", async () => {
+    const handlers = noopHandlers();
+    const org = orgSnapshot({
+      group_offers: [
+        {
+          offer_id: "g-offer-1",
+          from_peer_id: "b".repeat(64),
+          from_name: "bob",
+          group_label: "general",
+          group_invite_uri: "mosh://group?mesh=m&group=g#fp=AABBCCDDEEFF00112233445566778899",
+        },
+      ],
+    });
+    render(<OrgSection org={org} busy={false} {...handlers} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Accept group invite from bob" }),
+    );
+    expect(handlers.onAcceptGroupOffer).toHaveBeenCalledWith(ORG_PUBKEY, "g-offer-1");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Dismiss group invite from bob" }),
+    );
+    expect(handlers.onDismissGroupOffer).toHaveBeenCalledWith(ORG_PUBKEY, "g-offer-1");
+  });
+});
+
+describe("useOrgs createOrgGroup", () => {
+  it("sends every roster member except self and records them as offered", async () => {
+    const gateway = createGateway();
+    const run = async (_kind: string, action: () => Promise<void>) => {
+      await action();
+    };
+    const { result } = renderHook(() =>
+      useOrgs({
+        gateway,
+        requestBase: {
+          display_name: "alice",
+          listen_port: 0,
+          static_peer: null,
+        },
+        refresh: vi.fn(async () => {}),
+        run: run as never,
+        setActive: vi.fn(),
+        setShowSetup: vi.fn(),
+      }),
+    );
+    const org = orgSnapshot();
+    await result.current.createOrgGroup(org, "general");
+    expect(gateway.orgCreateGroup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        org_pubkey: ORG_PUBKEY,
+        label: "general",
+        member_peer_ids: ["b".repeat(64)],
+      }),
+    );
+    // The invited member is excluded from later "+N not in group" counts.
+    await waitFor(() => {
+      const offered = result.current.offeredGroupInvites.get("group-test");
+      expect(offered?.has("b".repeat(64))).toBe(true);
+    });
+    expect(
+      computeMissingRosterMembers(
+        org,
+        [],
+        result.current.offeredGroupInvites.get("group-test"),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("computeMissingRosterMembers", () => {
   it("lists roster members without a group leaf, never self", () => {
     const org = orgSnapshot();
@@ -115,5 +196,14 @@ describe("computeRevokedDmBadges", () => {
     expect(badges.get("dm-carol")).toBe("acme");
     expect(badges.has("dm-bob")).toBe(false);
     expect(badges.size).toBe(1);
+  });
+
+  it("never badges when no roster has been verified yet", () => {
+    const org = orgSnapshot({
+      roster_version: null,
+      members: [],
+      dm_links: [{ peer_id: "c".repeat(64), session_id: "dm-carol" }],
+    });
+    expect(computeRevokedDmBadges([org]).size).toBe(0);
   });
 });

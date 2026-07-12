@@ -87,6 +87,7 @@ export function OrgSection({
             type="button"
             className="rail-offer-dismiss"
             onClick={() => onDismissDmOffer(org.org_pubkey, offer.offer_id)}
+            disabled={busy}
             title="Dismiss invite"
             aria-label={`Dismiss invite from ${offer.from_name}`}
           >
@@ -117,6 +118,7 @@ export function OrgSection({
             type="button"
             className="rail-offer-dismiss"
             onClick={() => onDismissGroupOffer(org.org_pubkey, offer.offer_id)}
+            disabled={busy}
             title="Dismiss group invite"
             aria-label={`Dismiss group invite from ${offer.from_name}`}
           >

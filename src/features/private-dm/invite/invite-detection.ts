@@ -53,6 +53,11 @@ export function detectInvite(value: string): InviteDetection {
 
 // Matches the Rust-side `ParsedOrgBundle::parse` contract.
 function isOrgBundle(value: string): boolean {
+  // Case-sensitive prefix: the Rust parser rejects `MOSH://org` and the
+  // detect badge must not promise what the backend will refuse.
+  if (!value.startsWith("mosh://org")) {
+    return false;
+  }
   try {
     const url = new URL(value);
     if (url.protocol !== "mosh:" || url.hostname !== "org") {
