@@ -166,8 +166,11 @@ Parse, canonicalize, verify, and diff rosters. Pure logic, no I/O.
   changes emit no event: authority checks (ADR 0005) read the live roster,
   and the UI re-reads the whole roster on any update (30 rows; diff events
   for UI are pointless).
-- Canonical form: JCS-style canonical JSON (sorted keys, no whitespace).
-  Signature covers the canonical bytes with `sig` removed.
+- Canonical form (frozen contract with the admin CLI, NOT RFC 8785 JCS):
+  serde_json compact output with object keys byte-sorted (`preserve_order`
+  disabled), integers only — no floats. Signature covers the canonical
+  bytes with `sig` removed. Frozen by a test vector in `org_roster.rs`.
+  Duplicate `moss_peer_id` entries are rejected at verification.
 
 ### 2. Envelope core (Rust, alongside roster core)
 

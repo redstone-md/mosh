@@ -70,6 +70,10 @@ const OUTBOUND_ATTEMPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("ou
 const MOSS_IDENTITY: TableDefinition<&str, &[u8]> = TableDefinition::new("moss_identity");
 // Single-row table: the device's stable Moss transport identity (libp2p key).
 const MOSS_IDENTITY_KEY: &str = "node-identity-v1";
+// Key: org pubkey hex -> latest verified roster bytes (multi-org).
+const ORG_ROSTERS: TableDefinition<&str, &[u8]> = TableDefinition::new("org_rosters");
+// Key: "<group_id>/<epoch:020>" — zero-padded so lexicographic order == numeric.
+const GROUP_COMMIT_LOG: TableDefinition<&str, &[u8]> = TableDefinition::new("group_commit_log");
 
 pub struct Persistence {
     db: Database,
@@ -135,6 +139,10 @@ impl Persistence {
             wtx.open_table(OUTBOUND_ATTEMPTS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(ORG_ROSTERS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUP_COMMIT_LOG)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         wtx.commit()
@@ -553,6 +561,105 @@ impl Persistence {
     pub fn get_moss_identity(&self) -> Result<Option<Vec<u8>>, PersistenceError> {
         self.get(MOSS_IDENTITY, MOSS_IDENTITY_KEY)
     }
+
+    pub fn put_org_roster(
+        &self,
+        org_pubkey: &str,
+        roster_bytes: &[u8],
+    ) -> Result<(), PersistenceError> {
+        self.put(ORG_ROSTERS, org_pubkey, roster_bytes)
+    }
+
+    pub fn get_org_roster(&self, org_pubkey: &str) -> Result<Option<Vec<u8>>, PersistenceError> {
+        self.get(ORG_ROSTERS, org_pubkey)
+    }
+
+    pub fn list_org_rosters(&self) -> Result<Vec<(String, Vec<u8>)>, PersistenceError> {
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let table = rtx
+            .open_table(ORG_ROSTERS)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let mut out = Vec::new();
+        for entry in table
+            .iter()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?
+        {
+            let (key, value) = entry.map_err(|e| PersistenceError::Db(e.to_string()))?;
+            out.push((
+                key.value().to_string(),
+                decrypt_blob(&self.dek, value.value())?,
+            ));
+        }
+        Ok(out)
+    }
+
+    fn commit_log_key(group_id: &str, epoch: u64) -> String {
+        format!("{group_id}/{epoch:020}")
+    }
+
+    pub fn append_group_commit(
+        &self,
+        group_id: &str,
+        epoch: u64,
+        commit: &[u8],
+    ) -> Result<(), PersistenceError> {
+        // '/' is the key separator; a group_id containing it would collide
+        // with a sibling group's key space and poison its resync range.
+        // group_ids can arrive in remote offers, so fail closed.
+        if group_id.contains('/') {
+            return Err(PersistenceError::Db(format!(
+                "group_id must not contain '/': {group_id}"
+            )));
+        }
+        self.put(
+            GROUP_COMMIT_LOG,
+            &Self::commit_log_key(group_id, epoch),
+            commit,
+        )
+    }
+
+    /// Commits for `group_id` with epoch >= from_epoch, ascending. Backing
+    /// store for the resync path (spec §7). Never pruned in v1.
+    pub fn list_group_commits_from(
+        &self,
+        group_id: &str,
+        from_epoch: u64,
+    ) -> Result<Vec<(u64, Vec<u8>)>, PersistenceError> {
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let table = rtx
+            .open_table(GROUP_COMMIT_LOG)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let start = Self::commit_log_key(group_id, from_epoch);
+        let end = format!("{group_id}/{}", "9".repeat(21)); // beyond any 20-digit epoch
+        let prefix = format!("{group_id}/");
+        let mut out = Vec::new();
+        for entry in table
+            .range(start.as_str()..end.as_str())
+            .map_err(|e| PersistenceError::Db(e.to_string()))?
+        {
+            let (key, value) = entry.map_err(|e| PersistenceError::Db(e.to_string()))?;
+            let key = key.value();
+            let Some(epoch_str) = key.strip_prefix(&prefix) else {
+                continue;
+            };
+            // Skip foreign/malformed keys instead of failing the whole read:
+            // one bad key must not DoS a group's resync.
+            if epoch_str.len() != 20 || !epoch_str.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let Ok(epoch) = epoch_str.parse::<u64>() else {
+                continue;
+            };
+            out.push((epoch, decrypt_blob(&self.dek, value.value())?));
+        }
+        Ok(out)
+    }
 }
 
 impl crate::adapters::moss_ffi::MossKeyStore for Persistence {
@@ -601,6 +708,10 @@ impl Persistence {
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(MOSS_IDENTITY)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(ORG_ROSTERS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(GROUP_COMMIT_LOG)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         wtx.commit()
             .map_err(|e| PersistenceError::Db(e.to_string()))?;
@@ -627,6 +738,44 @@ mod tests {
         let last = blob.len() - 1;
         blob[last] ^= 0xFF;
         assert!(decrypt_blob(&dek, &blob).is_err());
+    }
+
+    #[test]
+    fn org_roster_roundtrip_multi_org() {
+        let path = std::env::temp_dir().join(format!("mosh-org-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [1u8; 32]).unwrap();
+
+        p.put_org_roster("aa11", b"roster-a-v1").unwrap();
+        p.put_org_roster("bb22", b"roster-b-v1").unwrap();
+        p.put_org_roster("aa11", b"roster-a-v2").unwrap(); // overwrite = latest wins
+        assert_eq!(p.get_org_roster("aa11").unwrap().unwrap(), b"roster-a-v2");
+        assert_eq!(p.get_org_roster("none").unwrap(), None);
+        let all = p.list_org_rosters().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|(k, v)| k == "bb22" && v == b"roster-b-v1"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn group_commit_log_ordered_range() {
+        let path = std::env::temp_dir().join(format!("mosh-clog-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let p = Persistence::open_with_dek(&path, [1u8; 32]).unwrap();
+
+        p.append_group_commit("g1", 2, b"c2").unwrap();
+        p.append_group_commit("g1", 10, b"c10").unwrap();
+        p.append_group_commit("g1", 3, b"c3").unwrap();
+        p.append_group_commit("g2", 1, b"other").unwrap();
+        let commits = p.list_group_commits_from("g1", 3).unwrap();
+        assert_eq!(commits, vec![(3, b"c3".to_vec()), (10, b"c10".to_vec())]);
+        assert!(p.list_group_commits_from("g3", 0).unwrap().is_empty());
+
+        // '/' in group_id would collide with a sibling group's key space.
+        assert!(p.append_group_commit("g1/x", 1, b"evil").is_err());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
