@@ -3371,7 +3371,7 @@ mod tests {
 
         // Not an admin in the current roster: no kick happens.
         put_roster(2, "member", true);
-        runtime.enforce_roster_removals(&org_key_hex(), &[member_b.clone()]);
+        runtime.enforce_roster_removals(&org_key_hex(), std::slice::from_ref(&member_b));
         assert_eq!(
             runtime
                 .groups
@@ -3385,7 +3385,7 @@ mod tests {
 
         // Admin again and B revoked: the kick commit lands and is logged.
         put_roster(3, "admin", false);
-        runtime.enforce_roster_removals(&org_key_hex(), &[member_b.clone()]);
+        runtime.enforce_roster_removals(&org_key_hex(), std::slice::from_ref(&member_b));
         {
             let session = runtime.groups.get(&created.group_id).unwrap();
             assert_eq!(
