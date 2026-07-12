@@ -235,6 +235,11 @@ enum ControlEnvelope {
         group_id: String,
         from_fingerprint: String,
         commit_b64: String,
+        /// Org groups: the author's verified roster version (ADR 0005). A
+        /// commit from a not-yet-admin with a NEWER version is buffered
+        /// until that roster arrives instead of being dropped.
+        #[serde(default)]
+        roster_version: Option<u64>,
     },
     AdminHandoff {
         group_id: String,
@@ -406,7 +411,23 @@ struct GroupSession {
     /// Verified-roster cache keyed by the raw stored bytes, so repeated
     /// control messages don't re-verify an unchanged roster.
     roster_cache: Option<(Vec<u8>, Roster)>,
+    /// Commits from authors ahead of our roster (ADR 0005), retried on
+    /// every roster change and dropped once the author is provably not an
+    /// admin at their claimed version.
+    roster_lag: Vec<RosterLaggedCommit>,
+    /// Roster version at the last lag-retry, so a change triggers exactly
+    /// one retry pass.
+    last_roster_version_seen: Option<u64>,
 }
+
+struct RosterLaggedCommit {
+    roster_version: u64,
+    sender_peer_id: String,
+    commit_b64: String,
+}
+
+/// Bounds the lag buffer against spam; genuine lag is 1–2 commits deep.
+const ROSTER_LAG_CAP: usize = 16;
 
 impl PrivateGroupRuntime {
     pub fn new(moss: MossFfiRuntime, attachment_store: Arc<AttachmentStore>) -> Self {
@@ -535,6 +556,8 @@ impl PrivateGroupRuntime {
                     None => None,
                 },
                 roster_cache: None,
+                roster_lag: Vec::new(),
+                last_roster_version_seen: None,
             };
             // A member may have missed commits while offline; ask the admin
             // for a replay. Best-effort: the mesh may not be connected yet —
@@ -700,6 +723,8 @@ impl PrivateGroupRuntime {
             org_pubkey: request.org_pubkey,
             org_signer,
             roster_cache: None,
+            roster_lag: Vec::new(),
+            last_roster_version_seen: None,
         };
 
         self.groups.insert(group_id.clone(), session);
@@ -793,6 +818,8 @@ impl PrivateGroupRuntime {
             org_pubkey: request.org_pubkey,
             org_signer,
             roster_cache: None,
+            roster_lag: Vec::new(),
+            last_roster_version_seen: None,
         };
         self.groups.insert(invite.group_id.clone(), session);
         self.poll(&invite.group_id)
@@ -1196,6 +1223,7 @@ impl PrivateGroupRuntime {
                         group_id: session.group_id.clone(),
                         from_fingerprint: own_fp.clone(),
                         commit_b64: encode(&commit_bytes),
+                        roster_version: session.own_roster_version(),
                     };
                     session.publish_control(&commit_envelope)?;
                     let handoff = ControlEnvelope::AdminHandoff {
@@ -1257,6 +1285,8 @@ impl PrivateGroupRuntime {
         }
         for session in self.groups.values_mut() {
             session.pump_attachment_requests();
+            // ADR 0005: a roster change may legitimize lag-buffered commits.
+            session.sync_roster_state();
         }
         Ok(())
     }
@@ -1638,6 +1668,120 @@ impl GroupSession {
             .is_some_and(|r| r.members.iter().any(|m| m.moss_peer_id == peer_id))
     }
 
+    fn roster_role_is_admin(&mut self, peer_id: &str) -> bool {
+        self.org_roster().is_some_and(|r| {
+            r.members
+                .iter()
+                .any(|m| m.moss_peer_id == peer_id && m.role == "admin")
+        })
+    }
+
+    fn own_roster_version(&mut self) -> Option<u64> {
+        self.org_roster().map(|r| r.version)
+    }
+
+    fn own_peer_id(&self) -> Option<String> {
+        self.org_signer.as_ref().map(org_signing::peer_id_hex)
+    }
+
+    /// May this client author membership commits? Org groups: roster role
+    /// (ADR 0005) — the fingerprint-admin machinery is not consulted at
+    /// all. Plain groups: the legacy single-admin flag.
+    fn acting_admin(&mut self) -> bool {
+        if self.org_pubkey.is_some() {
+            return self
+                .own_peer_id()
+                .is_some_and(|id| {
+                    let id = id.clone();
+                    self.roster_role_is_admin(&id)
+                });
+        }
+        self.is_admin
+    }
+
+    /// Is this inbound commit/welcome author allowed to move the group?
+    /// Org groups: verified envelope sender has `role: admin`. Plain
+    /// groups: fingerprint matches the current admin.
+    fn commit_author_authorized(
+        &mut self,
+        from_fingerprint: &str,
+        sender_peer_id: Option<&str>,
+    ) -> bool {
+        if self.org_pubkey.is_some() {
+            return sender_peer_id.is_some_and(|sender| {
+                let sender = sender.to_string();
+                self.roster_role_is_admin(&sender)
+            });
+        }
+        from_fingerprint == self.current_admin_fingerprint
+    }
+
+    /// Org commit admission with the ADR 0005 roster-lag rule: a commit
+    /// from a not-yet-admin claiming a NEWER roster version is buffered and
+    /// retried when that roster lands; anything else from a non-admin drops.
+    fn apply_org_commit(
+        &mut self,
+        commit_b64: String,
+        author_roster_version: Option<u64>,
+        sender_peer_id: Option<&str>,
+    ) -> Result<(), PrivateGroupError> {
+        let Some(sender) = sender_peer_id.map(str::to_string) else {
+            return Ok(());
+        };
+        if self.roster_role_is_admin(&sender) {
+            return self.apply_commit_sequenced(commit_b64);
+        }
+        if author_roster_version > self.own_roster_version() {
+            if self.roster_lag.len() < ROSTER_LAG_CAP {
+                self.roster_lag.push(RosterLaggedCommit {
+                    roster_version: author_roster_version.unwrap_or(0),
+                    sender_peer_id: sender,
+                    commit_b64,
+                });
+            }
+            return Ok(());
+        }
+        eprintln!(
+            "group {}: commit from non-admin {sender} dropped",
+            self.group_id
+        );
+        Ok(())
+    }
+
+    /// Re-run lag-buffered commits after a roster change. Entries whose
+    /// author became admin apply; entries still ahead of our roster stay;
+    /// entries whose claimed version we now have (author still not admin)
+    /// drop for good.
+    fn retry_roster_lagged(&mut self) {
+        if self.roster_lag.is_empty() {
+            return;
+        }
+        let mine = self.own_roster_version();
+        let pending = std::mem::take(&mut self.roster_lag);
+        for entry in pending {
+            if self.roster_role_is_admin(&entry.sender_peer_id) {
+                if let Err(error) = self.apply_commit_sequenced(entry.commit_b64) {
+                    eprintln!("group {}: lagged commit apply failed: {error}", self.group_id);
+                }
+            } else if Some(entry.roster_version) > mine {
+                self.roster_lag.push(entry);
+            }
+        }
+    }
+
+    /// One lag-retry pass per roster version change, driven by the drain
+    /// loop (poll cadence).
+    fn sync_roster_state(&mut self) {
+        if self.org_pubkey.is_none() {
+            return;
+        }
+        let current = self.own_roster_version();
+        if current != self.last_roster_version_seen {
+            self.last_roster_version_seen = current;
+            self.retry_roster_lagged();
+        }
+    }
+
     /// Org admission rule (ADR 0004): the KeyPackage's credential identity
     /// must equal the envelope's verified peer-id AND be in the roster.
     /// `replace_member` removes any stale leaf with the same identity in the
@@ -1698,6 +1842,7 @@ impl GroupSession {
             group_id: self.group_id.clone(),
             from_fingerprint: own_fp,
             commit_b64,
+            roster_version: self.own_roster_version(),
         };
         self.publish_control(&commit_envelope)
     }
@@ -1868,10 +2013,10 @@ impl GroupSession {
                 participant_id,
                 key_package_b64,
                 ..
-            } if self.is_admin
-                && self.group_id == group_id
-                && self.participant_id != participant_id =>
-            {
+            } if self.group_id == group_id && self.participant_id != participant_id => {
+                if !self.acting_admin() {
+                    return Ok(());
+                }
                 let key_package = decode(&key_package_b64)?;
                 // Drop replays / rogue duplicate admit attempts whose MLS
                 // signer is already covered by the roster.
@@ -1900,9 +2045,11 @@ impl GroupSession {
             } if !self.joined
                 && !self.is_admin
                 && self.group_id == group_id
-                && self.participant_id == for_participant_id
-                && from_fingerprint == self.current_admin_fingerprint =>
+                && self.participant_id == for_participant_id =>
             {
+                if !self.commit_author_authorized(&from_fingerprint, sender_peer_id.as_deref()) {
+                    return Ok(());
+                }
                 self.crypto
                     .join_welcome(&decode(&welcome_b64)?, &decode(&tree_b64)?)?;
                 self.joined = true;
@@ -1918,23 +2065,29 @@ impl GroupSession {
                 from_fingerprint,
                 commit_b64,
                 ..
-            } if self.joined
-                && !self.is_admin
-                && self.group_id == group_id
-                && from_fingerprint == self.current_admin_fingerprint =>
-            {
+            } if self.joined && !self.is_admin && self.group_id == group_id => {
+                if !self.commit_author_authorized(&from_fingerprint, sender_peer_id.as_deref()) {
+                    return Ok(());
+                }
                 self.apply_commit_sequenced(commit_b64)
             }
             ControlEnvelope::Commit {
                 group_id,
                 from_fingerprint,
                 commit_b64,
-            } if self.joined
-                && !self.is_admin
-                && self.group_id == group_id
-                && from_fingerprint == self.current_admin_fingerprint =>
-            {
-                self.apply_commit_sequenced(commit_b64)
+                roster_version,
+            } if self.joined && self.group_id == group_id => {
+                if self.org_pubkey.is_some() {
+                    // Roster-derived authority incl. the lag buffer; own
+                    // commits come back around but dedup as already-applied.
+                    self.apply_org_commit(commit_b64, roster_version, sender_peer_id.as_deref())
+                } else if !self.is_admin
+                    && from_fingerprint == self.current_admin_fingerprint
+                {
+                    self.apply_commit_sequenced(commit_b64)
+                } else {
+                    Ok(())
+                }
             }
             ControlEnvelope::AdminHandoff {
                 group_id,
@@ -1954,7 +2107,10 @@ impl GroupSession {
                 group_id,
                 from_fingerprint,
                 proposal_b64,
-            } if self.is_admin && self.group_id == group_id && from_fingerprint != own_fp => {
+            } if self.group_id == group_id && from_fingerprint != own_fp => {
+                if !self.acting_admin() {
+                    return Ok(());
+                }
                 let proposal = decode(&proposal_b64)?;
                 self.crypto.queue_remote_proposal(&proposal)?;
                 let pre_epoch = self.crypto.epoch();
@@ -1966,6 +2122,7 @@ impl GroupSession {
                     group_id: self.group_id.clone(),
                     from_fingerprint: own_fp,
                     commit_b64: encode(&commit_bytes),
+                    roster_version: self.own_roster_version(),
                 };
                 self.publish_control(&commit_envelope)
             }
@@ -1973,7 +2130,21 @@ impl GroupSession {
                 group_id,
                 from_fingerprint,
                 have_epoch,
-            } if self.is_admin && self.group_id == group_id && from_fingerprint != own_fp => {
+            } if self.group_id == group_id && from_fingerprint != own_fp => {
+                if !self.acting_admin() {
+                    return Ok(());
+                }
+                // Org groups: never serve the commit log to a revoked or
+                // unknown peer — the envelope names the requester (spec §6).
+                if self.org_pubkey.is_some() {
+                    let member = sender_peer_id
+                        .as_deref()
+                        .map(str::to_string)
+                        .is_some_and(|sender| self.roster_contains(&sender));
+                    if !member {
+                        return Ok(());
+                    }
+                }
                 self.serve_resync_request(from_fingerprint, have_epoch)
             }
             ControlEnvelope::ResyncResponse {
@@ -1981,6 +2152,12 @@ impl GroupSession {
                 for_fingerprint,
                 commits,
             } if self.joined && self.group_id == group_id && for_fingerprint == own_fp => {
+                // Org groups: only a roster admin may feed us commits.
+                if self.org_pubkey.is_some()
+                    && !self.commit_author_authorized("", sender_peer_id.as_deref())
+                {
+                    return Ok(());
+                }
                 self.absorb_resync_response(commits)
             }
             ControlEnvelope::AttachmentManifest {
@@ -2907,6 +3084,118 @@ mod tests {
             let snapshot = session.snapshot();
             assert_eq!(snapshot.org_pubkey.as_deref(), Some(org_key_hex().as_str()));
             assert_eq!(snapshot.member_peer_ids.len(), 2);
+        }
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn org_commit_authority_follows_roster_with_lag_buffer() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-org-authority-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [29u8; 32]).expect("store should open"));
+
+        let admin_seed = [81u8; 32];
+        persistence.put_moss_identity(&identity_blob(admin_seed)).unwrap();
+        let admin_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&admin_seed));
+        let member_b_key = SigningKey::from_bytes(&[82u8; 32]);
+        let member_b = org_signing::peer_id_hex(&member_b_key);
+        let member_c = hex::encode([0x83u8; 32]);
+
+        let put_roster = |version: u64, b_role: &str| {
+            let mut doc = serde_json::json!({
+                "org_pubkey": org_key_hex(),
+                "org_name": "acme",
+                "version": version,
+                "members": [
+                    {"moss_peer_id": admin_peer, "name": "a", "role": "admin"},
+                    {"moss_peer_id": member_b, "name": "b", "role": b_role},
+                    {"moss_peer_id": member_c, "name": "c", "role": "member"},
+                ],
+            });
+            let bytes = org_roster::sign_roster(&mut doc, &org_key()).unwrap();
+            persistence.put_org_roster(&org_key_hex(), &bytes).unwrap();
+        };
+        put_roster(1, "member");
+
+        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
+        let mut runtime =
+            PrivateGroupRuntime::from_shared(moss, temp_store(), Some(persistence.clone()));
+        let created = runtime
+            .create_group(CreateGroupRequest {
+                label: None,
+                display_name: "Alice".to_string(),
+                listen_port: 42370,
+                static_peer: None,
+                org_pubkey: Some(org_key_hex()),
+            })
+            .unwrap();
+
+        // Join B directly at the crypto layer so B can author a REAL commit.
+        let mut b_crypto = MlsSessionCrypto::new(&member_b).unwrap();
+        let kp_b = b_crypto.key_package_bytes().unwrap();
+        let (control_channel, mesh_id, welcome, tree) = {
+            let session = runtime.groups.get_mut(&created.group_id).unwrap();
+            let outcome = session.crypto.add_members(&[kp_b.as_slice()]).unwrap();
+            (
+                session.control_channel.clone(),
+                session.mesh_id.clone(),
+                outcome.welcome_bytes,
+                outcome.tree_bytes,
+            )
+        };
+        b_crypto.join_welcome(&welcome, &tree).unwrap();
+
+        // B (still role: member) adds C — a real, valid MLS commit.
+        let mut c_crypto = MlsSessionCrypto::new(&member_c).unwrap();
+        let kp_c = c_crypto.key_package_bytes().unwrap();
+        let b_commit = b_crypto.add_members(&[kp_c.as_slice()]).unwrap();
+        let commit_from_b = |roster_version: Option<u64>| ControlEnvelope::Commit {
+            group_id: created.group_id.clone(),
+            from_fingerprint: b_crypto.fingerprint(),
+            commit_b64: encode(&b_commit.commit_bytes),
+            roster_version,
+        };
+        let deliver = |runtime: &mut PrivateGroupRuntime, payload: Vec<u8>| {
+            let session = runtime.groups.get_mut(&created.group_id).unwrap();
+            let _ = session.handle_moss_message(MossReceivedMessage {
+                channel: control_channel.clone(),
+                payload,
+            });
+        };
+
+        // Non-admin commit with no version claim: dropped outright.
+        let env = commit_from_b(None);
+        deliver(&mut runtime, org_signed_control(&member_b_key, &control_channel, &mesh_id, &env));
+        {
+            let session = runtime.groups.get_mut(&created.group_id).unwrap();
+            assert_eq!(session.crypto.member_count(), 2, "non-admin commit must not apply");
+            assert!(session.roster_lag.is_empty());
+        }
+
+        // Same commit claiming roster v2 (ahead of ours): buffered, not applied.
+        let env = commit_from_b(Some(2));
+        deliver(&mut runtime, org_signed_control(&member_b_key, &control_channel, &mesh_id, &env));
+        {
+            let session = runtime.groups.get_mut(&created.group_id).unwrap();
+            assert_eq!(session.crypto.member_count(), 2);
+            assert_eq!(session.roster_lag.len(), 1, "ahead-of-roster commit buffers");
+        }
+
+        // Roster v2 promotes B to admin: the buffered commit now applies.
+        put_roster(2, "admin");
+        {
+            let session = runtime.groups.get_mut(&created.group_id).unwrap();
+            session.sync_roster_state();
+            assert!(session.roster_lag.is_empty());
+            assert_eq!(session.crypto.member_count(), 3, "commit applies once author is admin");
         }
 
         let _ = std::fs::remove_file(&db_path);
