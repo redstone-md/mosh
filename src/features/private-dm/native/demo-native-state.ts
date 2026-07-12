@@ -1,4 +1,8 @@
 import type {
+  JoinOrgRequest,
+  OrgDmOfferView,
+  OrgGroupOfferView,
+  OrgSnapshot,
   AttachmentDescriptor,
   AttachmentSendResult,
   AttachmentView,
@@ -28,6 +32,7 @@ export class DemoNativeState {
   private sessions: SessionSnapshot[] = [seedSession()];
   private channels: ChannelSnapshot[] = [seedChannel()];
   private groups: GroupSnapshot[] = [seedGroup()];
+  private orgs: OrgSnapshot[] = [];
 
   listSessions(): readonly SessionSnapshot[] {
     return this.sessions.map(cloneSession);
@@ -59,6 +64,101 @@ export class DemoNativeState {
 
   closeChannel(name: string): void {
     this.channels = this.channels.filter((channel) => channel.name !== name);
+  }
+
+  joinOrg(request: JoinOrgRequest): OrgSnapshot {
+    const orgPubkey = request.bundle_uri.split("#org=")[1] ?? this.next("demo-org");
+    if (this.orgs.some((org) => org.org_pubkey === orgPubkey)) {
+      throw new Error(`already joined org ${orgPubkey}`);
+    }
+    const ownPeerId = "aa11bb22cc33dd44ee55ff6600112233aa11bb22cc33dd44ee55ff6600112233";
+    const org: OrgSnapshot = {
+      org_pubkey: orgPubkey,
+      org_name: decodeURIComponent(
+        /name=([^&#]+)/.exec(request.bundle_uri)?.[1] ?? "demo org",
+      ),
+      mesh_id: "demo-org-mesh",
+      own_peer_id: ownPeerId,
+      confirmation_code: "aa11-bb22-cc33",
+      in_roster: true,
+      roster_version: 1,
+      members: [
+        { moss_peer_id: ownPeerId, name: request.display_name || "you", role: "admin", is_self: true },
+        { moss_peer_id: "b".repeat(64), name: "demo bob", role: "member", is_self: false },
+        { moss_peer_id: "c".repeat(64), name: "demo carol", role: "member", is_self: false },
+      ],
+      dm_offers: [],
+      group_offers: [],
+      dm_links: [],
+    };
+    this.orgs = [org, ...this.orgs.filter((o) => o.org_pubkey !== org.org_pubkey)];
+    return org;
+  }
+
+  leaveOrg(orgPubkey: string): void {
+    this.orgs = this.orgs.filter((org) => org.org_pubkey !== orgPubkey);
+  }
+
+  listOrgs(): readonly OrgSnapshot[] {
+    return this.orgs.map((org) => ({ ...org }));
+  }
+
+  pollOrg(orgPubkey: string): OrgSnapshot {
+    const org = this.orgs.find((candidate) => candidate.org_pubkey === orgPubkey);
+    if (!org) {
+      throw new Error(`not joined to org ${orgPubkey}`);
+    }
+    return { ...org };
+  }
+
+  linkOrgDm(orgPubkey: string, peerId: string, sessionId: string): void {
+    this.orgs = this.orgs.map((org) =>
+      org.org_pubkey === orgPubkey
+        ? {
+            ...org,
+            dm_links: [
+              ...org.dm_links.filter((link) => link.peer_id !== peerId),
+              { peer_id: peerId, session_id: sessionId },
+            ],
+          }
+        : org,
+    );
+  }
+
+  takeOrgDmOffer(orgPubkey: string, offerId: string): OrgDmOfferView {
+    const org = this.pollOrg(orgPubkey);
+    const offer = org.dm_offers.find((candidate) => candidate.offer_id === offerId);
+    if (!offer) {
+      throw new Error(`unknown dm offer ${offerId}`);
+    }
+    this.dismissOrgDmOffer(orgPubkey, offerId);
+    return offer;
+  }
+
+  dismissOrgDmOffer(orgPubkey: string, offerId: string): void {
+    this.orgs = this.orgs.map((org) =>
+      org.org_pubkey === orgPubkey
+        ? { ...org, dm_offers: org.dm_offers.filter((offer) => offer.offer_id !== offerId) }
+        : org,
+    );
+  }
+
+  takeOrgGroupOffer(orgPubkey: string, offerId: string): OrgGroupOfferView {
+    const org = this.pollOrg(orgPubkey);
+    const offer = org.group_offers.find((candidate) => candidate.offer_id === offerId);
+    if (!offer) {
+      throw new Error(`unknown group offer ${offerId}`);
+    }
+    this.dismissOrgGroupOffer(orgPubkey, offerId);
+    return offer;
+  }
+
+  dismissOrgGroupOffer(orgPubkey: string, offerId: string): void {
+    this.orgs = this.orgs.map((org) =>
+      org.org_pubkey === orgPubkey
+        ? { ...org, group_offers: org.group_offers.filter((offer) => offer.offer_id !== offerId) }
+        : org,
+    );
   }
 
   closeGroup(groupId: string): void {
@@ -329,6 +429,9 @@ export function groupSnapshot(overrides: Partial<GroupSnapshot>): GroupSnapshot 
     dm_offers: [],
     mesh: demoMesh(),
     events: demoEvents(),
+    needs_rejoin: false,
+    org_pubkey: null,
+    member_peer_ids: [],
     ...overrides,
     messages,
   };

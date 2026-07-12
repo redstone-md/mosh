@@ -31,6 +31,7 @@ export function NewSessionPanel(props: {
   onJoinChannel: (name: string) => void;
   onCreateGroup: (label: string) => void;
   onJoinGroup: (uri: string) => void;
+  onJoinOrg: (uri: string) => void;
   onCopyInvite: () => void;
   onCopyGroupInvite: () => void;
 }) {
@@ -84,6 +85,7 @@ export function NewSessionPanel(props: {
             onBack={backToMenu}
             onAccept={props.onAccept}
             onJoinGroup={props.onJoinGroup}
+            onJoinOrg={props.onJoinOrg}
           />
         ) : (
           <ChannelJoinStep

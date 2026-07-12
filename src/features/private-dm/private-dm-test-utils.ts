@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type {
+  OrgSnapshot,
   ChannelMessage,
   ChannelSendResult,
   GroupSendResult,
@@ -117,6 +118,9 @@ export function groupSnapshot(overrides: Partial<GroupSnapshot> = {}): GroupSnap
     dm_offers: [],
     mesh: MESH_READY,
     events: [],
+    needs_rejoin: false,
+    org_pubkey: null,
+    member_peer_ids: [],
     ...overrides,
   };
 }
@@ -251,6 +255,9 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
       dm_offers: [],
       mesh: MESH_READY,
       events: [],
+      needs_rejoin: false,
+      org_pubkey: null,
+      member_peer_ids: [],
     })),
     sendGroupMessage: vi.fn(async (group_id): Promise<GroupSendResult> => ({
       group_id,
@@ -284,6 +291,9 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
       dm_offers: [],
       mesh: MESH_READY,
       events: [],
+      needs_rejoin: false,
+      org_pubkey: null,
+      member_peer_ids: [],
     })),
     listPrivateGroups: vi.fn(async () => ({ groups: [] })),
     closePrivateGroup: vi.fn(async (group_id) => ({ group_id, closed: true })),
@@ -329,7 +339,53 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
       suspect_interfaces: [],
       vpn_owns_default_route: false,
     })),
+    joinOrg: vi.fn(async () => orgSnapshot()),
+    leaveOrg: vi.fn(async () => {}),
+    listOrgs: vi.fn(async () => []),
+    pollOrg: vi.fn(async () => orgSnapshot()),
+    orgSendDmOffer: vi.fn(async () => ({
+      invite_uri: INVITE,
+      session_id: SESSION_ID,
+      mesh_id: "mesh-one",
+      fingerprint: FINGERPRINT,
+      listen_address: "default-public-trackers",
+    })),
+    orgAcceptDmOffer: vi.fn(async () => snapshot()),
+    orgDismissDmOffer: vi.fn(async () => {}),
+    orgCreateGroup: vi.fn(async (request) => ({
+      group_id: "group-test",
+      mesh_id: "groupmesh-test",
+      invite_uri: "mosh://group?mesh=groupmesh-test&group=group-test#fp=AABB",
+      fingerprint: "AABB",
+      label: request.label ?? null,
+    })),
+    orgAcceptGroupOffer: vi.fn(async () => groupSnapshot()),
+    orgDismissGroupOffer: vi.fn(async () => {}),
+    orgGroupInviteMembers: vi.fn(async () => {}),
     setBindInterface: vi.fn(async () => {}),
     getBindInterface: vi.fn(async () => null),
+  };
+}
+
+export const ORG_PUBKEY = "e".repeat(64);
+export const OWN_PEER_ID = "f".repeat(64);
+
+export function orgSnapshot(overrides: Partial<OrgSnapshot> = {}): OrgSnapshot {
+  return {
+    org_pubkey: ORG_PUBKEY,
+    org_name: "acme",
+    mesh_id: "orgmesh-test",
+    own_peer_id: OWN_PEER_ID,
+    confirmation_code: "ffff-ffff-ffff",
+    in_roster: true,
+    roster_version: 1,
+    members: [
+      { moss_peer_id: OWN_PEER_ID, name: "you", role: "admin", is_self: true },
+      { moss_peer_id: "b".repeat(64), name: "bob", role: "member", is_self: false },
+    ],
+    dm_offers: [],
+    group_offers: [],
+    dm_links: [],
+    ...overrides,
   };
 }
