@@ -428,6 +428,8 @@ struct RosterLaggedCommit {
 
 /// Bounds the lag buffer against spam; genuine lag is 1–2 commits deep.
 const ROSTER_LAG_CAP: usize = 16;
+/// Max plausible roster-version lead a lag-buffered commit may claim.
+const ROSTER_LAG_HORIZON: u64 = 64;
 
 impl PrivateGroupRuntime {
     pub fn new(moss: MossFfiRuntime, attachment_store: Arc<AttachmentStore>) -> Self {
@@ -900,59 +902,21 @@ impl PrivateGroupRuntime {
         })
     }
 
-    /// Crypto layer of revocation (spec §6, ADR 0008): for every group
-    /// bound to `org_pubkey` where this client may author commits, remove
-    /// ALL leaves belonging to the revoked peer-ids and broadcast the
-    /// commits. Peers not present in a group are skipped silently. Called
-    /// by lib.rs whenever the org runtime reports roster removals.
-    pub fn enforce_roster_removals(&mut self, org_pubkey: &str, removed_peer_ids: &[String]) {
-        if removed_peer_ids.is_empty() {
-            return;
-        }
-        for session in self.groups.values_mut() {
-            if session.org_pubkey.as_deref() != Some(org_pubkey) {
-                continue;
-            }
-            // The roster just changed: lag-buffered commits may apply now.
-            session.sync_roster_state();
-            if !session.acting_admin() {
-                continue;
-            }
-            let present: HashSet<String> = session.crypto.member_identities().into_iter().collect();
-            for peer_id in removed_peer_ids {
-                if !present.contains(peer_id) {
-                    continue;
-                }
-                let own_fp = session.crypto.fingerprint();
-                let pre_epoch = session.crypto.epoch();
-                let commit_bytes = match session.crypto.remove_members_by_identity(peer_id) {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        eprintln!(
-                            "group {}: auto-kick of {peer_id} failed: {error}",
-                            session.group_id
-                        );
-                        continue;
-                    }
-                };
-                if let Some(epoch) = pre_epoch {
-                    session.log_commit(epoch, &commit_bytes);
-                }
-                let commit_envelope = ControlEnvelope::Commit {
-                    group_id: session.group_id.clone(),
-                    from_fingerprint: own_fp,
-                    commit_b64: encode(&commit_bytes),
-                    roster_version: session.own_roster_version(),
-                };
-                if let Err(error) = session.publish_control(&commit_envelope) {
-                    eprintln!(
-                        "group {}: auto-kick commit publish failed: {error}",
-                        session.group_id
-                    );
-                }
+    /// Leaving an org closes every group bound to it — otherwise the
+    /// sessions would freeze (roster gone ⇒ no commit is ever authorized
+    /// again) while still appearing live.
+    pub fn close_org_groups(&mut self, org_pubkey: &str) {
+        let bound: Vec<String> = self
+            .groups
+            .values()
+            .filter(|session| session.org_pubkey.as_deref() == Some(org_pubkey))
+            .map(|session| session.group_id.clone())
+            .collect();
+        for group_id in bound {
+            if let Err(error) = self.close(&group_id) {
+                eprintln!("group {group_id}: close on org leave failed: {error}");
             }
         }
-        self.persist_group_tail();
     }
 
     pub fn dismiss_dm_offer(
@@ -1747,10 +1711,10 @@ impl GroupSession {
     /// all. Plain groups: the legacy single-admin flag.
     fn acting_admin(&mut self) -> bool {
         if self.org_pubkey.is_some() {
-            return self.own_peer_id().is_some_and(|id| {
-                let id = id.clone();
-                self.roster_role_is_admin(&id)
-            });
+            return match self.own_peer_id() {
+                Some(id) => self.roster_role_is_admin(&id),
+                None => false,
+            };
         }
         self.is_admin
     }
@@ -1764,10 +1728,13 @@ impl GroupSession {
         sender_peer_id: Option<&str>,
     ) -> bool {
         if self.org_pubkey.is_some() {
-            return sender_peer_id.is_some_and(|sender| {
-                let sender = sender.to_string();
-                self.roster_role_is_admin(&sender)
-            });
+            return match sender_peer_id {
+                Some(sender) => {
+                    let sender = sender.to_string();
+                    self.roster_role_is_admin(&sender)
+                }
+                None => false,
+            };
         }
         from_fingerprint == self.current_admin_fingerprint
     }
@@ -1788,13 +1755,27 @@ impl GroupSession {
             return self.apply_commit_sequenced(commit_b64);
         }
         if author_roster_version > self.own_roster_version() {
-            if self.roster_lag.len() < ROSTER_LAG_CAP {
-                self.roster_lag.push(RosterLaggedCommit {
-                    roster_version: author_roster_version.unwrap_or(0),
-                    sender_peer_id: sender,
-                    commit_b64,
-                });
+            // Reject absurd claims outright: an entry pinned at an
+            // unreachable version (e.g. u64::MAX) would otherwise squat in
+            // the buffer forever. Genuine lag is 1-2 versions deep.
+            let horizon = self.own_roster_version().unwrap_or(0) + ROSTER_LAG_HORIZON;
+            let claimed = author_roster_version.unwrap_or(0);
+            if claimed > horizon {
+                eprintln!(
+                    "group {}: commit claiming roster v{claimed} beyond horizon dropped",
+                    self.group_id
+                );
+                return Ok(());
             }
+            // FIFO at cap: garbage must not lock out a later genuine entry.
+            if self.roster_lag.len() >= ROSTER_LAG_CAP {
+                self.roster_lag.remove(0);
+            }
+            self.roster_lag.push(RosterLaggedCommit {
+                roster_version: claimed,
+                sender_peer_id: sender,
+                commit_b64,
+            });
             return Ok(());
         }
         eprintln!(
@@ -1828,8 +1809,9 @@ impl GroupSession {
         }
     }
 
-    /// One lag-retry pass per roster version change, driven by the drain
-    /// loop (poll cadence).
+    /// One pass per roster version change, driven by the drain loop (poll
+    /// cadence) and by rehydrate (`last_roster_version_seen` starts None).
+    /// Retries lag-buffered commits, then reconciles group membership.
     fn sync_roster_state(&mut self) {
         if self.org_pubkey.is_none() {
             return;
@@ -1838,6 +1820,58 @@ impl GroupSession {
         if current != self.last_roster_version_seen {
             self.last_roster_version_seen = current;
             self.retry_roster_lagged();
+            self.reconcile_roster_membership();
+        }
+    }
+
+    /// Crypto layer of revocation (spec §6, ADR 0008), reconciliation-style:
+    /// any leaf whose peer-id is absent from the current verified roster is
+    /// removed. Driven by durable state (persisted roster ∧ MLS tree), so a
+    /// removal converges no matter which drain absorbed the roster and
+    /// survives a restart — never by an in-memory removal event.
+    fn reconcile_roster_membership(&mut self) {
+        let Some(roster) = self.org_roster() else {
+            return;
+        };
+        if !self.joined || !self.acting_admin() {
+            return;
+        }
+        let own = self.own_peer_id();
+        let revoked: Vec<String> = self
+            .crypto
+            .member_identities()
+            .into_iter()
+            .filter(|identity| Some(identity) != own.as_ref())
+            .filter(|identity| !roster.members.iter().any(|m| m.moss_peer_id == *identity))
+            .collect();
+        for peer_id in revoked {
+            let own_fp = self.crypto.fingerprint();
+            let pre_epoch = self.crypto.epoch();
+            let commit_bytes = match self.crypto.remove_members_by_identity(&peer_id) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    eprintln!(
+                        "group {}: auto-kick of {peer_id} failed: {error}",
+                        self.group_id
+                    );
+                    continue;
+                }
+            };
+            if let Some(epoch) = pre_epoch {
+                self.log_commit(epoch, &commit_bytes);
+            }
+            let commit_envelope = ControlEnvelope::Commit {
+                group_id: self.group_id.clone(),
+                from_fingerprint: own_fp,
+                commit_b64: encode(&commit_bytes),
+                roster_version: Some(roster.version),
+            };
+            if let Err(error) = self.publish_control(&commit_envelope) {
+                eprintln!(
+                    "group {}: auto-kick commit publish failed: {error}",
+                    self.group_id
+                );
+            }
         }
     }
 
@@ -3309,7 +3343,7 @@ mod tests {
     }
 
     #[test]
-    fn enforce_roster_removals_kicks_only_when_acting_admin() {
+    fn roster_reconciliation_kicks_revoked_members_and_survives_restart() {
         let _guard = MOSS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3369,9 +3403,17 @@ mod tests {
             assert_eq!(session.crypto.member_count(), 2);
         }
 
-        // Not an admin in the current roster: no kick happens.
+        let sync = |runtime: &mut PrivateGroupRuntime| {
+            runtime
+                .groups
+                .get_mut(&created.group_id)
+                .unwrap()
+                .sync_roster_state();
+        };
+
+        // Not an admin in the current roster: reconciliation must not kick.
         put_roster(2, "member", true);
-        runtime.enforce_roster_removals(&org_key_hex(), std::slice::from_ref(&member_b));
+        sync(&mut runtime);
         assert_eq!(
             runtime
                 .groups
@@ -3385,7 +3427,7 @@ mod tests {
 
         // Admin again and B revoked: the kick commit lands and is logged.
         put_roster(3, "admin", false);
-        runtime.enforce_roster_removals(&org_key_hex(), std::slice::from_ref(&member_b));
+        sync(&mut runtime);
         {
             let session = runtime.groups.get(&created.group_id).unwrap();
             assert_eq!(
@@ -3405,17 +3447,44 @@ mod tests {
                 .is_empty(),
             "kick commit must be logged for resync"
         );
-        // Idempotent: revoked peer already gone.
-        runtime.enforce_roster_removals(&org_key_hex(), &[member_b]);
+        // Repeat sync at the same version: no further commits (idempotent).
+        let logged = persistence
+            .list_group_commits_from(&created.group_id, 0)
+            .unwrap()
+            .len();
+        sync(&mut runtime);
         assert_eq!(
-            runtime
-                .groups
-                .get(&created.group_id)
+            persistence
+                .list_group_commits_from(&created.group_id, 0)
                 .unwrap()
-                .crypto
-                .member_count(),
-            1
+                .len(),
+            logged
         );
+
+        // Restart scenario (the PR #22 review red): the roster removal was
+        // absorbed while the admin never polled this org, then the app
+        // restarted. Reconciliation runs from durable state on rehydrate.
+        drop(runtime);
+        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
+        let mut revived =
+            PrivateGroupRuntime::from_shared(moss, temp_store(), Some(persistence.clone()));
+        revived.rehydrate();
+        // Simulate a stale MLS tree by re-adding B behind the roster's back,
+        // then let the drain-driven sync converge it.
+        {
+            let session = revived.groups.get_mut(&created.group_id).unwrap();
+            let mut b_again = MlsSessionCrypto::new(&member_b).unwrap();
+            let kp = b_again.key_package_bytes().unwrap();
+            session.crypto.add_members(&[kp.as_slice()]).unwrap();
+            assert_eq!(session.crypto.member_count(), 2);
+            session.last_roster_version_seen = None;
+            session.sync_roster_state();
+            assert_eq!(
+                session.crypto.member_count(),
+                1,
+                "reconciliation must kick from persisted state after restart"
+            );
+        }
 
         let _ = std::fs::remove_file(&db_path);
     }

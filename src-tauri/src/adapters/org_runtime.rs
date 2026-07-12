@@ -226,7 +226,6 @@ struct OrgSession {
     group_offers: Vec<OrgGroupOfferView>,
     dm_links: Vec<OrgDmLink>,
     seen_offer_ids: std::collections::HashSet<String>,
-    pending_removals: Vec<String>,
     #[cfg(test)]
     roster_publishes: u32,
 }
@@ -437,12 +436,9 @@ impl OrgSession {
         let stored_version = self.roster.as_ref().map(|r| r.version);
         match org_roster::verify(bytes, &self.org_pubkey, stored_version) {
             Ok(roster) => {
-                let removed: Vec<String> = org_roster::diff(self.roster.as_ref(), &roster)
-                    .removed
-                    .into_iter()
-                    .map(|m| m.moss_peer_id)
-                    .collect();
-                self.pending_removals.extend(removed);
+                // Revocation is NOT event-driven off this diff: the group
+                // runtime reconciles its trees against the persisted roster
+                // (survives restarts and absorbs from any drain path).
                 if let Some(p) = persistence {
                     if let Err(error) = p.put_org_roster(&self.org_pubkey, bytes) {
                         eprintln!("org roster persist failed: {error}");
@@ -715,16 +711,6 @@ impl OrgRuntime {
         self.persist_record(&record)
     }
 
-    /// Peer-ids removed by roster updates since the last call — the caller
-    /// (lib.rs) feeds these to the group runtime for the crypto kick
-    /// (ADR 0008); draining keeps the kick one-shot per removal.
-    pub fn take_pending_removals(&mut self, org_pubkey: &str) -> Vec<String> {
-        self.orgs
-            .get_mut(org_pubkey)
-            .map(|s| std::mem::take(&mut s.pending_removals))
-            .unwrap_or_default()
-    }
-
     fn drain_inbound(&mut self) {
         let inbound =
             drain_messages_where(|message| message.channel.starts_with(ORG_CONTROL_PREFIX));
@@ -799,7 +785,6 @@ impl OrgRuntime {
             group_offers: Vec::new(),
             dm_links: record.dm_links,
             seen_offer_ids: std::collections::HashSet::new(),
-            pending_removals: Vec::new(),
             #[cfg(test)]
             roster_publishes: 0,
         }

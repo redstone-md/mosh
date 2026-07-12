@@ -959,11 +959,21 @@ fn org_join(
 }
 
 #[tauri::command]
-fn org_leave(state: tauri::State<'_, OrgState>, org_pubkey: String) -> Result<(), String> {
+fn org_leave(
+    state: tauri::State<'_, OrgState>,
+    groups: tauri::State<'_, PrivateGroupState>,
+    org_pubkey: String,
+) -> Result<(), String> {
     state.with_runtime(|runtime| {
         runtime
             .leave_org(&org_pubkey)
             .map_err(|error| error.to_string())
+    })?;
+    // Without a roster the bound groups could never authorize another
+    // commit — close them instead of leaving frozen sessions around.
+    groups.with_runtime(|runtime| {
+        runtime.close_org_groups(&org_pubkey);
+        Ok(())
     })
 }
 
@@ -972,28 +982,11 @@ fn org_list(state: tauri::State<'_, OrgState>) -> Result<Vec<OrgSnapshot>, Strin
     state.with_runtime(|runtime| Ok(runtime.list()))
 }
 
-/// Poll one org AND run the revocation pipeline: removals reported by the
-/// roster feed the group runtime's crypto kick (ADR 0008). Lock order is
-/// strictly sequential (org released before group) — never nested.
+/// Revocation needs no wiring here: the group runtime reconciles each
+/// org-bound group against the persisted roster on its own drain cadence.
 #[tauri::command]
-fn org_poll(
-    state: tauri::State<'_, OrgState>,
-    groups: tauri::State<'_, PrivateGroupState>,
-    org_pubkey: String,
-) -> Result<OrgSnapshot, String> {
-    let (snapshot, removed) = state.with_runtime(|runtime| {
-        let snapshot = runtime
-            .poll(&org_pubkey)
-            .map_err(|error| error.to_string())?;
-        Ok((snapshot, runtime.take_pending_removals(&org_pubkey)))
-    })?;
-    if !removed.is_empty() {
-        groups.with_runtime(|runtime| {
-            runtime.enforce_roster_removals(&org_pubkey, &removed);
-            Ok(())
-        })?;
-    }
-    Ok(snapshot)
+fn org_poll(state: tauri::State<'_, OrgState>, org_pubkey: String) -> Result<OrgSnapshot, String> {
+    state.with_runtime(|runtime| runtime.poll(&org_pubkey).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
@@ -1015,14 +1008,24 @@ fn org_send_dm_offer(
             })
             .map_err(|error| error.to_string())
     })?;
-    state.with_runtime(|runtime| {
+    let offered = state.with_runtime(|runtime| {
         runtime
             .send_dm_offer(&org_pubkey, &target_peer_id, &invite.invite_uri)
             .map_err(|error| error.to_string())?;
         runtime
             .link_dm(&org_pubkey, &target_peer_id, &invite.session_id)
             .map_err(|error| error.to_string())
-    })?;
+    });
+    if let Err(error) = offered {
+        // The offer never reached the mesh: drop the orphan local invite so
+        // it does not linger as a dead "waiting" session.
+        let _ = dms.with_runtime(|runtime| {
+            runtime
+                .close_session(&invite.session_id)
+                .map_err(|error| error.to_string())
+        });
+        return Err(error);
+    }
     Ok(invite)
 }
 

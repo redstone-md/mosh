@@ -230,16 +230,18 @@ fn roster_gossip_verifies_persists_and_tracks_removals() {
     let snap = runtime.poll(&org).unwrap();
     assert_eq!(snap.roster_version, Some(2));
 
-    // Removal surfaces exactly once via take_pending_removals.
+    // Removal shrinks the member list; the crypto kick is driven by the
+    // group runtime reconciling against this persisted roster.
     let v3 = signed_roster(3, &[(own_peer.as_str(), "alice", "admin")]);
     runtime.ingest_for_test(&org, &roster_wire(&v3));
-    assert_eq!(
-        runtime.take_pending_removals(&org),
-        vec![other_peer.clone()]
-    );
-    assert!(runtime.take_pending_removals(&org).is_empty());
     let snap = runtime.poll(&org).unwrap();
     assert_eq!(snap.members.len(), 1);
+    assert!(!snap.members.iter().any(|m| m.moss_peer_id == other_peer));
+    assert_eq!(
+        persistence.get_org_roster(&org).unwrap().unwrap(),
+        v3,
+        "reconciliation source of truth must be persisted"
+    );
 
     let _ = std::fs::remove_file(&path);
 }
