@@ -139,11 +139,22 @@ repo. The admin CLI keeps the org private key in its own storage.
 
 ### 7. Admin CLI (separate closed repo, out of scope here)
 
-`mosh-org keygen | add | remove | sign | bundle`. Consumes/produces the
-roster format above; joins the org mesh via the same moss FFI to publish
+`mosh-org keygen | pending | approve | remove | bundle`. Consumes/produces
+the roster format above; joins the org mesh via the same moss FFI to publish
 signed rosters. This repo's only contract with it is the roster JSON format
 and the bundle URI — documented in this spec, versioned by `version` field
 semantics.
+
+Nobody ever types a peer-id by hand. The flows are:
+
+- **Member joins**: pastes the org bundle URI once (same gesture as a DM
+  invite today). Their client publishes `OrgHello` automatically.
+- **Admin approves**: `mosh-org pending` lists join requests as
+  `<display_name>  <peer-id short hash>`; `mosh-org approve <name>` signs
+  roster v+1 with that member's peer-id filled in from the hello. The short
+  hash exists only for disambiguation when two hellos share a name.
+- **Admin removes**: `mosh-org remove <name>`.
+- Peer-ids appear in full only inside the roster document and logs.
 
 ## UI (minimal)
 
