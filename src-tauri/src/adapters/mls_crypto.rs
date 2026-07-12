@@ -310,6 +310,139 @@ impl MlsSessionCrypto {
         }
     }
 
+    fn credential_identity(credential: &Credential) -> Option<String> {
+        BasicCredential::try_from(credential.clone())
+            .ok()
+            .map(|basic| String::from_utf8_lossy(basic.identity()).into_owned())
+    }
+
+    /// Leaf credential identities. In org contexts the identity is the moss
+    /// peer-id (ADR 0004), making leaf -> member lookup direct.
+    pub fn member_identities(&self) -> Vec<String> {
+        let Some(group) = self.group.as_ref() else {
+            return Vec::new();
+        };
+        group
+            .members()
+            .filter_map(|member| Self::credential_identity(&member.credential))
+            .collect()
+    }
+
+    // Excludes the own leaf: org kick/replace operate on OTHER members by
+    // protocol (self-removal goes through leave_proposal_bytes /
+    // remove_self_commit). Guards against a client acting on a roster diff
+    // that names itself.
+    fn leaf_indices_matching(group: &MlsGroup, identity: &str) -> Vec<LeafNodeIndex> {
+        let own = group.own_leaf_index();
+        group
+            .members()
+            .filter(|member| {
+                member.index != own
+                    && Self::credential_identity(&member.credential).as_deref() == Some(identity)
+            })
+            .map(|member| member.index)
+            .collect()
+    }
+
+    /// Remove EVERY leaf whose credential identity matches, in one commit
+    /// (duplicates are legal: a rejoin can leave a stale leaf, ADR 0004).
+    /// Returns the commit for broadcast to remaining members.
+    pub fn remove_members_by_identity(
+        &mut self,
+        identity: &str,
+    ) -> Result<Vec<u8>, MlsCryptoError> {
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        let targets = Self::leaf_indices_matching(group, identity);
+        if targets.is_empty() {
+            return Err(MlsCryptoError::OpenMls(format!(
+                "no member with identity {identity}"
+            )));
+        }
+        let (commit, _welcome, _info) = group
+            .remove_members(&self.provider, &self.signer, &targets)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        // Serialize BEFORE merging: if to_bytes failed after the merge, the
+        // local epoch would already be advanced while the commit is never
+        // broadcast — a silent permanent fork.
+        let commit_bytes = commit
+            .to_bytes()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()));
+        if commit_bytes.is_err() {
+            let _ = group.clear_pending_commit(self.provider.storage());
+            return commit_bytes;
+        }
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        commit_bytes
+    }
+
+    /// Remove every leaf matching `identity` and add the replacement
+    /// KeyPackage in a single commit (spec §8 device replace; ADR 0004
+    /// add-time dedup). With no matching leaf this is a plain Add.
+    pub fn replace_member(
+        &mut self,
+        identity: &str,
+        key_package_bytes: &[u8],
+    ) -> Result<AddOutcome, MlsCryptoError> {
+        let key_package = self.decode_key_package(key_package_bytes)?;
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        // CommitBuilder carries the Remove+Add proposals INLINE (by value) in
+        // the commit, so receivers need no separate proposal messages —
+        // commit_to_pending_proposals would reference proposals they never saw.
+        let targets = Self::leaf_indices_matching(group, identity);
+        let bundle = group
+            .commit_builder()
+            .propose_removals(targets)
+            .propose_adds([key_package])
+            .load_psks(self.provider.storage())
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?
+            .build(
+                self.provider.rand(),
+                self.provider.crypto(),
+                &self.signer,
+                |_| true,
+            )
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?
+            .stage_commit(&self.provider)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        let serialized: Result<(Vec<u8>, Vec<u8>), MlsCryptoError> = (|| {
+            let commit_bytes = bundle
+                .commit()
+                .to_bytes()
+                .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+            let welcome_bytes = bundle
+                .to_welcome_msg()
+                .ok_or_else(|| {
+                    MlsCryptoError::OpenMls("commit with Add produced no welcome".to_string())
+                })?
+                .to_bytes()
+                .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+            Ok((commit_bytes, welcome_bytes))
+        })();
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        // On serialization failure drop the staged commit, or every later
+        // commit-producing call on this group fails on the stale pending state.
+        let (commit_bytes, welcome_bytes) = match serialized {
+            Ok(pair) => pair,
+            Err(error) => {
+                let _ = group.clear_pending_commit(self.provider.storage());
+                return Err(error);
+            }
+        };
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        Ok(AddOutcome {
+            commit_bytes,
+            welcome_bytes,
+            tree_bytes: group
+                .export_ratchet_tree()
+                .tls_serialize_detached()
+                .map_err(|error| MlsCryptoError::Codec(error.to_string()))?,
+        })
+    }
+
     pub fn member_fingerprints(&self) -> Vec<String> {
         let Some(group) = self.group.as_ref() else {
             return Vec::new();
@@ -458,5 +591,132 @@ mod tests {
         // Creator sends after restart, joiner receives.
         let c2 = alice2.encrypt(b"a2 after restart").unwrap();
         assert_eq!(bob2.decrypt(&c2).unwrap(), b"a2 after restart");
+    }
+
+    // Org groups use the moss peer-id as the credential identity (ADR 0004);
+    // these tests use short fake ids — identity is an opaque string here.
+    fn three_party() -> (MlsSessionCrypto, MlsSessionCrypto, MlsSessionCrypto) {
+        let mut admin = MlsSessionCrypto::new("peer-admin").unwrap();
+        admin.create_group().unwrap();
+        let mut bob = MlsSessionCrypto::new("peer-bob").unwrap();
+        let mut carol = MlsSessionCrypto::new("peer-carol").unwrap();
+        let bob_kp = bob.key_package_bytes().unwrap();
+        let outcome = admin.add_members(&[bob_kp.as_slice()]).unwrap();
+        bob.join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+        let carol_kp = carol.key_package_bytes().unwrap();
+        let outcome = admin.add_members(&[carol_kp.as_slice()]).unwrap();
+        bob.process_commit(&outcome.commit_bytes).unwrap();
+        carol
+            .join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+        (admin, bob, carol)
+    }
+
+    #[test]
+    fn member_identities_lists_credentials() {
+        let (admin, _bob, _carol) = three_party();
+        let mut ids = admin.member_identities();
+        ids.sort();
+        assert_eq!(ids, vec!["peer-admin", "peer-bob", "peer-carol"]);
+    }
+
+    #[test]
+    fn remove_by_identity_kicks_and_advances_epoch() {
+        let (mut admin, mut bob, mut carol) = three_party();
+        let commit = admin.remove_members_by_identity("peer-bob").unwrap();
+        carol.process_commit(&commit).unwrap();
+        assert_eq!(admin.member_count(), 2);
+        assert!(!admin.member_identities().contains(&"peer-bob".to_string()));
+
+        // Post-kick traffic: carol still reads, bob cannot.
+        let ct = admin.encrypt(b"after kick").unwrap();
+        assert_eq!(carol.decrypt(&ct).unwrap(), b"after kick");
+        assert!(bob.decrypt(&ct).is_err());
+    }
+
+    #[test]
+    fn remove_by_identity_errors_when_absent() {
+        let (mut admin, _bob, _carol) = three_party();
+        assert!(admin.remove_members_by_identity("peer-nobody").is_err());
+    }
+
+    #[test]
+    fn remove_by_identity_removes_all_duplicate_leaves() {
+        // A rejoin can leave a stale leaf behind: two leaves, one identity.
+        let (mut admin, mut bob_v1, mut carol) = three_party();
+        let mut bob_v2 = MlsSessionCrypto::new("peer-bob").unwrap();
+        let kp = bob_v2.key_package_bytes().unwrap();
+        let outcome = admin.add_members(&[kp.as_slice()]).unwrap();
+        bob_v1.process_commit(&outcome.commit_bytes).unwrap();
+        carol.process_commit(&outcome.commit_bytes).unwrap();
+        bob_v2
+            .join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+        assert_eq!(admin.member_count(), 4);
+
+        let commit = admin.remove_members_by_identity("peer-bob").unwrap();
+        carol.process_commit(&commit).unwrap();
+        assert_eq!(admin.member_count(), 2);
+        assert!(!admin.member_identities().contains(&"peer-bob".to_string()));
+
+        let ct = admin.encrypt(b"both devices gone").unwrap();
+        assert_eq!(carol.decrypt(&ct).unwrap(), b"both devices gone");
+        assert!(bob_v1.decrypt(&ct).is_err());
+        assert!(bob_v2.decrypt(&ct).is_err());
+    }
+
+    #[test]
+    fn replace_member_without_match_degrades_to_plain_add() {
+        let (mut admin, mut bob, mut carol) = three_party();
+        let mut dave = MlsSessionCrypto::new("peer-dave").unwrap();
+        let kp = dave.key_package_bytes().unwrap();
+
+        let outcome = admin.replace_member("peer-dave", &kp).unwrap();
+        bob.process_commit(&outcome.commit_bytes).unwrap();
+        carol.process_commit(&outcome.commit_bytes).unwrap();
+        dave.join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+
+        assert_eq!(admin.member_count(), 4);
+        let ct = dave.encrypt(b"hello from dave").unwrap();
+        assert_eq!(admin.decrypt(&ct).unwrap(), b"hello from dave");
+    }
+
+    #[test]
+    fn remove_by_identity_never_targets_own_leaf() {
+        let (mut admin, _bob, _carol) = three_party();
+        // Own identity matches only the committer's own leaf -> treated as
+        // "no removable member", not a self-kick.
+        assert!(admin.remove_members_by_identity("peer-admin").is_err());
+    }
+
+    #[test]
+    fn replace_member_swaps_device_in_one_commit() {
+        let (mut admin, mut bob_old, mut carol) = three_party();
+        // Same identity, fresh device/keys — same string as the roster entry.
+        let mut bob_new = MlsSessionCrypto::new("peer-bob").unwrap();
+        let kp = bob_new.key_package_bytes().unwrap();
+
+        let outcome = admin.replace_member("peer-bob", &kp).unwrap();
+        carol.process_commit(&outcome.commit_bytes).unwrap();
+        bob_new
+            .join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+
+        // Still exactly one peer-bob leaf; group size unchanged.
+        assert_eq!(admin.member_count(), 3);
+        let bobs = admin
+            .member_identities()
+            .into_iter()
+            .filter(|id| id == "peer-bob")
+            .count();
+        assert_eq!(bobs, 1);
+
+        // New device sends, everyone reads; old device is dead.
+        let ct = bob_new.encrypt(b"new laptop").unwrap();
+        assert_eq!(admin.decrypt(&ct).unwrap(), b"new laptop");
+        let ct2 = admin.encrypt(b"welcome back").unwrap();
+        assert!(bob_old.decrypt(&ct2).is_err());
     }
 }

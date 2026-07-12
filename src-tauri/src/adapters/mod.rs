@@ -10,6 +10,8 @@ pub mod moss_ffi;
 pub mod moss_runtime;
 pub mod network_inventory;
 pub mod openmls_crypto;
+pub mod org_envelope;
+pub mod org_roster;
 pub mod outbound_delivery;
 pub mod persistence;
 pub mod private_dm_runtime;
