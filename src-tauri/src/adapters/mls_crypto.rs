@@ -303,6 +303,22 @@ impl MlsSessionCrypto {
         self.group.is_some()
     }
 
+    /// Current group epoch; `None` before the group exists.
+    pub fn epoch(&self) -> Option<u64> {
+        self.group.as_ref().map(|g| g.epoch().as_u64())
+    }
+
+    /// Wire-header epoch of a serialized commit — readable without processing
+    /// (the epoch sits in the header for public and private messages alike).
+    pub fn commit_epoch(commit_bytes: &[u8]) -> Result<u64, MlsCryptoError> {
+        let message = MlsMessageIn::tls_deserialize(&mut &commit_bytes[..])
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+        let protocol_message = message
+            .try_into_protocol_message()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+        Ok(protocol_message.epoch().as_u64())
+    }
+
     pub fn member_count(&self) -> usize {
         match &self.group {
             Some(group) => group.members().count(),
@@ -689,6 +705,26 @@ mod tests {
         // Own identity matches only the committer's own leaf -> treated as
         // "no removable member", not a self-kick.
         assert!(admin.remove_members_by_identity("peer-admin").is_err());
+    }
+
+    #[test]
+    fn epoch_advances_and_commit_epoch_peeks() {
+        let (mut admin, _bob, _carol) = three_party();
+        let e0 = admin.epoch().unwrap();
+        let mut dave = MlsSessionCrypto::new("peer-dave").unwrap();
+        let kp = dave.key_package_bytes().unwrap();
+        let outcome = admin.add_members(&[kp.as_slice()]).unwrap();
+        // The commit was created AT e0 and advanced the group to e0+1.
+        assert_eq!(
+            MlsSessionCrypto::commit_epoch(&outcome.commit_bytes).unwrap(),
+            e0
+        );
+        assert_eq!(admin.epoch().unwrap(), e0 + 1);
+    }
+
+    #[test]
+    fn commit_epoch_rejects_garbage() {
+        assert!(MlsSessionCrypto::commit_epoch(b"not a commit").is_err());
     }
 
     #[test]
