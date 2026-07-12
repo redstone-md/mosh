@@ -3576,6 +3576,8 @@ version = "0.4.3"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
+ "ed25519-dalek",
+ "hex",
  "if-addrs",
  "keyring",
  "keyring-core",
