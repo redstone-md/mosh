@@ -132,6 +132,40 @@ pub fn verify(
     })
 }
 
+#[derive(Debug, Default, PartialEq)]
+pub struct RosterDiff {
+    pub added: Vec<RosterMember>,
+    pub removed: Vec<RosterMember>,
+}
+
+/// Membership delta keyed by moss_peer_id. Renames and role changes emit
+/// nothing: authority checks read the live roster and the UI re-reads the
+/// whole roster on any update (spec §1).
+pub fn diff(old: Option<&Roster>, new: &Roster) -> RosterDiff {
+    let old_ids: std::collections::HashSet<&str> = old
+        .map(|r| r.members.iter().map(|m| m.moss_peer_id.as_str()).collect())
+        .unwrap_or_default();
+    let new_ids: std::collections::HashSet<&str> =
+        new.members.iter().map(|m| m.moss_peer_id.as_str()).collect();
+    RosterDiff {
+        added: new
+            .members
+            .iter()
+            .filter(|m| !old_ids.contains(m.moss_peer_id.as_str()))
+            .cloned()
+            .collect(),
+        removed: old
+            .map(|r| {
+                r.members
+                    .iter()
+                    .filter(|m| !new_ids.contains(m.moss_peer_id.as_str()))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +292,53 @@ mod tests {
             verify(tampered.as_bytes(), &org_hex(), None),
             Err(RosterError::Signature)
         ));
+    }
+
+    fn roster_with(members: &[(&str, &str, &str)]) -> Roster {
+        Roster {
+            org_pubkey: org_hex(),
+            org_name: "acme".into(),
+            version: 1,
+            members: members
+                .iter()
+                .map(|(id, name, role)| RosterMember {
+                    moss_peer_id: id.repeat(32),
+                    name: (*name).into(),
+                    role: (*role).into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn diff_detects_add_remove_and_replace() {
+        let old = roster_with(&[("aa", "alice", "admin"), ("bb", "bob", "member")]);
+        // bob's device replaced (new peer-id, same name) + carol added
+        let new = roster_with(&[
+            ("aa", "alice", "admin"),
+            ("cc", "bob", "member"),
+            ("dd", "carol", "member"),
+        ]);
+        let d = diff(Some(&old), &new);
+        let added: Vec<_> = d.added.iter().map(|m| m.moss_peer_id.clone()).collect();
+        let removed: Vec<_> = d.removed.iter().map(|m| m.moss_peer_id.clone()).collect();
+        assert_eq!(added, vec!["cc".repeat(32), "dd".repeat(32)]);
+        assert_eq!(removed, vec!["bb".repeat(32)]);
+    }
+
+    #[test]
+    fn diff_from_none_adds_everyone() {
+        let new = roster_with(&[("aa", "alice", "admin")]);
+        let d = diff(None, &new);
+        assert_eq!(d.added.len(), 1);
+        assert!(d.removed.is_empty());
+    }
+
+    #[test]
+    fn diff_ignores_rename_and_role_change() {
+        let old = roster_with(&[("aa", "alice", "member")]);
+        let new = roster_with(&[("aa", "alice-2", "admin")]);
+        let d = diff(Some(&old), &new);
+        assert!(d.added.is_empty() && d.removed.is_empty());
     }
 }
