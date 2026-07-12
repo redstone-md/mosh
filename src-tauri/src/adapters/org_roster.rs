@@ -64,7 +64,9 @@ pub fn sign_roster(doc: &mut Value, key: &SigningKey) -> Result<Vec<u8>, RosterE
 
 fn decode_key32(hex64: &str) -> Result<[u8; 32], RosterError> {
     let bytes = hex::decode(hex64).map_err(|_| RosterError::Field("hex"))?;
-    bytes.try_into().map_err(|_| RosterError::Field("key length"))
+    bytes
+        .try_into()
+        .map_err(|_| RosterError::Field("key length"))
 }
 
 /// Verify a received roster document. `stored_version = None` means "no
@@ -145,8 +147,11 @@ pub fn diff(old: Option<&Roster>, new: &Roster) -> RosterDiff {
     let old_ids: std::collections::HashSet<&str> = old
         .map(|r| r.members.iter().map(|m| m.moss_peer_id.as_str()).collect())
         .unwrap_or_default();
-    let new_ids: std::collections::HashSet<&str> =
-        new.members.iter().map(|m| m.moss_peer_id.as_str()).collect();
+    let new_ids: std::collections::HashSet<&str> = new
+        .members
+        .iter()
+        .map(|m| m.moss_peer_id.as_str())
+        .collect();
     RosterDiff {
         added: new
             .members
@@ -191,10 +196,8 @@ mod tests {
     fn canonical_bytes_are_key_order_independent() {
         // Same document, keys written in different order, must canonicalize
         // to identical bytes (serde_json without preserve_order sorts keys).
-        let a: serde_json::Value =
-            serde_json::from_str(r#"{"b":1,"a":{"y":2,"x":3}}"#).unwrap();
-        let b: serde_json::Value =
-            serde_json::from_str(r#"{"a":{"x":3,"y":2},"b":1}"#).unwrap();
+        let a: serde_json::Value = serde_json::from_str(r#"{"b":1,"a":{"y":2,"x":3}}"#).unwrap();
+        let b: serde_json::Value = serde_json::from_str(r#"{"a":{"x":3,"y":2},"b":1}"#).unwrap();
         assert_eq!(canonical_bytes(&a).unwrap(), canonical_bytes(&b).unwrap());
     }
 
@@ -237,7 +240,9 @@ mod tests {
     #[test]
     fn verify_rejects_tampered_payload() {
         let bytes = signed_sample(3);
-        let tampered = String::from_utf8(bytes).unwrap().replace("alice", "mallory");
+        let tampered = String::from_utf8(bytes)
+            .unwrap()
+            .replace("alice", "mallory");
         assert!(matches!(
             verify(tampered.as_bytes(), &org_hex(), None),
             Err(RosterError::Signature)

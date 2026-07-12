@@ -363,6 +363,60 @@ impl MlsSessionCrypto {
             .map_err(|error| MlsCryptoError::Codec(error.to_string()))
     }
 
+    /// Remove every leaf matching `identity` and add the replacement
+    /// KeyPackage in a single commit (spec §8 device replace; ADR 0004
+    /// add-time dedup). With no matching leaf this is a plain Add.
+    pub fn replace_member(
+        &mut self,
+        identity: &str,
+        key_package_bytes: &[u8],
+    ) -> Result<AddOutcome, MlsCryptoError> {
+        let key_package = self.decode_key_package(key_package_bytes)?;
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        // CommitBuilder carries the Remove+Add proposals INLINE (by value) in
+        // the commit, so receivers need no separate proposal messages —
+        // commit_to_pending_proposals would reference proposals they never saw.
+        let targets = Self::leaf_indices_matching(group, identity);
+        let bundle = group
+            .commit_builder()
+            .propose_removals(targets)
+            .propose_adds([key_package])
+            .load_psks(self.provider.storage())
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?
+            .build(
+                self.provider.rand(),
+                self.provider.crypto(),
+                &self.signer,
+                |_| true,
+            )
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?
+            .stage_commit(&self.provider)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        let commit_bytes = bundle
+            .commit()
+            .to_bytes()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+        let welcome_bytes = bundle
+            .to_welcome_msg()
+            .ok_or_else(|| {
+                MlsCryptoError::OpenMls("commit with Add produced no welcome".to_string())
+            })?
+            .to_bytes()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+        let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        group
+            .merge_pending_commit(&self.provider)
+            .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        Ok(AddOutcome {
+            commit_bytes,
+            welcome_bytes,
+            tree_bytes: group
+                .export_ratchet_tree()
+                .tls_serialize_detached()
+                .map_err(|error| MlsCryptoError::Codec(error.to_string()))?,
+        })
+    }
+
     pub fn member_fingerprints(&self) -> Vec<String> {
         let Some(group) = self.group.as_ref() else {
             return Vec::new();
@@ -559,5 +613,34 @@ mod tests {
     fn remove_by_identity_errors_when_absent() {
         let (mut admin, _bob, _carol) = three_party();
         assert!(admin.remove_members_by_identity("peer-nobody").is_err());
+    }
+
+    #[test]
+    fn replace_member_swaps_device_in_one_commit() {
+        let (mut admin, mut bob_old, mut carol) = three_party();
+        // Same identity, fresh device/keys — same string as the roster entry.
+        let mut bob_new = MlsSessionCrypto::new("peer-bob").unwrap();
+        let kp = bob_new.key_package_bytes().unwrap();
+
+        let outcome = admin.replace_member("peer-bob", &kp).unwrap();
+        carol.process_commit(&outcome.commit_bytes).unwrap();
+        bob_new
+            .join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+
+        // Still exactly one peer-bob leaf; group size unchanged.
+        assert_eq!(admin.member_count(), 3);
+        let bobs = admin
+            .member_identities()
+            .into_iter()
+            .filter(|id| id == "peer-bob")
+            .count();
+        assert_eq!(bobs, 1);
+
+        // New device sends, everyone reads; old device is dead.
+        let ct = bob_new.encrypt(b"new laptop").unwrap();
+        assert_eq!(admin.decrypt(&ct).unwrap(), b"new laptop");
+        let ct2 = admin.encrypt(b"welcome back").unwrap();
+        assert!(bob_old.decrypt(&ct2).is_err());
     }
 }
