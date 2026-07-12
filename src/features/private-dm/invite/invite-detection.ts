@@ -5,7 +5,7 @@ import {
   parseMoshInvite,
 } from "./invite-uri";
 
-export type InviteDetectionKind = "dm" | "group" | "empty" | "unknown";
+export type InviteDetectionKind = "dm" | "group" | "org" | "empty" | "unknown";
 
 export interface InviteDetection {
   readonly kind: InviteDetectionKind;
@@ -13,7 +13,7 @@ export interface InviteDetection {
   readonly errorMessage?: string;
 }
 
-type InviteFamily = "dm" | "group" | "unknown";
+type InviteFamily = "dm" | "group" | "org" | "unknown";
 
 export function detectInvite(value: string): InviteDetection {
   const trimmed = value.trim();
@@ -31,13 +31,40 @@ export function detectInvite(value: string): InviteDetection {
     return { kind: "group" };
   }
 
+  if (isOrgBundle(trimmed)) {
+    return { kind: "org" };
+  }
+
   const family = detectInviteFamily(trimmed);
+  if (family === "org") {
+    return {
+      kind: "unknown",
+      errorMessage:
+        "Organization bundle needs mesh=…, name=… and #org=<64 hex chars>.",
+    };
+  }
   const errorCode = family === "group" ? groupError.code : dmError.code;
   return {
     kind: "unknown",
     errorCode,
     errorMessage: inviteErrorMessage(errorCode, family),
   };
+}
+
+// Matches the Rust-side `ParsedOrgBundle::parse` contract.
+function isOrgBundle(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "mosh:" || url.hostname !== "org") {
+      return false;
+    }
+    const mesh = url.searchParams.get("mesh");
+    const name = url.searchParams.get("name");
+    const fragment = url.hash.startsWith("#org=") ? url.hash.slice(5) : "";
+    return Boolean(mesh && name) && /^[0-9a-fA-F]{64}$/.test(fragment);
+  } catch {
+    return false;
+  }
 }
 
 function parseError(parse: () => void): InviteParseError | null {
@@ -63,6 +90,9 @@ function detectInviteFamily(value: string): InviteFamily {
     }
     if (url.hostname === "group") {
       return "group";
+    }
+    if (url.hostname === "org") {
+      return "org";
     }
     return "unknown";
   } catch {

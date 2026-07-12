@@ -13,14 +13,29 @@ import type {
   ChannelSnapshot,
   DmOffer,
   GroupSnapshot,
+  OrgMemberView,
+  OrgSnapshot,
   SessionSnapshot,
 } from "./native/native-messaging-gateway";
-import { groupText, shellText, stateLabels } from "./private-dm.content";
+import { OrgSection } from "./org/OrgSection";
+import { groupText, orgText, shellText, stateLabels } from "./private-dm.content";
 
 export type PendingDmOffer = DmOffer & {
   readonly kind: "channel" | "group";
   readonly host: string;
 };
+
+export interface OrgRailApi {
+  readonly orgs: readonly OrgSnapshot[];
+  readonly busy: boolean;
+  readonly revokedDmBadges: ReadonlyMap<string, string>;
+  readonly onMember: (org: OrgSnapshot, member: OrgMemberView) => void;
+  readonly onAcceptDmOffer: (orgPubkey: string, offerId: string) => void;
+  readonly onDismissDmOffer: (orgPubkey: string, offerId: string) => void;
+  readonly onAcceptGroupOffer: (orgPubkey: string, offerId: string) => void;
+  readonly onDismissGroupOffer: (orgPubkey: string, offerId: string) => void;
+  readonly onLeave: (org: OrgSnapshot) => void;
+}
 
 export function SessionRail({
   expanded,
@@ -28,6 +43,7 @@ export function SessionRail({
   channels,
   groups,
   offers,
+  org,
   active,
   unread,
   sessionLabel,
@@ -42,6 +58,7 @@ export function SessionRail({
   channels: readonly ChannelSnapshot[];
   groups: readonly GroupSnapshot[];
   offers: readonly PendingDmOffer[];
+  org: OrgRailApi;
   active: ChatTarget | null;
   unread: ReadonlyMap<string, number>;
   sessionLabel: (session: SessionSnapshot) => string;
@@ -86,6 +103,7 @@ export function SessionRail({
               key={`dm-${session.session_id}`}
               session={session}
               label={sessionLabel(session)}
+              revokedOrgName={org.revokedDmBadges.get(session.session_id)}
               active={active?.type === "dm" && active.id === session.session_id}
               unreadCount={unread.get(`dm:${session.session_id}`) ?? 0}
               onClick={() => onSelect({ type: "dm", id: session.session_id })}
@@ -112,6 +130,21 @@ export function SessionRail({
               unreadCount={unread.get(`channel:${channel.name}`) ?? 0}
               onClick={() => onSelect({ type: "channel", name: channel.name })}
             />
+          ))}
+          {org.orgs.map((snapshot) => (
+            <div key={`org-${snapshot.org_pubkey}`}>
+              <div className="rail-divider" />
+              <OrgSection
+                org={snapshot}
+                busy={org.busy}
+                onMember={org.onMember}
+                onAcceptDmOffer={org.onAcceptDmOffer}
+                onDismissDmOffer={org.onDismissDmOffer}
+                onAcceptGroupOffer={org.onAcceptGroupOffer}
+                onDismissGroupOffer={org.onDismissGroupOffer}
+                onLeave={org.onLeave}
+              />
+            </div>
           ))}
         </div>
       </aside>
@@ -173,12 +206,14 @@ function UnreadBadge({ count }: { count: number }) {
 function SessionRailItem({
   session,
   label,
+  revokedOrgName,
   active,
   unreadCount,
   onClick,
 }: {
   session: SessionSnapshot;
   label: string;
+  revokedOrgName?: string;
   active: boolean;
   unreadCount: number;
   onClick: () => void;
@@ -194,7 +229,11 @@ function SessionRailItem({
       <Avatar name={label} />
       <span className="rail-text">
         <strong>{label}</strong>
-        <small>{stateLabels[session.state] ?? session.state}</small>
+        <small>
+          {revokedOrgName
+            ? `${orgText.revokedBadge} ${revokedOrgName}`
+            : stateLabels[session.state] ?? session.state}
+        </small>
       </span>
       <span className={`rail-dot rail-dot-${session.state}`} />
       <UnreadBadge count={unreadCount} />

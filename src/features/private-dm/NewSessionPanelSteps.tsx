@@ -92,30 +92,35 @@ export function OnboardJoinStep(props: {
   onBack: () => void;
   onAccept: (uri: string) => void;
   onJoinGroup: (uri: string) => void;
+  onJoinOrg: (uri: string) => void;
 }) {
   const detection = detectInvite(props.value);
   const kind = detection.kind;
   const trimmedValue = props.value.trim();
-  const ready = (kind === "dm" || kind === "group") && !props.busy;
-  const detectClass =
-    kind === "dm" || kind === "group"
-      ? "detect-badge detect-badge-ok"
-      : kind === "unknown"
-        ? "detect-badge detect-badge-bad"
-        : "detect-badge";
+  const detected = kind === "dm" || kind === "group" || kind === "org";
+  const ready = detected && !props.busy;
+  const detectClass = detected
+    ? "detect-badge detect-badge-ok"
+    : kind === "unknown"
+      ? "detect-badge detect-badge-bad"
+      : "detect-badge";
   const detectLabel =
     kind === "dm"
       ? onboardText.joinDetectChat
       : kind === "group"
         ? onboardText.joinDetectGroup
-        : kind === "unknown"
-          ? detection.errorMessage ?? onboardText.joinDetectBad
-          : onboardText.joinDetectNone;
+        : kind === "org"
+          ? onboardText.joinDetectOrg
+          : kind === "unknown"
+            ? detection.errorMessage ?? onboardText.joinDetectBad
+            : onboardText.joinDetectNone;
   const connect = () => {
     if (kind === "dm") {
       props.onAccept(trimmedValue);
     } else if (kind === "group") {
       props.onJoinGroup(trimmedValue);
+    } else if (kind === "org") {
+      props.onJoinOrg(trimmedValue);
     }
   };
   return (
@@ -131,7 +136,7 @@ export function OnboardJoinStep(props: {
         onChange={(event) => props.onChange(event.target.value)}
       />
       <div className={detectClass} role="status" aria-live="polite">
-        {kind === "dm" || kind === "group" ? <IconCheck size={13} /> : null}
+        {detected ? <IconCheck size={13} /> : null}
         <span>{detectLabel}</span>
       </div>
       <button

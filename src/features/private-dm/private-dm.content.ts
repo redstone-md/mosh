@@ -122,6 +122,7 @@ export const onboardText = {
   joinPlaceholder: "mosh://invite?…  or  mosh://group?…",
   joinDetectChat: "Private chat invite detected",
   joinDetectGroup: "Group invite detected",
+  joinDetectOrg: "Organization bundle detected",
   joinDetectNone: "Waiting for a mosh:// link…",
   joinDetectBad: "That does not look like a mosh:// invite",
   joinConnect: "Connect",
@@ -146,4 +147,19 @@ export const channelText = {
   noticeBody: "Not end-to-end encrypted. Anyone who joins this channel can read messages. Your device fingerprint is shown next to each message you publish.",
   emptyTitle: "No messages in this channel yet.",
   emptyBody: "Say hi. Anyone subscribed to this channel will see your message.",
+} as const;
+
+export const orgText = {
+  leave: "Leave organization",
+  pendingHint: "Your confirmation code — give it to your admin",
+  dmOffer: "wants to chat",
+  groupOffer: "Org group",
+  groupOfferFrom: "invited by",
+  memberDmHint: "Message",
+  youBadge: "you",
+  adminBadge: "Org admin",
+  revokedBadge: "no longer in",
+  addMissing: "Add to group",
+  rejoinNeededTitle: "Group out of sync",
+  rejoinNeededBody: "This group missed membership changes that could not be replayed. Ask an admin to re-invite you from the roster.",
 } as const;

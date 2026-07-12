@@ -32,6 +32,7 @@ import { useChatCloseFlow } from "./use-chat-close-flow";
 import { useChatOrchestration } from "./use-chat-orchestration";
 import { useConversationRailState } from "./use-conversation-rail-state";
 import { useDmOffers } from "./use-dm-offers";
+import { useOrgs } from "./org/use-orgs";
 import { usePrivateDmSetup } from "./use-private-dm-setup";
 import { usePrivateDmSnapshots } from "./use-private-dm-snapshots";
 import { useRuntimePersistenceStatus } from "./use-runtime-persistence-status";
@@ -161,6 +162,14 @@ export function PrivateDmScreen({
     setActive,
     setShowSetup,
   });
+  const orgs = useOrgs({
+    gateway,
+    requestBase: setup.requestBase,
+    refresh,
+    run,
+    setActive,
+    setShowSetup,
+  });
   const closeFlow = useChatCloseFlow({
     active,
     sessions,
@@ -259,6 +268,17 @@ export function PrivateDmScreen({
           channels={channels}
           groups={groups}
           offers={dmOffers.pendingOffers}
+          org={{
+            orgs: orgs.orgs,
+            busy: offerBusy || setupBusy,
+            revokedDmBadges: orgs.revokedDmBadges,
+            onMember: orgs.openMemberDm,
+            onAcceptDmOffer: orgs.acceptDmOffer,
+            onDismissDmOffer: orgs.dismissDmOffer,
+            onAcceptGroupOffer: orgs.acceptGroupOffer,
+            onDismissGroupOffer: orgs.dismissGroupOffer,
+            onLeave: (org) => orgs.leaveOrg(org.org_pubkey),
+          }}
           active={active}
           unread={unread}
           sessionLabel={peerLabel}
@@ -305,6 +325,7 @@ export function PrivateDmScreen({
               onJoinChannel={setup.joinChannel}
               onCreateGroup={setup.createGroup}
               onJoinGroup={setup.joinGroup}
+              onJoinOrg={orgs.joinOrg}
               onCopyInvite={setup.copyInvite}
               onCopyGroupInvite={setup.copyGroupInvite}
             />
