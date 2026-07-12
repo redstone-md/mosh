@@ -459,6 +459,16 @@ impl MlsSessionCrypto {
         })
     }
 
+    /// Credential identity inside a serialized KeyPackage. The admission
+    /// rule (ADR 0004) compares it against the envelope's verified peer-id
+    /// before the admin admits the leaf.
+    pub fn key_package_identity(&self, key_package_bytes: &[u8]) -> Result<String, MlsCryptoError> {
+        let key_package = self.decode_key_package(key_package_bytes)?;
+        Self::credential_identity(key_package.leaf_node().credential()).ok_or_else(|| {
+            MlsCryptoError::OpenMls("key package credential is not basic".to_string())
+        })
+    }
+
     pub fn member_fingerprints(&self) -> Vec<String> {
         let Some(group) = self.group.as_ref() else {
             return Vec::new();

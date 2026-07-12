@@ -74,6 +74,8 @@ const MOSS_IDENTITY_KEY: &str = "node-identity-v1";
 const ORG_ROSTERS: TableDefinition<&str, &[u8]> = TableDefinition::new("org_rosters");
 // Key: "<group_id>/<epoch:020>" — zero-padded so lexicographic order == numeric.
 const GROUP_COMMIT_LOG: TableDefinition<&str, &[u8]> = TableDefinition::new("group_commit_log");
+// Key: org pubkey hex -> serialized PersistedOrgRecord (bundle + node config).
+const ORG_RECORDS: TableDefinition<&str, &[u8]> = TableDefinition::new("org_records");
 
 pub struct Persistence {
     db: Database,
@@ -143,6 +145,8 @@ impl Persistence {
             wtx.open_table(ORG_ROSTERS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(GROUP_COMMIT_LOG)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(ORG_RECORDS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         wtx.commit()
@@ -596,6 +600,60 @@ impl Persistence {
         Ok(out)
     }
 
+    pub fn put_org_record(&self, org_pubkey: &str, record: &[u8]) -> Result<(), PersistenceError> {
+        self.put(ORG_RECORDS, org_pubkey, record)
+    }
+
+    pub fn get_org_record(&self, org_pubkey: &str) -> Result<Option<Vec<u8>>, PersistenceError> {
+        self.get(ORG_RECORDS, org_pubkey)
+    }
+
+    pub fn list_org_records(&self) -> Result<Vec<(String, Vec<u8>)>, PersistenceError> {
+        let rtx = self
+            .db
+            .begin_read()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let table = rtx
+            .open_table(ORG_RECORDS)
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        let mut out = Vec::new();
+        for entry in table
+            .iter()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?
+        {
+            let (key, value) = entry.map_err(|e| PersistenceError::Db(e.to_string()))?;
+            out.push((
+                key.value().to_string(),
+                decrypt_blob(&self.dek, value.value())?,
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Leaving an org drops both its record and its cached roster atomically.
+    pub fn delete_org(&self, org_pubkey: &str) -> Result<(), PersistenceError> {
+        let wtx = self
+            .db
+            .begin_write()
+            .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        {
+            let mut records = wtx
+                .open_table(ORG_RECORDS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            records
+                .remove(org_pubkey)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            let mut rosters = wtx
+                .open_table(ORG_ROSTERS)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            rosters
+                .remove(org_pubkey)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+        }
+        wtx.commit()
+            .map_err(|e| PersistenceError::Db(e.to_string()))
+    }
+
     fn commit_log_key(group_id: &str, epoch: u64) -> String {
         format!("{group_id}/{epoch:020}")
     }
@@ -711,6 +769,8 @@ impl Persistence {
             wtx.open_table(ORG_ROSTERS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
             wtx.open_table(GROUP_COMMIT_LOG)
+                .map_err(|e| PersistenceError::Db(e.to_string()))?;
+            wtx.open_table(ORG_RECORDS)
                 .map_err(|e| PersistenceError::Db(e.to_string()))?;
         }
         wtx.commit()
