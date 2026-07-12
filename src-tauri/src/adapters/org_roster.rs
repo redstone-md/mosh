@@ -62,6 +62,76 @@ pub fn sign_roster(doc: &mut Value, key: &SigningKey) -> Result<Vec<u8>, RosterE
     canonical_bytes(doc)
 }
 
+fn decode_key32(hex64: &str) -> Result<[u8; 32], RosterError> {
+    let bytes = hex::decode(hex64).map_err(|_| RosterError::Field("hex"))?;
+    bytes.try_into().map_err(|_| RosterError::Field("key length"))
+}
+
+/// Verify a received roster document. `stored_version = None` means "no
+/// roster stored yet for this org" (first receipt). Unknown fields are
+/// covered by the signature (canonical bytes of the whole document sans
+/// `sig`) and otherwise ignored.
+pub fn verify(
+    bytes: &[u8],
+    expected_org_pubkey: &str,
+    stored_version: Option<u64>,
+) -> Result<Roster, RosterError> {
+    let mut doc: Value =
+        serde_json::from_slice(bytes).map_err(|e| RosterError::Json(e.to_string()))?;
+    let obj = doc.as_object_mut().ok_or(RosterError::Field("document"))?;
+
+    let sig_hex = match obj.remove("sig") {
+        Some(Value::String(s)) => s,
+        _ => return Err(RosterError::Field("sig")),
+    };
+    let org_pubkey = obj
+        .get("org_pubkey")
+        .and_then(Value::as_str)
+        .ok_or(RosterError::Field("org_pubkey"))?
+        .to_string();
+    if org_pubkey != expected_org_pubkey {
+        return Err(RosterError::WrongOrg);
+    }
+    let version = obj
+        .get("version")
+        .and_then(Value::as_u64)
+        .ok_or(RosterError::Field("version"))?;
+    if let Some(stored) = stored_version {
+        if version <= stored {
+            return Err(RosterError::Rollback {
+                stored,
+                received: version,
+            });
+        }
+    }
+
+    let key = VerifyingKey::from_bytes(&decode_key32(&org_pubkey)?)
+        .map_err(|_| RosterError::Field("org_pubkey"))?;
+    let sig_bytes = hex::decode(&sig_hex).map_err(|_| RosterError::Field("sig"))?;
+    let sig = Signature::from_slice(&sig_bytes).map_err(|_| RosterError::Field("sig"))?;
+    key.verify(&canonical_bytes(&Value::Object(obj.clone()))?, &sig)
+        .map_err(|_| RosterError::Signature)?;
+
+    let org_name = obj
+        .get("org_name")
+        .and_then(Value::as_str)
+        .ok_or(RosterError::Field("org_name"))?
+        .to_string();
+    let members: Vec<RosterMember> = serde_json::from_value(
+        obj.get("members")
+            .cloned()
+            .ok_or(RosterError::Field("members"))?,
+    )
+    .map_err(|e| RosterError::Json(e.to_string()))?;
+
+    Ok(Roster {
+        org_pubkey,
+        org_name,
+        version,
+        members,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +182,81 @@ mod tests {
         let bytes = sign_roster(&mut doc, &test_key()).unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert!(parsed.get("sig").and_then(|v| v.as_str()).is_some());
+    }
+
+    fn signed_sample(version: u64) -> Vec<u8> {
+        sign_roster(&mut sample_doc(version), &test_key()).unwrap()
+    }
+
+    fn org_hex() -> String {
+        hex::encode(test_key().verifying_key().to_bytes())
+    }
+
+    #[test]
+    fn verify_accepts_valid_roster() {
+        let roster = verify(&signed_sample(3), &org_hex(), Some(2)).unwrap();
+        assert_eq!(roster.version, 3);
+        assert_eq!(roster.members.len(), 2);
+        assert_eq!(roster.members[0].role, "admin");
+    }
+
+    #[test]
+    fn verify_rejects_tampered_payload() {
+        let bytes = signed_sample(3);
+        let tampered = String::from_utf8(bytes).unwrap().replace("alice", "mallory");
+        assert!(matches!(
+            verify(tampered.as_bytes(), &org_hex(), None),
+            Err(RosterError::Signature)
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_rollback_and_replay() {
+        // Strictly greater: same version is a replay, lower is a rollback.
+        assert!(matches!(
+            verify(&signed_sample(3), &org_hex(), Some(3)),
+            Err(RosterError::Rollback {
+                stored: 3,
+                received: 3
+            })
+        ));
+        assert!(matches!(
+            verify(&signed_sample(2), &org_hex(), Some(3)),
+            Err(RosterError::Rollback { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_wrong_org() {
+        let other = hex::encode(
+            SigningKey::from_bytes(&[9u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        assert!(matches!(
+            verify(&signed_sample(1), &other, None),
+            Err(RosterError::WrongOrg)
+        ));
+    }
+
+    #[test]
+    fn verify_covers_unknown_fields_and_ignores_them() {
+        // Forward-compat: unknown field is signed (tamper breaks sig) but
+        // semantically ignored (verify succeeds, Roster has no trace of it).
+        let mut doc = sample_doc(5);
+        doc.as_object_mut().unwrap().insert(
+            "successor_org_pubkey".into(),
+            serde_json::json!("00".repeat(32)),
+        );
+        let bytes = sign_roster(&mut doc, &test_key()).unwrap();
+        assert!(verify(&bytes, &org_hex(), None).is_ok());
+
+        let tampered = String::from_utf8(bytes)
+            .unwrap()
+            .replace(&"00".repeat(32), &"11".repeat(32));
+        assert!(matches!(
+            verify(tampered.as_bytes(), &org_hex(), None),
+            Err(RosterError::Signature)
+        ));
     }
 }
