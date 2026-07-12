@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 const DOMAIN: &[u8] = b"mosh-org-v1";
@@ -44,10 +44,11 @@ fn signing_input(ctx: &OrgContext, payload: &[u8]) -> Vec<u8> {
         payload,
     ];
     let mut out =
-        Vec::with_capacity(DOMAIN.len() + parts.iter().map(|p| 4 + p.len()).sum::<usize>());
+        Vec::with_capacity(DOMAIN.len() + parts.iter().map(|p| 8 + p.len()).sum::<usize>());
     out.extend_from_slice(DOMAIN);
     for part in parts {
-        out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+        // u64 keeps the length prefix injective even for absurd field sizes.
+        out.extend_from_slice(&(part.len() as u64).to_le_bytes());
         out.extend_from_slice(part);
     }
     out
@@ -69,7 +70,10 @@ pub fn verify(env: &OrgSigned, ctx: &OrgContext) -> Result<(), EnvelopeError> {
         .ok_or(EnvelopeError::BadPeerId)?;
     let key = VerifyingKey::from_bytes(&key_bytes).map_err(|_| EnvelopeError::BadPeerId)?;
     let sig = Signature::from_slice(&env.sig).map_err(|_| EnvelopeError::BadSignature)?;
-    key.verify(&signing_input(ctx, &env.payload), &sig)
+    // verify_strict rejects small-order/non-canonical keys and signatures.
+    // The peer-id IS the identity here: a weak key registered as a peer-id
+    // would otherwise let anyone forge envelopes in that member's name.
+    key.verify_strict(&signing_input(ctx, &env.payload), &sig)
         .map_err(|_| EnvelopeError::BadSignature)
 }
 

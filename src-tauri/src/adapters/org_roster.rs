@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -42,9 +42,12 @@ impl std::fmt::Display for RosterError {
 
 impl std::error::Error for RosterError {}
 
-/// Canonical roster bytes: compact JSON with object keys sorted. Relies on
-/// serde_json WITHOUT the `preserve_order` feature (its Map is a BTreeMap,
-/// so keys iterate sorted). Guarded by tests; enabling preserve_order
+/// Canonical roster bytes. The contract (shared with the admin CLI) is
+/// deliberately NOT RFC 8785 JCS — it is exactly "serde_json compact output
+/// with object keys byte-sorted": relies on serde_json WITHOUT the
+/// `preserve_order` feature (its Map is a BTreeMap), and rosters must only
+/// contain integers (no floats — serde_json and JCS re-serialize numbers
+/// differently). Guarded by the frozen-vector test; enabling preserve_order
 /// anywhere in the workspace breaks the roster wire format.
 pub fn canonical_bytes(doc: &Value) -> Result<Vec<u8>, RosterError> {
     serde_json::to_vec(doc).map_err(|e| RosterError::Json(e.to_string()))
@@ -111,7 +114,7 @@ pub fn verify(
         .map_err(|_| RosterError::Field("org_pubkey"))?;
     let sig_bytes = hex::decode(&sig_hex).map_err(|_| RosterError::Field("sig"))?;
     let sig = Signature::from_slice(&sig_bytes).map_err(|_| RosterError::Field("sig"))?;
-    key.verify(&canonical_bytes(&Value::Object(obj.clone()))?, &sig)
+    key.verify_strict(&canonical_bytes(&Value::Object(obj.clone()))?, &sig)
         .map_err(|_| RosterError::Signature)?;
 
     let org_name = obj
@@ -125,6 +128,11 @@ pub fn verify(
             .ok_or(RosterError::Field("members"))?,
     )
     .map_err(|e| RosterError::Json(e.to_string()))?;
+    // Duplicate peer-ids would fan out duplicate member_added events.
+    let mut seen = std::collections::HashSet::new();
+    if !members.iter().all(|m| seen.insert(m.moss_peer_id.as_str())) {
+        return Err(RosterError::Field("members: duplicate moss_peer_id"));
+    }
 
     Ok(Roster {
         org_pubkey,
@@ -296,6 +304,20 @@ mod tests {
         assert!(matches!(
             verify(tampered.as_bytes(), &org_hex(), None),
             Err(RosterError::Signature)
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_duplicate_peer_ids() {
+        let mut doc = sample_doc(1);
+        let dup = serde_json::json!(
+            { "moss_peer_id": "aa".repeat(32), "name": "alice-2", "role": "member" }
+        );
+        doc["members"].as_array_mut().unwrap().push(dup);
+        let bytes = sign_roster(&mut doc, &test_key()).unwrap();
+        assert!(matches!(
+            verify(&bytes, &org_hex(), None),
+            Err(RosterError::Field(_))
         ));
     }
 
