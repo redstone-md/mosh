@@ -160,6 +160,8 @@ export const orgText = {
   adminBadge: "Org admin",
   revokedBadge: "no longer in",
   addMissing: "Add to group",
+  newGroup: "New org group",
+  newGroupPlaceholder: "new group name",
   rejoinNeededTitle: "Group out of sync",
   rejoinNeededBody: "This group missed membership changes that could not be replayed. Ask an admin to re-invite you from the roster.",
 } as const;

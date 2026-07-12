@@ -34,6 +34,7 @@ export interface OrgRailApi {
   readonly onDismissDmOffer: (orgPubkey: string, offerId: string) => void;
   readonly onAcceptGroupOffer: (orgPubkey: string, offerId: string) => void;
   readonly onDismissGroupOffer: (orgPubkey: string, offerId: string) => void;
+  readonly onCreateGroup: (org: OrgSnapshot, label: string) => void;
   readonly onLeave: (org: OrgSnapshot) => void;
 }
 
@@ -142,6 +143,7 @@ export function SessionRail({
                 onDismissDmOffer={org.onDismissDmOffer}
                 onAcceptGroupOffer={org.onAcceptGroupOffer}
                 onDismissGroupOffer={org.onDismissGroupOffer}
+                onCreateGroup={org.onCreateGroup}
                 onLeave={org.onLeave}
               />
             </div>

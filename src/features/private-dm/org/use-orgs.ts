@@ -146,6 +146,25 @@ export function useOrgs({
       await refreshOrgs();
     });
 
+  // Create an org-bound group and offer it to every other roster member
+  // (spec §5: a default #general is just the first ad-hoc group).
+  const createOrgGroup = (org: OrgSnapshot, label: string) =>
+    run("setup", async () => {
+      const created = await gateway.orgCreateGroup({
+        org_pubkey: org.org_pubkey,
+        label: label.trim() || null,
+        member_peer_ids: org.members
+          .filter((member) => !member.is_self)
+          .map((member) => member.moss_peer_id),
+        display_name: requestBase.display_name,
+        listen_port: requestBase.listen_port,
+        static_peer: requestBase.static_peer,
+      });
+      setActive({ type: "group", id: created.group_id });
+      setShowSetup(false);
+      await refresh(true);
+    });
+
   const inviteMembersToGroup = (
     orgPubkey: string,
     groupId: string,
@@ -169,6 +188,7 @@ export function useOrgs({
     dismissDmOffer,
     acceptGroupOffer,
     dismissGroupOffer,
+    createOrgGroup,
     inviteMembersToGroup,
     revokedDmBadges,
   };
@@ -192,4 +212,16 @@ export function computeRevokedDmBadges(
     }
   }
   return badges;
+}
+
+// Roster members (other than self) that hold no leaf in the group — the
+// admin's "+N not in group" one-click add (spec §5).
+export function computeMissingRosterMembers(
+  org: OrgSnapshot,
+  groupMemberPeerIds: readonly string[],
+): string[] {
+  return org.members
+    .filter((member) => !member.is_self)
+    .filter((member) => !groupMemberPeerIds.includes(member.moss_peer_id))
+    .map((member) => member.moss_peer_id);
 }

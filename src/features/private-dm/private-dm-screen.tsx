@@ -32,7 +32,7 @@ import { useChatCloseFlow } from "./use-chat-close-flow";
 import { useChatOrchestration } from "./use-chat-orchestration";
 import { useConversationRailState } from "./use-conversation-rail-state";
 import { useDmOffers } from "./use-dm-offers";
-import { useOrgs } from "./org/use-orgs";
+import { computeMissingRosterMembers, useOrgs } from "./org/use-orgs";
 import { usePrivateDmSetup } from "./use-private-dm-setup";
 import { usePrivateDmSnapshots } from "./use-private-dm-snapshots";
 import { useRuntimePersistenceStatus } from "./use-runtime-persistence-status";
@@ -215,6 +215,32 @@ export function PrivateDmScreen({
   });
   const activeDmSession = activeSession;
 
+  // Spec §5 manual add: roster members not yet in the active org group,
+  // offered by an org-admin with one click.
+  const activeGroupOrg = activeGroup?.org_pubkey
+    ? orgs.orgs.find((org) => org.org_pubkey === activeGroup.org_pubkey)
+    : undefined;
+  const selfIsOrgAdmin = activeGroupOrg?.members.some(
+    (member) => member.is_self && member.role === "admin",
+  );
+  const missingRosterMembers =
+    activeGroup && activeGroupOrg && selfIsOrgAdmin
+      ? computeMissingRosterMembers(activeGroupOrg, activeGroup.member_peer_ids)
+      : [];
+  const orgAddPrompt =
+    activeGroup && activeGroupOrg && missingRosterMembers.length > 0
+      ? {
+          count: missingRosterMembers.length,
+          busy: offerBusy,
+          onAdd: () =>
+            void orgs.inviteMembersToGroup(
+              activeGroupOrg.org_pubkey,
+              activeGroup.group_id,
+              missingRosterMembers,
+            ),
+        }
+      : null;
+
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
       <header className="titlebar">
@@ -277,6 +303,7 @@ export function PrivateDmScreen({
             onDismissDmOffer: orgs.dismissDmOffer,
             onAcceptGroupOffer: orgs.acceptGroupOffer,
             onDismissGroupOffer: orgs.dismissGroupOffer,
+            onCreateGroup: orgs.createOrgGroup,
             onLeave: (org) => orgs.leaveOrg(org.org_pubkey),
           }}
           active={active}
@@ -370,6 +397,7 @@ export function PrivateDmScreen({
             <ActiveGroupChat
               group={activeGroup}
               ready={activeGroup.state === READY_STATE}
+              orgAddPrompt={orgAddPrompt}
               composer={composer}
               busy={chatBusy}
               attachments={attachmentApi}
