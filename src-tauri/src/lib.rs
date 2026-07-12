@@ -15,6 +15,7 @@ use adapters::openmls_crypto::{
     run_openmls_alice_bob_roundtrip, run_openmls_smoke_test, OpenMlsRoundTripStatus,
     OpenMlsSmokeStatus,
 };
+use adapters::org_runtime::{JoinOrgRequest, OrgRuntime, OrgSnapshot};
 use adapters::private_dm_runtime::{
     AcceptInviteRequest, AttachmentSendResult, CloseSessionResult, InviteCreated, PrivateDmRuntime,
     SendMessageResult, SessionListSnapshot, SessionSnapshot, StartSessionRequest,
@@ -233,6 +234,51 @@ impl PrivateGroupState {
         match &self.load_error {
             Some(error) => format!("private group runtime unavailable: {error}"),
             None => "private group runtime unavailable".to_string(),
+        }
+    }
+}
+
+struct OrgState {
+    runtime: Mutex<Option<OrgRuntime>>,
+    load_error: Option<String>,
+}
+
+impl OrgState {
+    fn ready(
+        moss: Arc<MossFfiRuntime>,
+        persistence: Option<Arc<adapters::persistence::Persistence>>,
+    ) -> Self {
+        let mut runtime = OrgRuntime::from_shared(moss, persistence);
+        runtime.rehydrate();
+        Self {
+            runtime: Mutex::new(Some(runtime)),
+            load_error: None,
+        }
+    }
+
+    fn missing(error: String) -> Self {
+        Self {
+            runtime: Mutex::new(None),
+            load_error: Some(error),
+        }
+    }
+
+    fn with_runtime<T>(
+        &self,
+        action: impl FnOnce(&mut OrgRuntime) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut guard = self
+            .runtime
+            .lock()
+            .map_err(|_| "org runtime lock poisoned".to_string())?;
+        let runtime = guard.as_mut().ok_or_else(|| self.unavailable_message())?;
+        action(runtime)
+    }
+
+    fn unavailable_message(&self) -> String {
+        match &self.load_error {
+            Some(error) => format!("org runtime unavailable: {error}"),
+            None => "org runtime unavailable".to_string(),
         }
     }
 }
@@ -905,6 +951,242 @@ fn private_group_close(
 }
 
 #[tauri::command]
+fn org_join(
+    state: tauri::State<'_, OrgState>,
+    request: JoinOrgRequest,
+) -> Result<OrgSnapshot, String> {
+    state.with_runtime(|runtime| runtime.join_org(request).map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn org_leave(
+    state: tauri::State<'_, OrgState>,
+    groups: tauri::State<'_, PrivateGroupState>,
+    org_pubkey: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .leave_org(&org_pubkey)
+            .map_err(|error| error.to_string())
+    })?;
+    // Without a roster the bound groups could never authorize another
+    // commit — close them instead of leaving frozen sessions around.
+    groups.with_runtime(|runtime| {
+        runtime.close_org_groups(&org_pubkey);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn org_list(state: tauri::State<'_, OrgState>) -> Result<Vec<OrgSnapshot>, String> {
+    state.with_runtime(|runtime| Ok(runtime.list()))
+}
+
+/// Revocation needs no wiring here: the group runtime reconciles each
+/// org-bound group against the persisted roster on its own drain cadence.
+#[tauri::command]
+fn org_poll(state: tauri::State<'_, OrgState>, org_pubkey: String) -> Result<OrgSnapshot, String> {
+    state.with_runtime(|runtime| runtime.poll(&org_pubkey).map_err(|error| error.to_string()))
+}
+
+#[tauri::command]
+fn org_send_dm_offer(
+    state: tauri::State<'_, OrgState>,
+    dms: tauri::State<'_, PrivateDmState>,
+    org_pubkey: String,
+    target_peer_id: String,
+    display_name: String,
+    listen_port: u16,
+    static_peer: Option<String>,
+) -> Result<InviteCreated, String> {
+    let invite = dms.with_runtime(|runtime| {
+        runtime
+            .create_invite(StartSessionRequest {
+                display_name,
+                listen_port,
+                static_peer,
+            })
+            .map_err(|error| error.to_string())
+    })?;
+    let offered = state.with_runtime(|runtime| {
+        runtime
+            .send_dm_offer(&org_pubkey, &target_peer_id, &invite.invite_uri)
+            .map_err(|error| error.to_string())?;
+        runtime
+            .link_dm(&org_pubkey, &target_peer_id, &invite.session_id)
+            .map_err(|error| error.to_string())
+    });
+    if let Err(error) = offered {
+        // The offer never reached the mesh: drop the orphan local invite so
+        // it does not linger as a dead "waiting" session.
+        let _ = dms.with_runtime(|runtime| {
+            runtime
+                .close_session(&invite.session_id)
+                .map_err(|error| error.to_string())
+        });
+        return Err(error);
+    }
+    Ok(invite)
+}
+
+#[tauri::command]
+fn org_accept_dm_offer(
+    state: tauri::State<'_, OrgState>,
+    dms: tauri::State<'_, PrivateDmState>,
+    org_pubkey: String,
+    offer_id: String,
+    display_name: String,
+    listen_port: u16,
+    static_peer: Option<String>,
+) -> Result<SessionSnapshot, String> {
+    let offer = state.with_runtime(|runtime| {
+        runtime
+            .accept_dm_offer(&org_pubkey, &offer_id)
+            .map_err(|error| error.to_string())
+    })?;
+    let snapshot = dms.with_runtime(|runtime| {
+        runtime
+            .accept_invite(AcceptInviteRequest {
+                invite_uri: offer.invite_uri.clone(),
+                display_name,
+                listen_port,
+                static_peer,
+            })
+            .map_err(|error| error.to_string())
+    })?;
+    state.with_runtime(|runtime| {
+        runtime
+            .link_dm(&org_pubkey, &offer.from_peer_id, &snapshot.session_id)
+            .map_err(|error| error.to_string())
+    })?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn org_dismiss_dm_offer(
+    state: tauri::State<'_, OrgState>,
+    org_pubkey: String,
+    offer_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .dismiss_dm_offer(&org_pubkey, &offer_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct OrgCreateGroupRequest {
+    org_pubkey: String,
+    label: Option<String>,
+    member_peer_ids: Vec<String>,
+    display_name: String,
+    listen_port: u16,
+    static_peer: Option<String>,
+}
+
+#[tauri::command]
+fn org_create_group(
+    state: tauri::State<'_, OrgState>,
+    groups: tauri::State<'_, PrivateGroupState>,
+    request: OrgCreateGroupRequest,
+) -> Result<GroupCreated, String> {
+    let created = groups.with_runtime(|runtime| {
+        runtime
+            .create_group(CreateGroupRequest {
+                label: request.label.clone(),
+                display_name: request.display_name.clone(),
+                listen_port: request.listen_port,
+                static_peer: request.static_peer.clone(),
+                org_pubkey: Some(request.org_pubkey.clone()),
+            })
+            .map_err(|error| error.to_string())
+    })?;
+    state.with_runtime(|runtime| {
+        for target in &request.member_peer_ids {
+            runtime
+                .send_group_offer(
+                    &request.org_pubkey,
+                    target,
+                    &created.invite_uri,
+                    created.label.clone(),
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })?;
+    Ok(created)
+}
+
+#[tauri::command]
+fn org_accept_group_offer(
+    state: tauri::State<'_, OrgState>,
+    groups: tauri::State<'_, PrivateGroupState>,
+    org_pubkey: String,
+    offer_id: String,
+    display_name: String,
+    listen_port: u16,
+    static_peer: Option<String>,
+) -> Result<GroupSnapshot, String> {
+    let offer = state.with_runtime(|runtime| {
+        runtime
+            .accept_group_offer(&org_pubkey, &offer_id)
+            .map_err(|error| error.to_string())
+    })?;
+    groups.with_runtime(|runtime| {
+        runtime
+            .join_group(JoinGroupRequest {
+                invite_uri: offer.group_invite_uri.clone(),
+                display_name,
+                org_pubkey: Some(org_pubkey.clone()),
+                listen_port,
+                static_peer,
+            })
+            .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+fn org_dismiss_group_offer(
+    state: tauri::State<'_, OrgState>,
+    org_pubkey: String,
+    offer_id: String,
+) -> Result<(), String> {
+    state.with_runtime(|runtime| {
+        runtime
+            .dismiss_group_offer(&org_pubkey, &offer_id)
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// The "+N roster members not in group" one-click add (spec §5): re-offer
+/// the group's invite to each listed roster member over org-control.
+#[tauri::command]
+fn org_group_invite_members(
+    state: tauri::State<'_, OrgState>,
+    groups: tauri::State<'_, PrivateGroupState>,
+    org_pubkey: String,
+    group_id: String,
+    member_peer_ids: Vec<String>,
+) -> Result<(), String> {
+    let (invite_uri, label) = groups.with_runtime(|runtime| {
+        let snapshot = runtime.poll(&group_id).map_err(|error| error.to_string())?;
+        let uri = snapshot
+            .invite_uri
+            .ok_or_else(|| format!("group {group_id} has no invite URI"))?;
+        Ok((uri, snapshot.label))
+    })?;
+    state.with_runtime(|runtime| {
+        for target in &member_peer_ids {
+            runtime
+                .send_group_offer(&org_pubkey, target, &invite_uri, label.clone())
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })
+}
+
+#[tauri::command]
 fn private_group_send_attachment(
     state: tauri::State<'_, PrivateGroupState>,
     group_id: String,
@@ -1074,16 +1356,18 @@ pub fn run() {
                         persistence_load.persistence.clone(),
                     ));
                     app.manage(PrivateGroupState::ready(
-                        moss,
+                        Arc::clone(&moss),
                         attachment_store,
                         persistence_load.persistence.clone(),
                     ));
+                    app.manage(OrgState::ready(moss, persistence_load.persistence.clone()));
                 }
                 Err(error) => {
                     let message = error.to_string();
                     app.manage(PrivateDmState::missing(message.clone()));
                     app.manage(ChannelState::missing(message.clone()));
-                    app.manage(PrivateGroupState::missing(message));
+                    app.manage(PrivateGroupState::missing(message.clone()));
+                    app.manage(OrgState::missing(message));
                 }
             }
             Ok(())
@@ -1127,6 +1411,17 @@ pub fn run() {
             private_group_send,
             private_group_retry_message,
             private_group_poll,
+            org_join,
+            org_leave,
+            org_list,
+            org_poll,
+            org_send_dm_offer,
+            org_accept_dm_offer,
+            org_dismiss_dm_offer,
+            org_create_group,
+            org_accept_group_offer,
+            org_dismiss_group_offer,
+            org_group_invite_members,
             private_group_list,
             private_group_close,
             private_group_send_attachment,
