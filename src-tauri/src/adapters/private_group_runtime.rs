@@ -8,6 +8,7 @@ use crate::adapters::attachment_runtime::{
     OutgoingAttachment, StreamRange, CHUNK_SIZE,
 };
 use crate::adapters::attachment_store::AttachmentStore;
+use crate::adapters::commit_sequencer::{CommitSequencer, Disposition};
 use crate::adapters::message_id::MessageIdGen;
 use crate::adapters::mls_crypto::{MlsCryptoError, MlsSessionCrypto};
 use crate::adapters::moss_ffi::{
@@ -113,6 +114,8 @@ pub struct GroupSnapshot {
     pub dm_offers: Vec<DmOffer>,
     pub mesh: Option<MeshInfo>,
     pub events: Vec<SnapshotEvent>,
+    /// A commit gap could not be bridged by resync; the member must rejoin.
+    pub needs_rejoin: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -238,6 +241,25 @@ enum ControlEnvelope {
     },
     /// A private-DM invitation aimed at one group member.
     DmOffer { group_id: String, offer: DmOffer },
+    /// A member stuck behind missing commits asks for a replay (spec §7).
+    ResyncRequest {
+        group_id: String,
+        from_fingerprint: String,
+        have_epoch: u64,
+    },
+    /// Admin-served replay of logged commits >= the requested epoch. An
+    /// empty list tells the requester the gap is unbridgeable.
+    ResyncResponse {
+        group_id: String,
+        for_fingerprint: String,
+        commits: Vec<ResyncCommit>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ResyncCommit {
+    epoch: u64,
+    commit_b64: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -339,11 +361,17 @@ struct GroupSession {
     message_ids: MessageIdGen,
     seen_set: HashSet<String>,
     seen_order: VecDeque<String>,
-    // Commit bytes already merged into the local MLS state, keyed by their b64.
-    // Skips gossip duplicates and the joiner's own admission commit (already
-    // carried by the Welcome) so process_commit is never re-applied.
-    // ponytail: unbounded, but commits only fire on membership change (rare).
-    processed_commits: HashSet<String>,
+    // Epoch-ordered commit admission: dedups gossip duplicates and the
+    // joiner's Welcome-carried admission commit, buffers out-of-order commits,
+    // reports gaps for resync. Unbounded like its predecessor set — commits
+    // only fire on membership change (rare).
+    sequencer: CommitSequencer,
+    // Clone of the runtime's store: applied/produced commits land in
+    // group_commit_log so the admin can serve ResyncRequests.
+    persistence: Option<Arc<Persistence>>,
+    // Set when a commit gap could not be bridged by resync; surfaced to the
+    // UI ("rejoin needed") instead of silently desyncing.
+    needs_rejoin: bool,
     control_channel: String,
     data_channel: String,
     blob_channel: String,
@@ -452,7 +480,9 @@ impl PrivateGroupRuntime {
                 message_ids: MessageIdGen::default(),
                 seen_set: HashSet::new(),
                 seen_order: VecDeque::new(),
-                processed_commits: HashSet::new(),
+                sequencer: CommitSequencer::new(),
+                persistence: self.persistence.clone(),
+                needs_rejoin: false,
                 control_channel: format!("{CONTROL_CHANNEL_PREFIX}{}", rec.group_id),
                 data_channel: format!("{DATA_CHANNEL_PREFIX}{}", rec.group_id),
                 blob_channel: format!("{BLOB_CHANNEL_PREFIX}{}", rec.group_id),
@@ -462,6 +492,21 @@ impl PrivateGroupRuntime {
                 outbound_attempts: HashMap::new(),
                 dm_offers: Vec::new(),
             };
+            // A member may have missed commits while offline; ask the admin
+            // for a replay. Best-effort: the mesh may not be connected yet —
+            // a real gap re-triggers on the next out-of-order commit. Skip
+            // when epoch is None (not joined into MLS): the admin would replay
+            // its whole log while every entry no-ops.
+            if session.joined && !session.is_admin {
+                if let Some(have_epoch) = session.crypto.epoch() {
+                    let request = ControlEnvelope::ResyncRequest {
+                        group_id: session.group_id.clone(),
+                        from_fingerprint: session.crypto.fingerprint(),
+                        have_epoch,
+                    };
+                    let _ = publish_json(&session.node, &session.control_channel, &request);
+                }
+            }
             if let Ok(messages) = p.list_group_messages(&rec.group_id) {
                 for row in messages {
                     if let Ok(persisted) = serde_json::from_slice::<PersistedGroupMessage>(&row) {
@@ -587,7 +632,9 @@ impl PrivateGroupRuntime {
             message_ids: MessageIdGen::default(),
             seen_set: HashSet::new(),
             seen_order: VecDeque::new(),
-            processed_commits: HashSet::new(),
+            sequencer: CommitSequencer::new(),
+            persistence: self.persistence.clone(),
+            needs_rejoin: false,
             control_channel: format!("{CONTROL_CHANNEL_PREFIX}{group_id}"),
             data_channel: format!("{DATA_CHANNEL_PREFIX}{group_id}"),
             blob_channel: format!("{BLOB_CHANNEL_PREFIX}{group_id}"),
@@ -661,7 +708,9 @@ impl PrivateGroupRuntime {
             message_ids: MessageIdGen::default(),
             seen_set: HashSet::new(),
             seen_order: VecDeque::new(),
-            processed_commits: HashSet::new(),
+            sequencer: CommitSequencer::new(),
+            persistence: self.persistence.clone(),
+            needs_rejoin: false,
             control_channel,
             data_channel: format!("{DATA_CHANNEL_PREFIX}{}", invite.group_id),
             blob_channel: format!("{BLOB_CHANNEL_PREFIX}{}", invite.group_id),
@@ -1278,6 +1327,93 @@ impl PrivateGroupRuntime {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum SequenceOutcome {
+    Done,
+    /// A buffered commit exists that cannot be applied yet — the caller
+    /// should request a resync.
+    Gapped,
+}
+
+/// Node-free core of commit sequencing: classify by wire epoch, apply in
+/// order, persist applied commits, drain any buffered successors. A commit is
+/// confirmed into the dedup set ONLY after a successful apply, so a transient
+/// failure or forged blob never poisons future delivery. The outcome always
+/// reflects the post-apply gap state, so a still-missing predecessor triggers
+/// a resync request regardless of which disposition the current commit took.
+fn sequence_commit(
+    crypto: &mut MlsSessionCrypto,
+    sequencer: &mut CommitSequencer,
+    persistence: Option<&Persistence>,
+    group_id: &str,
+    commit_b64: &str,
+) -> Result<SequenceOutcome, PrivateGroupError> {
+    let Some(current) = crypto.epoch() else {
+        return Ok(SequenceOutcome::Done);
+    };
+    let commit_bytes = decode(commit_b64)?;
+    let wire_epoch = MlsSessionCrypto::commit_epoch(&commit_bytes)?;
+    if let Disposition::Apply = sequencer.offer(current, wire_epoch, commit_b64) {
+        crypto.process_commit(&commit_bytes)?;
+        sequencer.confirm(commit_b64.to_string());
+        log_group_commit(persistence, group_id, wire_epoch, &commit_bytes);
+        // Buffered successors may be applicable now.
+        while let Some(current) = crypto.epoch() {
+            let Some(next_b64) = sequencer.drain_ready(current) else {
+                break;
+            };
+            let next_bytes = decode(&next_b64)?;
+            crypto.process_commit(&next_bytes)?;
+            sequencer.confirm(next_b64);
+            log_group_commit(persistence, group_id, current, &next_bytes);
+        }
+    }
+    // AlreadySeen, Buffered, or Apply all end here: report whatever gap
+    // remains at the (possibly advanced) current epoch.
+    let stuck = crypto.epoch().is_some_and(|current| sequencer.gap(current));
+    Ok(if stuck {
+        SequenceOutcome::Gapped
+    } else {
+        SequenceOutcome::Done
+    })
+}
+
+/// Feed an admin's resync replay through normal sequencing. Returns true when
+/// a gap remains after the replay — the admin could not bridge it (fresh
+/// state) and the member must rejoin instead of silently desyncing (spec §7).
+fn absorb_resync_commits(
+    crypto: &mut MlsSessionCrypto,
+    sequencer: &mut CommitSequencer,
+    persistence: Option<&Persistence>,
+    group_id: &str,
+    commits: Vec<ResyncCommit>,
+) -> bool {
+    for commit in commits {
+        // Per-commit tolerance: one malformed entry (a forged response can
+        // splice one in) must not discard the rest of a genuine replay.
+        // Duplicates and stale entries no-op inside the sequencer.
+        if let Err(e) =
+            sequence_commit(crypto, sequencer, persistence, group_id, &commit.commit_b64)
+        {
+            eprintln!("group {group_id}: bad commit in resync replay: {e}");
+        }
+    }
+    crypto.epoch().is_some_and(|current| sequencer.gap(current))
+}
+
+fn log_group_commit(
+    persistence: Option<&Persistence>,
+    group_id: &str,
+    epoch: u64,
+    commit_bytes: &[u8],
+) {
+    if let Some(p) = persistence {
+        if let Err(e) = p.append_group_commit(group_id, epoch, commit_bytes) {
+            eprintln!("group {group_id}: commit log write failed: {e}");
+        }
+    }
+}
+
 impl GroupSession {
     fn stamp_message(&self, mut message: GroupMessage) -> GroupMessage {
         let sent_at_ms = message.sent_at_ms.unwrap_or_else(now_ms);
@@ -1412,20 +1548,120 @@ impl GroupSession {
         false
     }
 
-    /// Merge a control-channel commit exactly once. Re-delivered commits (gossip
-    /// duplicates, or the joiner's own admission commit already absorbed by the
-    /// Welcome) are no-ops instead of erroring on an already-merged epoch.
-    /// ponytail: dedups duplicates only; a commit that arrives before its
-    /// predecessor still errors and is dropped — a reorder-resync path
-    /// (request-state / commit retransmit) is the upgrade if gossip reorders.
-    fn process_commit_once(&mut self, commit_b64: String) -> Result<(), PrivateGroupError> {
-        if self.processed_commits.contains(&commit_b64) {
+    /// Merge a control-channel commit in epoch order. Duplicates and stale
+    /// replays are no-ops; future commits are buffered and drained once their
+    /// epoch is reached; an unreachable buffered commit triggers a resync
+    /// request (spec §7).
+    fn apply_commit_sequenced(&mut self, commit_b64: String) -> Result<(), PrivateGroupError> {
+        let outcome = sequence_commit(
+            &mut self.crypto,
+            &mut self.sequencer,
+            self.persistence.as_deref(),
+            &self.group_id,
+            &commit_b64,
+        )?;
+        match outcome {
+            SequenceOutcome::Done => {
+                // A real commit closed the gap: clear any stale rejoin hint so
+                // a transient/forged gap can never wedge the flag permanently.
+                self.needs_rejoin = false;
+                Ok(())
+            }
+            SequenceOutcome::Gapped => self.request_resync_if_gapped(),
+        }
+    }
+
+    fn request_resync_if_gapped(&mut self) -> Result<(), PrivateGroupError> {
+        let Some(current) = self.crypto.epoch() else {
+            return Ok(());
+        };
+        if !self.sequencer.gap(current) || !self.sequencer.should_request(current) {
             return Ok(());
         }
-        let commit = decode(&commit_b64)?;
-        self.crypto.process_commit(&commit)?;
-        self.processed_commits.insert(commit_b64);
+        let request = ControlEnvelope::ResyncRequest {
+            group_id: self.group_id.clone(),
+            from_fingerprint: self.crypto.fingerprint(),
+            have_epoch: current,
+        };
+        // Undo the request reservation if publishing failed, so the next gap
+        // sighting retries instead of going silent until restart.
+        let result = publish_json(&self.node, &self.control_channel, &request);
+        if result.is_err() {
+            self.sequencer.rearm();
+        }
+        result
+    }
+
+    /// Admin-only: reply to a member's ResyncRequest with logged commits >=
+    /// have_epoch. A DB read error skips the reply rather than sending an
+    /// empty one (which the requester would read as "unbridgeable → rejoin").
+    fn serve_resync_request(
+        &self,
+        for_fingerprint: String,
+        have_epoch: u64,
+    ) -> Result<(), PrivateGroupError> {
+        let Some(p) = self.persistence.as_ref() else {
+            return Ok(());
+        };
+        let rows = match p.list_group_commits_from(&self.group_id, have_epoch) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("group {}: resync read failed: {e}", self.group_id);
+                return Ok(());
+            }
+        };
+        let commits = rows
+            .into_iter()
+            .map(|(epoch, bytes)| ResyncCommit {
+                epoch,
+                commit_b64: encode(&bytes),
+            })
+            .collect();
+        let response = ControlEnvelope::ResyncResponse {
+            group_id: self.group_id.clone(),
+            for_fingerprint,
+            commits,
+        };
+        publish_json(&self.node, &self.control_channel, &response)
+    }
+
+    /// Requester side: feed an admin's replay through sequencing. If a gap
+    /// remains, try one more request from the advanced epoch before declaring
+    /// rejoin; otherwise clear any stale rejoin hint.
+    fn absorb_resync_response(
+        &mut self,
+        commits: Vec<ResyncCommit>,
+    ) -> Result<(), PrivateGroupError> {
+        let still_gapped = absorb_resync_commits(
+            &mut self.crypto,
+            &mut self.sequencer,
+            self.persistence.as_deref(),
+            &self.group_id,
+            commits,
+        );
+        if !still_gapped {
+            self.needs_rejoin = false;
+            return Ok(());
+        }
+        self.sequencer.rearm();
+        self.request_resync_if_gapped()?;
+        if self
+            .crypto
+            .epoch()
+            .is_some_and(|current| self.sequencer.gap(current))
+        {
+            self.needs_rejoin = true;
+        }
         Ok(())
+    }
+
+    fn log_commit(&self, epoch: u64, commit_bytes: &[u8]) {
+        log_group_commit(
+            self.persistence.as_deref(),
+            &self.group_id,
+            epoch,
+            commit_bytes,
+        );
     }
 
     fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateGroupError> {
@@ -1447,7 +1683,11 @@ impl GroupSession {
                 if self.crypto.key_package_signer_is_member(&key_package)? {
                     return Ok(());
                 }
+                let pre_epoch = self.crypto.epoch();
                 let outcome = self.crypto.add_members(&[key_package.as_slice()])?;
+                if let Some(epoch) = pre_epoch {
+                    self.log_commit(epoch, &outcome.commit_bytes);
+                }
                 let commit_b64 = encode(&outcome.commit_bytes);
                 let welcome_envelope = ControlEnvelope::Welcome {
                     group_id: self.group_id.clone(),
@@ -1488,7 +1728,7 @@ impl GroupSession {
                 // admin also broadcasts that same commit on the control channel
                 // for existing members, so mark it processed to skip re-applying
                 // it to ourselves (which would error on the already-merged epoch).
-                self.processed_commits.insert(commit_b64);
+                self.sequencer.mark_seen(commit_b64);
                 Ok(())
             }
             ControlEnvelope::Welcome {
@@ -1501,7 +1741,7 @@ impl GroupSession {
                 && self.group_id == group_id
                 && from_fingerprint == self.current_admin_fingerprint =>
             {
-                self.process_commit_once(commit_b64)
+                self.apply_commit_sequenced(commit_b64)
             }
             ControlEnvelope::Commit {
                 group_id,
@@ -1512,7 +1752,7 @@ impl GroupSession {
                 && self.group_id == group_id
                 && from_fingerprint == self.current_admin_fingerprint =>
             {
-                self.process_commit_once(commit_b64)
+                self.apply_commit_sequenced(commit_b64)
             }
             ControlEnvelope::AdminHandoff {
                 group_id,
@@ -1535,13 +1775,31 @@ impl GroupSession {
             } if self.is_admin && self.group_id == group_id && from_fingerprint != own_fp => {
                 let proposal = decode(&proposal_b64)?;
                 self.crypto.queue_remote_proposal(&proposal)?;
+                let pre_epoch = self.crypto.epoch();
                 let commit_bytes = self.crypto.commit_pending()?;
+                if let Some(epoch) = pre_epoch {
+                    self.log_commit(epoch, &commit_bytes);
+                }
                 let commit_envelope = ControlEnvelope::Commit {
                     group_id: self.group_id.clone(),
                     from_fingerprint: own_fp,
                     commit_b64: encode(&commit_bytes),
                 };
                 publish_json(&self.node, &self.control_channel, &commit_envelope)
+            }
+            ControlEnvelope::ResyncRequest {
+                group_id,
+                from_fingerprint,
+                have_epoch,
+            } if self.is_admin && self.group_id == group_id && from_fingerprint != own_fp => {
+                self.serve_resync_request(from_fingerprint, have_epoch)
+            }
+            ControlEnvelope::ResyncResponse {
+                group_id,
+                for_fingerprint,
+                commits,
+            } if self.joined && self.group_id == group_id && for_fingerprint == own_fp => {
+                self.absorb_resync_response(commits)
             }
             ControlEnvelope::AttachmentManifest {
                 group_id,
@@ -1846,6 +2104,7 @@ impl GroupSession {
             attachments: self.attachment_views(),
             dm_offers: self.dm_offers.clone(),
             mesh: self.mesh_info(),
+            needs_rejoin: self.needs_rejoin,
             events: snapshot_event_log()
                 .into_iter()
                 .map(|event| SnapshotEvent {
@@ -2103,6 +2362,127 @@ mod tests {
                 .as_nanos()
         ));
         Arc::new(AttachmentStore::new(&path).expect("attachment store should init"))
+    }
+
+    #[test]
+    fn sequence_commit_handles_out_of_order_duplicates_and_logs() {
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-seq-commit-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+        let p = Persistence::open_with_dek(&db_path, [17u8; 32]).expect("store should open");
+
+        // Admin + member, crypto only — no moss node involved.
+        let mut admin = MlsSessionCrypto::new("admin").unwrap();
+        admin.create_group().unwrap();
+        let mut member = MlsSessionCrypto::new("member").unwrap();
+        let kp = member.key_package_bytes().unwrap();
+        let (welcome, tree) = admin.add_peer(&kp).unwrap();
+        member.join_welcome(&welcome, &tree).unwrap();
+
+        // Two successive membership commits the member has not seen yet.
+        let mut dave = MlsSessionCrypto::new("dave").unwrap();
+        let kp_d = dave.key_package_bytes().unwrap();
+        let c1 = admin.add_members(&[kp_d.as_slice()]).unwrap();
+        let mut erin = MlsSessionCrypto::new("erin").unwrap();
+        let kp_e = erin.key_package_bytes().unwrap();
+        let c2 = admin.add_members(&[kp_e.as_slice()]).unwrap();
+        let c1_b64 = encode(&c1.commit_bytes);
+        let c2_b64 = encode(&c2.commit_bytes);
+
+        let mut seq = CommitSequencer::new();
+        // Reordered delivery: the later commit first -> buffered + gap.
+        let out = sequence_commit(&mut member, &mut seq, Some(&p), "g-seq", &c2_b64).unwrap();
+        assert_eq!(out, SequenceOutcome::Gapped);
+        assert_eq!(member.member_count(), 2, "future commit must not apply");
+        // The missing commit arrives -> both apply, in order.
+        let out = sequence_commit(&mut member, &mut seq, Some(&p), "g-seq", &c1_b64).unwrap();
+        assert_eq!(out, SequenceOutcome::Done);
+        assert_eq!(member.member_count(), 4);
+        // Duplicate re-delivery is a no-op.
+        let out = sequence_commit(&mut member, &mut seq, Some(&p), "g-seq", &c1_b64).unwrap();
+        assert_eq!(out, SequenceOutcome::Done);
+        assert_eq!(member.member_count(), 4);
+        // Both applied commits landed in the log, ascending by epoch.
+        let logged = p.list_group_commits_from("g-seq", 0).unwrap();
+        assert_eq!(logged.len(), 2);
+        assert!(logged[0].0 < logged[1].0);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn resync_replay_bridges_gap_and_clears_rejoin() {
+        // Member buffered a future commit; the admin's replay bridges it.
+        let mut admin = MlsSessionCrypto::new("admin").unwrap();
+        admin.create_group().unwrap();
+        let mut member = MlsSessionCrypto::new("member").unwrap();
+        let kp = member.key_package_bytes().unwrap();
+        let (welcome, tree) = admin.add_peer(&kp).unwrap();
+        member.join_welcome(&welcome, &tree).unwrap();
+
+        let mut dave = MlsSessionCrypto::new("dave").unwrap();
+        let kp_d = dave.key_package_bytes().unwrap();
+        let c1 = admin.add_members(&[kp_d.as_slice()]).unwrap();
+        let mut erin = MlsSessionCrypto::new("erin").unwrap();
+        let kp_e = erin.key_package_bytes().unwrap();
+        let c2 = admin.add_members(&[kp_e.as_slice()]).unwrap();
+
+        let mut seq = CommitSequencer::new();
+        // Only the later commit arrived -> gap.
+        let out = sequence_commit(
+            &mut member,
+            &mut seq,
+            None,
+            "g-rs",
+            &encode(&c2.commit_bytes),
+        )
+        .unwrap();
+        assert_eq!(out, SequenceOutcome::Gapped);
+
+        // Admin replay carries the missing commit (and a duplicate).
+        let replay = vec![
+            ResyncCommit {
+                epoch: 0,
+                commit_b64: encode(&c1.commit_bytes),
+            },
+            ResyncCommit {
+                epoch: 0,
+                commit_b64: encode(&c2.commit_bytes),
+            },
+        ];
+        let needs_rejoin = absorb_resync_commits(&mut member, &mut seq, None, "g-rs", replay);
+        assert!(!needs_rejoin);
+        assert_eq!(member.member_count(), 4);
+    }
+
+    #[test]
+    fn empty_resync_replay_flags_rejoin() {
+        let mut admin = MlsSessionCrypto::new("admin").unwrap();
+        admin.create_group().unwrap();
+        let mut member = MlsSessionCrypto::new("member").unwrap();
+        let kp = member.key_package_bytes().unwrap();
+        let (welcome, tree) = admin.add_peer(&kp).unwrap();
+        member.join_welcome(&welcome, &tree).unwrap();
+
+        let mut dave = MlsSessionCrypto::new("dave").unwrap();
+        let kp_d = dave.key_package_bytes().unwrap();
+        let _c1 = admin.add_members(&[kp_d.as_slice()]).unwrap();
+        let mut erin = MlsSessionCrypto::new("erin").unwrap();
+        let kp_e = erin.key_package_bytes().unwrap();
+        let c2 = admin.add_members(&[kp_e.as_slice()]).unwrap();
+
+        let mut seq = CommitSequencer::new();
+        sequence_commit(
+            &mut member,
+            &mut seq,
+            None,
+            "g-rj",
+            &encode(&c2.commit_bytes),
+        )
+        .unwrap();
+        // Admin has nothing to replay (fresh state) -> member must rejoin.
+        let needs_rejoin = absorb_resync_commits(&mut member, &mut seq, None, "g-rj", Vec::new());
+        assert!(needs_rejoin);
     }
 
     #[test]
