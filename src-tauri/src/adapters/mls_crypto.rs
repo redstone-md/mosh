@@ -328,11 +328,17 @@ impl MlsSessionCrypto {
             .collect()
     }
 
+    // Excludes the own leaf: org kick/replace operate on OTHER members by
+    // protocol (self-removal goes through leave_proposal_bytes /
+    // remove_self_commit). Guards against a client acting on a roster diff
+    // that names itself.
     fn leaf_indices_matching(group: &MlsGroup, identity: &str) -> Vec<LeafNodeIndex> {
+        let own = group.own_leaf_index();
         group
             .members()
             .filter(|member| {
-                Self::credential_identity(&member.credential).as_deref() == Some(identity)
+                member.index != own
+                    && Self::credential_identity(&member.credential).as_deref() == Some(identity)
             })
             .map(|member| member.index)
             .collect()
@@ -355,12 +361,20 @@ impl MlsSessionCrypto {
         let (commit, _welcome, _info) = group
             .remove_members(&self.provider, &self.signer, &targets)
             .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
+        // Serialize BEFORE merging: if to_bytes failed after the merge, the
+        // local epoch would already be advanced while the commit is never
+        // broadcast — a silent permanent fork.
+        let commit_bytes = commit
+            .to_bytes()
+            .map_err(|error| MlsCryptoError::Codec(error.to_string()));
+        if commit_bytes.is_err() {
+            let _ = group.clear_pending_commit(self.provider.storage());
+            return commit_bytes;
+        }
         group
             .merge_pending_commit(&self.provider)
             .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
-        commit
-            .to_bytes()
-            .map_err(|error| MlsCryptoError::Codec(error.to_string()))
+        commit_bytes
     }
 
     /// Remove every leaf matching `identity` and add the replacement
@@ -392,18 +406,30 @@ impl MlsSessionCrypto {
             .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?
             .stage_commit(&self.provider)
             .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
-        let commit_bytes = bundle
-            .commit()
-            .to_bytes()
-            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
-        let welcome_bytes = bundle
-            .to_welcome_msg()
-            .ok_or_else(|| {
-                MlsCryptoError::OpenMls("commit with Add produced no welcome".to_string())
-            })?
-            .to_bytes()
-            .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+        let serialized: Result<(Vec<u8>, Vec<u8>), MlsCryptoError> = (|| {
+            let commit_bytes = bundle
+                .commit()
+                .to_bytes()
+                .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+            let welcome_bytes = bundle
+                .to_welcome_msg()
+                .ok_or_else(|| {
+                    MlsCryptoError::OpenMls("commit with Add produced no welcome".to_string())
+                })?
+                .to_bytes()
+                .map_err(|error| MlsCryptoError::Codec(error.to_string()))?;
+            Ok((commit_bytes, welcome_bytes))
+        })();
         let group = self.group.as_mut().ok_or(MlsCryptoError::NotReady)?;
+        // On serialization failure drop the staged commit, or every later
+        // commit-producing call on this group fails on the stale pending state.
+        let (commit_bytes, welcome_bytes) = match serialized {
+            Ok(pair) => pair,
+            Err(error) => {
+                let _ = group.clear_pending_commit(self.provider.storage());
+                return Err(error);
+            }
+        };
         group
             .merge_pending_commit(&self.provider)
             .map_err(|error| MlsCryptoError::OpenMls(error.to_string()))?;
@@ -613,6 +639,56 @@ mod tests {
     fn remove_by_identity_errors_when_absent() {
         let (mut admin, _bob, _carol) = three_party();
         assert!(admin.remove_members_by_identity("peer-nobody").is_err());
+    }
+
+    #[test]
+    fn remove_by_identity_removes_all_duplicate_leaves() {
+        // A rejoin can leave a stale leaf behind: two leaves, one identity.
+        let (mut admin, mut bob_v1, mut carol) = three_party();
+        let mut bob_v2 = MlsSessionCrypto::new("peer-bob").unwrap();
+        let kp = bob_v2.key_package_bytes().unwrap();
+        let outcome = admin.add_members(&[kp.as_slice()]).unwrap();
+        bob_v1.process_commit(&outcome.commit_bytes).unwrap();
+        carol.process_commit(&outcome.commit_bytes).unwrap();
+        bob_v2
+            .join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+        assert_eq!(admin.member_count(), 4);
+
+        let commit = admin.remove_members_by_identity("peer-bob").unwrap();
+        carol.process_commit(&commit).unwrap();
+        assert_eq!(admin.member_count(), 2);
+        assert!(!admin.member_identities().contains(&"peer-bob".to_string()));
+
+        let ct = admin.encrypt(b"both devices gone").unwrap();
+        assert_eq!(carol.decrypt(&ct).unwrap(), b"both devices gone");
+        assert!(bob_v1.decrypt(&ct).is_err());
+        assert!(bob_v2.decrypt(&ct).is_err());
+    }
+
+    #[test]
+    fn replace_member_without_match_degrades_to_plain_add() {
+        let (mut admin, mut bob, mut carol) = three_party();
+        let mut dave = MlsSessionCrypto::new("peer-dave").unwrap();
+        let kp = dave.key_package_bytes().unwrap();
+
+        let outcome = admin.replace_member("peer-dave", &kp).unwrap();
+        bob.process_commit(&outcome.commit_bytes).unwrap();
+        carol.process_commit(&outcome.commit_bytes).unwrap();
+        dave.join_welcome(&outcome.welcome_bytes, &outcome.tree_bytes)
+            .unwrap();
+
+        assert_eq!(admin.member_count(), 4);
+        let ct = dave.encrypt(b"hello from dave").unwrap();
+        assert_eq!(admin.decrypt(&ct).unwrap(), b"hello from dave");
+    }
+
+    #[test]
+    fn remove_by_identity_never_targets_own_leaf() {
+        let (mut admin, _bob, _carol) = three_party();
+        // Own identity matches only the committer's own leaf -> treated as
+        // "no removable member", not a self-kick.
+        assert!(admin.remove_members_by_identity("peer-admin").is_err());
     }
 
     #[test]
