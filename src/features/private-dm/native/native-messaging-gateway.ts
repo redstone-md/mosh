@@ -46,6 +46,17 @@ const CHANNEL_SEND_DM_OFFER_COMMAND = "channel_send_dm_offer";
 const CHANNEL_DISMISS_DM_OFFER_COMMAND = "channel_dismiss_dm_offer";
 const PRIVATE_GROUP_SEND_DM_OFFER_COMMAND = "private_group_send_dm_offer";
 const PRIVATE_GROUP_DISMISS_DM_OFFER_COMMAND = "private_group_dismiss_dm_offer";
+const ORG_JOIN_COMMAND = "org_join";
+const ORG_LEAVE_COMMAND = "org_leave";
+const ORG_LIST_COMMAND = "org_list";
+const ORG_POLL_COMMAND = "org_poll";
+const ORG_SEND_DM_OFFER_COMMAND = "org_send_dm_offer";
+const ORG_ACCEPT_DM_OFFER_COMMAND = "org_accept_dm_offer";
+const ORG_DISMISS_DM_OFFER_COMMAND = "org_dismiss_dm_offer";
+const ORG_CREATE_GROUP_COMMAND = "org_create_group";
+const ORG_ACCEPT_GROUP_OFFER_COMMAND = "org_accept_group_offer";
+const ORG_DISMISS_GROUP_OFFER_COMMAND = "org_dismiss_group_offer";
+const ORG_GROUP_INVITE_MEMBERS_COMMAND = "org_group_invite_members";
 
 export interface DiagnosticsSnapshot {
   readonly app_name: string;
@@ -331,6 +342,7 @@ export interface CreateGroupRequest {
   readonly display_name: string;
   readonly listen_port: number;
   readonly static_peer?: string | null;
+  readonly org_pubkey?: string | null;
 }
 
 export interface JoinGroupRequest {
@@ -338,6 +350,7 @@ export interface JoinGroupRequest {
   readonly display_name: string;
   readonly listen_port: number;
   readonly static_peer?: string | null;
+  readonly org_pubkey?: string | null;
 }
 
 export interface GroupCreated {
@@ -377,6 +390,9 @@ export interface GroupSnapshot {
   readonly dm_offers: readonly DmOffer[];
   readonly mesh: MeshInfo | null;
   readonly events: readonly SnapshotEvent[];
+  readonly needs_rejoin: boolean;
+  readonly org_pubkey: string | null;
+  readonly member_peer_ids: readonly string[];
 }
 
 export interface GroupListSnapshot {
@@ -395,6 +411,63 @@ export interface GroupSendResult {
 export interface GroupLeaveResult {
   readonly group_id: string;
   readonly closed: boolean;
+}
+
+export interface OrgMemberView {
+  readonly moss_peer_id: string;
+  readonly name: string;
+  readonly role: string;
+  readonly is_self: boolean;
+}
+
+export interface OrgDmOfferView {
+  readonly offer_id: string;
+  readonly from_peer_id: string;
+  readonly from_name: string;
+  readonly invite_uri: string;
+}
+
+export interface OrgGroupOfferView {
+  readonly offer_id: string;
+  readonly from_peer_id: string;
+  readonly from_name: string;
+  readonly group_label: string | null;
+  readonly group_invite_uri: string;
+}
+
+export interface OrgDmLink {
+  readonly peer_id: string;
+  readonly session_id: string | null;
+}
+
+export interface OrgSnapshot {
+  readonly org_pubkey: string;
+  readonly org_name: string;
+  readonly mesh_id: string;
+  readonly own_peer_id: string;
+  readonly confirmation_code: string;
+  readonly in_roster: boolean;
+  readonly roster_version: number | null;
+  readonly members: readonly OrgMemberView[];
+  readonly dm_offers: readonly OrgDmOfferView[];
+  readonly group_offers: readonly OrgGroupOfferView[];
+  readonly dm_links: readonly OrgDmLink[];
+}
+
+export interface JoinOrgRequest {
+  readonly bundle_uri: string;
+  readonly display_name: string;
+  readonly listen_port: number;
+  readonly static_peer?: string | null;
+}
+
+export interface OrgCreateGroupRequest {
+  readonly org_pubkey: string;
+  readonly label?: string | null;
+  readonly member_peer_ids: readonly string[];
+  readonly display_name: string;
+  readonly listen_port: number;
+  readonly static_peer?: string | null;
 }
 
 export interface NativeMessagingGateway {
@@ -468,6 +541,39 @@ export interface NativeMessagingGateway {
   callEnd(sessionId: string, callId: string, reason: string): Promise<void>;
   callSendFrame(sessionId: string, callId: string, frameBase64: string): Promise<void>;
   callDrainFrames(sessionId: string, callId: string): Promise<readonly string[]>;
+  joinOrg(request: JoinOrgRequest): Promise<OrgSnapshot>;
+  leaveOrg(orgPubkey: string): Promise<void>;
+  listOrgs(): Promise<readonly OrgSnapshot[]>;
+  pollOrg(orgPubkey: string): Promise<OrgSnapshot>;
+  orgSendDmOffer(
+    orgPubkey: string,
+    targetPeerId: string,
+    displayName: string,
+    listenPort: number,
+    staticPeer?: string | null,
+  ): Promise<InviteCreated>;
+  orgAcceptDmOffer(
+    orgPubkey: string,
+    offerId: string,
+    displayName: string,
+    listenPort: number,
+    staticPeer?: string | null,
+  ): Promise<SessionSnapshot>;
+  orgDismissDmOffer(orgPubkey: string, offerId: string): Promise<void>;
+  orgCreateGroup(request: OrgCreateGroupRequest): Promise<GroupCreated>;
+  orgAcceptGroupOffer(
+    orgPubkey: string,
+    offerId: string,
+    displayName: string,
+    listenPort: number,
+    staticPeer?: string | null,
+  ): Promise<GroupSnapshot>;
+  orgDismissGroupOffer(orgPubkey: string, offerId: string): Promise<void>;
+  orgGroupInviteMembers(
+    orgPubkey: string,
+    groupId: string,
+    memberPeerIds: readonly string[],
+  ): Promise<void>;
   listNetworkInterfaces(): Promise<readonly NetworkInterfaceInfo[]>;
   detectVpn(): Promise<VpnDetection>;
   setBindInterface(value: string | null): Promise<void>;
@@ -744,6 +850,94 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     return invoke<readonly string[]>(PRIVATE_DM_CALL_DRAIN_FRAMES_COMMAND, {
       sessionId,
       callId,
+    });
+  }
+
+  async joinOrg(request: JoinOrgRequest): Promise<OrgSnapshot> {
+    return invoke<OrgSnapshot>(ORG_JOIN_COMMAND, { request });
+  }
+
+  async leaveOrg(orgPubkey: string): Promise<void> {
+    await invoke(ORG_LEAVE_COMMAND, { orgPubkey });
+  }
+
+  async listOrgs(): Promise<readonly OrgSnapshot[]> {
+    return invoke<readonly OrgSnapshot[]>(ORG_LIST_COMMAND);
+  }
+
+  async pollOrg(orgPubkey: string): Promise<OrgSnapshot> {
+    return invoke<OrgSnapshot>(ORG_POLL_COMMAND, { orgPubkey });
+  }
+
+  async orgSendDmOffer(
+    orgPubkey: string,
+    targetPeerId: string,
+    displayName: string,
+    listenPort: number,
+    staticPeer?: string | null,
+  ): Promise<InviteCreated> {
+    return invoke<InviteCreated>(ORG_SEND_DM_OFFER_COMMAND, {
+      orgPubkey,
+      targetPeerId,
+      displayName,
+      listenPort,
+      staticPeer: staticPeer ?? null,
+    });
+  }
+
+  async orgAcceptDmOffer(
+    orgPubkey: string,
+    offerId: string,
+    displayName: string,
+    listenPort: number,
+    staticPeer?: string | null,
+  ): Promise<SessionSnapshot> {
+    return invoke<SessionSnapshot>(ORG_ACCEPT_DM_OFFER_COMMAND, {
+      orgPubkey,
+      offerId,
+      displayName,
+      listenPort,
+      staticPeer: staticPeer ?? null,
+    });
+  }
+
+  async orgDismissDmOffer(orgPubkey: string, offerId: string): Promise<void> {
+    await invoke(ORG_DISMISS_DM_OFFER_COMMAND, { orgPubkey, offerId });
+  }
+
+  async orgCreateGroup(request: OrgCreateGroupRequest): Promise<GroupCreated> {
+    return invoke<GroupCreated>(ORG_CREATE_GROUP_COMMAND, { request });
+  }
+
+  async orgAcceptGroupOffer(
+    orgPubkey: string,
+    offerId: string,
+    displayName: string,
+    listenPort: number,
+    staticPeer?: string | null,
+  ): Promise<GroupSnapshot> {
+    return invoke<GroupSnapshot>(ORG_ACCEPT_GROUP_OFFER_COMMAND, {
+      orgPubkey,
+      offerId,
+      displayName,
+      listenPort,
+      staticPeer: staticPeer ?? null,
+    });
+  }
+
+  async orgDismissGroupOffer(orgPubkey: string, offerId: string): Promise<void> {
+    await invoke(ORG_DISMISS_GROUP_OFFER_COMMAND, { orgPubkey, offerId });
+  }
+
+  async orgGroupInviteMembers(
+    orgPubkey: string,
+    groupId: string,
+    memberPeerIds: readonly string[],
+  ): Promise<void> {
+    await invoke(ORG_GROUP_INVITE_MEMBERS_COMMAND, {
+      orgPubkey,
+      groupId,
+      memberPeerIds,
     });
   }
 

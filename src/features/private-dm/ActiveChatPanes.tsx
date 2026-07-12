@@ -40,6 +40,7 @@ import {
   chatText,
   groupText,
   inviteText,
+  orgText,
   shellText,
 } from "./private-dm.content";
 
@@ -228,6 +229,12 @@ export function ActiveChannelChat(props: {
   );
 }
 
+export interface OrgGroupAddPrompt {
+  readonly count: number;
+  readonly busy: boolean;
+  readonly onAdd: () => void;
+}
+
 export function ActiveGroupChat(props: {
   group: GroupSnapshot;
   ready: boolean;
@@ -236,6 +243,7 @@ export function ActiveGroupChat(props: {
   attachments: AttachmentApi;
   tools: ConversationToolsState;
   peer: PeerActions;
+  orgAddPrompt?: OrgGroupAddPrompt | null;
   onComposer: (value: string) => void;
   onRetryMessage: (messageId: string) => void;
   onSend: (event: FormEvent) => void;
@@ -341,7 +349,35 @@ export function ActiveGroupChat(props: {
           </button>
         }
         menuActions={menuActions}
-        afterHeader={<GroupNotice />}
+        afterHeader={
+          <>
+            <GroupNotice />
+            {props.group.needs_rejoin ? (
+              <div className="inline-error" role="alert">
+                <strong>{orgText.rejoinNeededTitle}.</strong>{" "}
+                {orgText.rejoinNeededBody}
+              </div>
+            ) : null}
+            {props.orgAddPrompt && props.orgAddPrompt.count > 0 ? (
+              <div className="org-add-banner">
+                <span>
+                  {props.orgAddPrompt.count}{" "}
+                  {props.orgAddPrompt.count === 1
+                    ? orgText.missingOne
+                    : orgText.missingMany}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={props.orgAddPrompt.busy}
+                  onClick={props.orgAddPrompt.onAdd}
+                >
+                  {orgText.addMissing}
+                </button>
+              </div>
+            ) : null}
+          </>
+        }
       />
 
       <ChatDropZone disabled={!props.ready || props.busy} onAttach={props.attachments.onSend}>

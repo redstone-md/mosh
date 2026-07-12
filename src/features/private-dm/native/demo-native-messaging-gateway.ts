@@ -20,6 +20,9 @@ import type {
   NativeMessagingGateway,
   NativeRuntimeStatus,
   NetworkInterfaceInfo,
+  OrgCreateGroupRequest,
+  OrgSnapshot,
+  JoinOrgRequest,
   SendMessageResult,
   SessionListSnapshot,
   SessionSnapshot,
@@ -649,6 +652,86 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
       vpn_owns_default_route: false,
     };
   }
+
+  async joinOrg(request: JoinOrgRequest): Promise<OrgSnapshot> {
+    return this.state.joinOrg(request);
+  }
+
+  async leaveOrg(orgPubkey: string): Promise<void> {
+    this.state.leaveOrg(orgPubkey);
+  }
+
+  async listOrgs(): Promise<readonly OrgSnapshot[]> {
+    return this.state.listOrgs();
+  }
+
+  async pollOrg(orgPubkey: string): Promise<OrgSnapshot> {
+    return this.state.pollOrg(orgPubkey);
+  }
+
+  async orgSendDmOffer(
+    orgPubkey: string,
+    targetPeerId: string,
+    displayName: string,
+    listenPort: number,
+  ): Promise<InviteCreated> {
+    const invite = await this.createPrivateInvite({
+      display_name: displayName,
+      listen_port: listenPort,
+    });
+    this.state.linkOrgDm(orgPubkey, targetPeerId, invite.session_id);
+    return invite;
+  }
+
+  async orgAcceptDmOffer(
+    orgPubkey: string,
+    offerId: string,
+    displayName: string,
+    listenPort: number,
+  ): Promise<SessionSnapshot> {
+    const offer = this.state.takeOrgDmOffer(orgPubkey, offerId);
+    const session = await this.acceptPrivateInvite({
+      invite_uri: offer.invite_uri,
+      display_name: displayName,
+      listen_port: listenPort,
+    });
+    this.state.linkOrgDm(orgPubkey, offer.from_peer_id, session.session_id);
+    return session;
+  }
+
+  async orgDismissDmOffer(orgPubkey: string, offerId: string): Promise<void> {
+    this.state.dismissOrgDmOffer(orgPubkey, offerId);
+  }
+
+  async orgCreateGroup(request: OrgCreateGroupRequest): Promise<GroupCreated> {
+    return this.createPrivateGroup({
+      label: request.label,
+      display_name: request.display_name,
+      listen_port: request.listen_port,
+      org_pubkey: request.org_pubkey,
+    });
+  }
+
+  async orgAcceptGroupOffer(
+    orgPubkey: string,
+    offerId: string,
+    displayName: string,
+    listenPort: number,
+  ): Promise<GroupSnapshot> {
+    const offer = this.state.takeOrgGroupOffer(orgPubkey, offerId);
+    return this.joinPrivateGroup({
+      invite_uri: offer.group_invite_uri,
+      display_name: displayName,
+      listen_port: listenPort,
+      org_pubkey: orgPubkey,
+    });
+  }
+
+  async orgDismissGroupOffer(orgPubkey: string, offerId: string): Promise<void> {
+    this.state.dismissOrgGroupOffer(orgPubkey, offerId);
+  }
+
+  async orgGroupInviteMembers(): Promise<void> {}
 
   async setBindInterface(value: string | null): Promise<void> {
     this.state.setBindInterface(value);
