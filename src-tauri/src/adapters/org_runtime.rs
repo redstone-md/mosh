@@ -318,10 +318,7 @@ impl OrgSession {
             return;
         };
         if let Err(error) = self.node.publish(&self.control_channel, &payload) {
-            eprintln!(
-                "org roster publish failed for {}: {error}",
-                self.org_pubkey
-            );
+            eprintln!("org roster publish failed for {}: {error}", self.org_pubkey);
         }
     }
 
@@ -818,7 +815,10 @@ impl OrgRuntime {
     }
 
     fn signing_key(&self) -> Result<SigningKey, OrgError> {
-        let p = self.persistence.as_ref().ok_or(OrgError::IdentityUnavailable)?;
+        let p = self
+            .persistence
+            .as_ref()
+            .ok_or(OrgError::IdentityUnavailable)?;
         let blob = p
             .get_moss_identity()
             .map_err(|e| OrgError::Persistence(e.to_string()))?

@@ -15,11 +15,11 @@ use adapters::openmls_crypto::{
     run_openmls_alice_bob_roundtrip, run_openmls_smoke_test, OpenMlsRoundTripStatus,
     OpenMlsSmokeStatus,
 };
+use adapters::org_runtime::{JoinOrgRequest, OrgRuntime, OrgSnapshot};
 use adapters::private_dm_runtime::{
     AcceptInviteRequest, AttachmentSendResult, CloseSessionResult, InviteCreated, PrivateDmRuntime,
     SendMessageResult, SessionListSnapshot, SessionSnapshot, StartSessionRequest,
 };
-use adapters::org_runtime::{JoinOrgRequest, OrgRuntime, OrgSnapshot};
 use adapters::private_group_runtime::{
     CreateGroupRequest, GroupCreated, GroupLeaveResult, GroupListSnapshot, GroupSendResult,
     GroupSnapshot, JoinGroupRequest, PrivateGroupRuntime,

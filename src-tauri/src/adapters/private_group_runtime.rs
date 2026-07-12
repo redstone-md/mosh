@@ -20,11 +20,11 @@ use crate::adapters::org_roster::{self, Roster};
 use crate::adapters::org_signing;
 use crate::adapters::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
 use crate::adapters::persistence::Persistence;
-use ed25519_dalek::SigningKey;
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
 };
+use ed25519_dalek::SigningKey;
 
 const CONTROL_CHANNEL_PREFIX: &str = "group-control/";
 const DATA_CHANNEL_PREFIX: &str = "group-data/";
@@ -918,8 +918,7 @@ impl PrivateGroupRuntime {
             if !session.acting_admin() {
                 continue;
             }
-            let present: HashSet<String> =
-                session.crypto.member_identities().into_iter().collect();
+            let present: HashSet<String> = session.crypto.member_identities().into_iter().collect();
             for peer_id in removed_peer_ids {
                 if !present.contains(peer_id) {
                     continue;
@@ -1685,7 +1684,10 @@ impl GroupSession {
     /// Inbound control frame → (inner payload, verified sender peer-id).
     /// Org groups accept only valid `OrgSigned` frames; plain groups pass
     /// the payload through with no sender claim.
-    fn unwrap_control(&self, payload: Vec<u8>) -> Result<(Vec<u8>, Option<String>), PrivateGroupError> {
+    fn unwrap_control(
+        &self,
+        payload: Vec<u8>,
+    ) -> Result<(Vec<u8>, Option<String>), PrivateGroupError> {
         let Some(org_pubkey) = self.org_pubkey.as_deref() else {
             return Ok((payload, None));
         };
@@ -1745,12 +1747,10 @@ impl GroupSession {
     /// all. Plain groups: the legacy single-admin flag.
     fn acting_admin(&mut self) -> bool {
         if self.org_pubkey.is_some() {
-            return self
-                .own_peer_id()
-                .is_some_and(|id| {
-                    let id = id.clone();
-                    self.roster_role_is_admin(&id)
-                });
+            return self.own_peer_id().is_some_and(|id| {
+                let id = id.clone();
+                self.roster_role_is_admin(&id)
+            });
         }
         self.is_admin
     }
@@ -1817,7 +1817,10 @@ impl GroupSession {
         for entry in pending {
             if self.roster_role_is_admin(&entry.sender_peer_id) {
                 if let Err(error) = self.apply_commit_sequenced(entry.commit_b64) {
-                    eprintln!("group {}: lagged commit apply failed: {error}", self.group_id);
+                    eprintln!(
+                        "group {}: lagged commit apply failed: {error}",
+                        self.group_id
+                    );
                 }
             } else if Some(entry.roster_version) > mine {
                 self.roster_lag.push(entry);
@@ -2137,9 +2140,7 @@ impl GroupSession {
                     // Roster-derived authority incl. the lag buffer; own
                     // commits come back around but dedup as already-applied.
                     self.apply_org_commit(commit_b64, roster_version, sender_peer_id.as_deref())
-                } else if !self.is_admin
-                    && from_fingerprint == self.current_admin_fingerprint
-                {
+                } else if !self.is_admin && from_fingerprint == self.current_admin_fingerprint {
                     self.apply_commit_sequenced(commit_b64)
                 } else {
                     Ok(())
@@ -3029,7 +3030,12 @@ mod tests {
         p.put_org_roster(&org_key_hex(), &bytes).unwrap();
     }
 
-    fn org_signed_control(sender: &SigningKey, session_channel: &str, mesh_id: &str, envelope: &ControlEnvelope) -> Vec<u8> {
+    fn org_signed_control(
+        sender: &SigningKey,
+        session_channel: &str,
+        mesh_id: &str,
+        envelope: &ControlEnvelope,
+    ) -> Vec<u8> {
         let org = org_key_hex();
         let ctx = OrgContext {
             org_pubkey: &org,
@@ -3054,14 +3060,19 @@ mod tests {
             Arc::new(Persistence::open_with_dek(&db_path, [23u8; 32]).expect("store should open"));
 
         let admin_seed = [71u8; 32];
-        persistence.put_moss_identity(&identity_blob(admin_seed)).unwrap();
+        persistence
+            .put_moss_identity(&identity_blob(admin_seed))
+            .unwrap();
         let admin_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&admin_seed));
         let member_key = SigningKey::from_bytes(&[72u8; 32]);
         let member_peer = org_signing::peer_id_hex(&member_key);
         let stranger_key = SigningKey::from_bytes(&[73u8; 32]);
         put_signed_roster(
             &persistence,
-            &[(admin_peer.as_str(), "admin"), (member_peer.as_str(), "member")],
+            &[
+                (admin_peer.as_str(), "admin"),
+                (member_peer.as_str(), "member"),
+            ],
         );
 
         let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
@@ -3106,30 +3117,50 @@ mod tests {
 
         // Roster member with matching credential: admitted.
         let env = key_package_env(&member_peer, "p-bob");
-        deliver(&mut runtime, org_signed_control(&member_key, &control_channel, &mesh_id, &env));
+        deliver(
+            &mut runtime,
+            org_signed_control(&member_key, &control_channel, &mesh_id, &env),
+        );
         {
             let session = runtime.groups.get(&created.group_id).unwrap();
-            assert_eq!(session.crypto.member_count(), 2, "member should be admitted");
+            assert_eq!(
+                session.crypto.member_count(),
+                2,
+                "member should be admitted"
+            );
         }
 
         // Stranger (valid envelope, not in roster): dropped.
         let stranger_peer = org_signing::peer_id_hex(&stranger_key);
         let env = key_package_env(&stranger_peer, "p-eve");
-        deliver(&mut runtime, org_signed_control(&stranger_key, &control_channel, &mesh_id, &env));
+        deliver(
+            &mut runtime,
+            org_signed_control(&stranger_key, &control_channel, &mesh_id, &env),
+        );
         // Credential != envelope sender (member relays someone else's kp): dropped.
         let env = key_package_env(&stranger_peer, "p-eve2");
-        deliver(&mut runtime, org_signed_control(&member_key, &control_channel, &mesh_id, &env));
+        deliver(
+            &mut runtime,
+            org_signed_control(&member_key, &control_channel, &mesh_id, &env),
+        );
         // Raw, unenveloped frame on an org control channel: dropped.
         let env = key_package_env(&member_peer, "p-raw");
         deliver(&mut runtime, serde_json::to_vec(&env).unwrap());
         {
             let session = runtime.groups.get(&created.group_id).unwrap();
-            assert_eq!(session.crypto.member_count(), 2, "rejections must not admit");
+            assert_eq!(
+                session.crypto.member_count(),
+                2,
+                "rejections must not admit"
+            );
         }
 
         // Rejoin with a FRESH key package (device reinstall): replace, not add.
         let env = key_package_env(&member_peer, "p-bob-2");
-        deliver(&mut runtime, org_signed_control(&member_key, &control_channel, &mesh_id, &env));
+        deliver(
+            &mut runtime,
+            org_signed_control(&member_key, &control_channel, &mesh_id, &env),
+        );
         {
             let session = runtime.groups.get(&created.group_id).unwrap();
             assert_eq!(
@@ -3159,7 +3190,9 @@ mod tests {
             Arc::new(Persistence::open_with_dek(&db_path, [29u8; 32]).expect("store should open"));
 
         let admin_seed = [81u8; 32];
-        persistence.put_moss_identity(&identity_blob(admin_seed)).unwrap();
+        persistence
+            .put_moss_identity(&identity_blob(admin_seed))
+            .unwrap();
         let admin_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&admin_seed));
         let member_b_key = SigningKey::from_bytes(&[82u8; 32]);
         let member_b = org_signing::peer_id_hex(&member_b_key);
@@ -3229,20 +3262,34 @@ mod tests {
 
         // Non-admin commit with no version claim: dropped outright.
         let env = commit_from_b(None);
-        deliver(&mut runtime, org_signed_control(&member_b_key, &control_channel, &mesh_id, &env));
+        deliver(
+            &mut runtime,
+            org_signed_control(&member_b_key, &control_channel, &mesh_id, &env),
+        );
         {
             let session = runtime.groups.get_mut(&created.group_id).unwrap();
-            assert_eq!(session.crypto.member_count(), 2, "non-admin commit must not apply");
+            assert_eq!(
+                session.crypto.member_count(),
+                2,
+                "non-admin commit must not apply"
+            );
             assert!(session.roster_lag.is_empty());
         }
 
         // Same commit claiming roster v2 (ahead of ours): buffered, not applied.
         let env = commit_from_b(Some(2));
-        deliver(&mut runtime, org_signed_control(&member_b_key, &control_channel, &mesh_id, &env));
+        deliver(
+            &mut runtime,
+            org_signed_control(&member_b_key, &control_channel, &mesh_id, &env),
+        );
         {
             let session = runtime.groups.get_mut(&created.group_id).unwrap();
             assert_eq!(session.crypto.member_count(), 2);
-            assert_eq!(session.roster_lag.len(), 1, "ahead-of-roster commit buffers");
+            assert_eq!(
+                session.roster_lag.len(),
+                1,
+                "ahead-of-roster commit buffers"
+            );
         }
 
         // Roster v2 promotes B to admin: the buffered commit now applies.
@@ -3251,7 +3298,11 @@ mod tests {
             let session = runtime.groups.get_mut(&created.group_id).unwrap();
             session.sync_roster_state();
             assert!(session.roster_lag.is_empty());
-            assert_eq!(session.crypto.member_count(), 3, "commit applies once author is admin");
+            assert_eq!(
+                session.crypto.member_count(),
+                3,
+                "commit applies once author is admin"
+            );
         }
 
         let _ = std::fs::remove_file(&db_path);
@@ -3271,7 +3322,9 @@ mod tests {
             Arc::new(Persistence::open_with_dek(&db_path, [31u8; 32]).expect("store should open"));
 
         let admin_seed = [91u8; 32];
-        persistence.put_moss_identity(&identity_blob(admin_seed)).unwrap();
+        persistence
+            .put_moss_identity(&identity_blob(admin_seed))
+            .unwrap();
         let admin_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&admin_seed));
         let member_b_key = SigningKey::from_bytes(&[92u8; 32]);
         let member_b = org_signing::peer_id_hex(&member_b_key);
@@ -3320,7 +3373,12 @@ mod tests {
         put_roster(2, "member", true);
         runtime.enforce_roster_removals(&org_key_hex(), &[member_b.clone()]);
         assert_eq!(
-            runtime.groups.get(&created.group_id).unwrap().crypto.member_count(),
+            runtime
+                .groups
+                .get(&created.group_id)
+                .unwrap()
+                .crypto
+                .member_count(),
             2,
             "non-admin client must not author the kick"
         );
@@ -3330,7 +3388,11 @@ mod tests {
         runtime.enforce_roster_removals(&org_key_hex(), &[member_b.clone()]);
         {
             let session = runtime.groups.get(&created.group_id).unwrap();
-            assert_eq!(session.crypto.member_count(), 1, "revoked member must be removed");
+            assert_eq!(
+                session.crypto.member_count(),
+                1,
+                "revoked member must be removed"
+            );
             assert!(
                 !session.crypto.member_identities().contains(&member_b),
                 "revoked peer-id must not keep a leaf"
@@ -3346,7 +3408,12 @@ mod tests {
         // Idempotent: revoked peer already gone.
         runtime.enforce_roster_removals(&org_key_hex(), &[member_b]);
         assert_eq!(
-            runtime.groups.get(&created.group_id).unwrap().crypto.member_count(),
+            runtime
+                .groups
+                .get(&created.group_id)
+                .unwrap()
+                .crypto
+                .member_count(),
             1
         );
 
