@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { detectInvite } from "../invite/invite-detection";
 import { ORG_PUBKEY, orgSnapshot } from "../private-dm-test-utils";
 import { OrgSection } from "./OrgSection";
-import { computeRevokedDmBadges } from "./use-orgs";
+import { computeMissingRosterMembers, computeRevokedDmBadges } from "./use-orgs";
 
 const ORG_BUNDLE = `mosh://org?mesh=orgmesh-1&name=acme#org=${"a".repeat(64)}`;
 
@@ -15,6 +15,7 @@ function noopHandlers() {
     onDismissDmOffer: vi.fn(),
     onAcceptGroupOffer: vi.fn(),
     onDismissGroupOffer: vi.fn(),
+    onCreateGroup: vi.fn(),
     onLeave: vi.fn(),
   };
 }
@@ -81,6 +82,15 @@ describe("OrgSection", () => {
       screen.getByRole("button", { name: "Dismiss invite from bob" }),
     );
     expect(handlers.onDismissDmOffer).toHaveBeenCalledWith(ORG_PUBKEY, "offer-1");
+  });
+});
+
+describe("computeMissingRosterMembers", () => {
+  it("lists roster members without a group leaf, never self", () => {
+    const org = orgSnapshot();
+    const bob = "b".repeat(64);
+    expect(computeMissingRosterMembers(org, [])).toEqual([bob]);
+    expect(computeMissingRosterMembers(org, [bob])).toEqual([]);
   });
 });
 

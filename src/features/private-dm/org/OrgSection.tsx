@@ -2,9 +2,11 @@ import {
   IconBuilding,
   IconCrown,
   IconMessageCircle,
+  IconPlus,
   IconUsers,
   IconX,
 } from "@tabler/icons-react";
+import { useState } from "react";
 import { Avatar } from "../Avatar";
 import { shorten } from "../format";
 import type {
@@ -21,6 +23,7 @@ export function OrgSection({
   onDismissDmOffer,
   onAcceptGroupOffer,
   onDismissGroupOffer,
+  onCreateGroup,
   onLeave,
 }: {
   org: OrgSnapshot;
@@ -30,8 +33,13 @@ export function OrgSection({
   onDismissDmOffer: (orgPubkey: string, offerId: string) => void;
   onAcceptGroupOffer: (orgPubkey: string, offerId: string) => void;
   onDismissGroupOffer: (orgPubkey: string, offerId: string) => void;
+  onCreateGroup: (org: OrgSnapshot, label: string) => void;
   onLeave: (org: OrgSnapshot) => void;
 }) {
+  const [groupLabel, setGroupLabel] = useState("");
+  const selfIsAdmin = org.members.some(
+    (member) => member.is_self && member.role === "admin",
+  );
   return (
     <section className="rail-org" aria-label={`Organization ${org.org_name}`}>
       <div className="rail-org-header">
@@ -116,6 +124,37 @@ export function OrgSection({
           </button>
         </div>
       ))}
+
+      {org.in_roster && selfIsAdmin ? (
+        <form
+          className="rail-org-newgroup"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy) {
+              onCreateGroup(org, groupLabel);
+              setGroupLabel("");
+            }
+          }}
+        >
+          <input
+            type="text"
+            value={groupLabel}
+            placeholder={orgText.newGroupPlaceholder}
+            aria-label={`New group in ${org.org_name}`}
+            disabled={busy}
+            onChange={(event) => setGroupLabel(event.target.value)}
+          />
+          <button
+            type="submit"
+            className="btn btn-ghost btn-icon"
+            disabled={busy}
+            title={orgText.newGroup}
+            aria-label={`${orgText.newGroup} in ${org.org_name}`}
+          >
+            <IconPlus size={13} />
+          </button>
+        </form>
+      ) : null}
 
       {org.members.map((member) => (
         <button
