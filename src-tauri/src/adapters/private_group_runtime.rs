@@ -10,13 +10,17 @@ use crate::adapters::attachment_runtime::{
 use crate::adapters::attachment_store::AttachmentStore;
 use crate::adapters::commit_sequencer::{CommitSequencer, Disposition};
 use crate::adapters::message_id::MessageIdGen;
-use crate::adapters::mls_crypto::{MlsCryptoError, MlsSessionCrypto};
+use crate::adapters::mls_crypto::{AddOutcome, MlsCryptoError, MlsSessionCrypto};
 use crate::adapters::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
+use crate::adapters::org_envelope::{self, OrgContext, OrgSigned};
+use crate::adapters::org_roster::{self, Roster};
+use crate::adapters::org_signing;
 use crate::adapters::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
 use crate::adapters::persistence::Persistence;
+use ed25519_dalek::SigningKey;
 use crate::adapters::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
@@ -57,12 +61,19 @@ pub struct CreateGroupRequest {
     pub display_name: String,
     pub listen_port: u16,
     pub static_peer: Option<String>,
+    /// Set = org-bound group (ADR 0008): peer-id credentials, enveloped
+    /// control traffic, roster-derived authority and revocation.
+    #[serde(default)]
+    pub org_pubkey: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JoinGroupRequest {
     pub invite_uri: String,
     pub display_name: String,
+    /// Conveyed by the OrgGroupOffer that carried the invite (spec §5).
+    #[serde(default)]
+    pub org_pubkey: Option<String>,
     pub listen_port: u16,
     pub static_peer: Option<String>,
 }
@@ -116,6 +127,11 @@ pub struct GroupSnapshot {
     pub events: Vec<SnapshotEvent>,
     /// A commit gap could not be bridged by resync; the member must rejoin.
     pub needs_rejoin: bool,
+    /// Some = org-bound group (ADR 0008).
+    pub org_pubkey: Option<String>,
+    /// Leaf credential identities; on org groups these are moss peer-ids,
+    /// letting the UI diff the roster against group membership.
+    pub member_peer_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -330,6 +346,8 @@ struct PersistedGroupSession {
     mls_group_id: Vec<u8>,
     listen_port: u16,
     static_peer: Option<String>,
+    #[serde(default)]
+    org_pubkey: Option<String>,
 }
 
 pub struct PrivateGroupRuntime {
@@ -380,6 +398,14 @@ struct GroupSession {
     attachment_slots: HashMap<String, AttachmentSlot>,
     outbound_attempts: HashMap<String, OutboundAttemptRecord>,
     dm_offers: Vec<DmOffer>,
+    /// Org binding (ADR 0008). Some = control traffic is enveloped, the MLS
+    /// credential is the moss peer-id and authority derives from the roster.
+    org_pubkey: Option<String>,
+    /// Node identity key for enveloping; present iff `org_pubkey` is.
+    org_signer: Option<SigningKey>,
+    /// Verified-roster cache keyed by the raw stored bytes, so repeated
+    /// control messages don't re-verify an unchanged roster.
+    roster_cache: Option<(Vec<u8>, Roster)>,
 }
 
 impl PrivateGroupRuntime {
@@ -491,6 +517,24 @@ impl PrivateGroupRuntime {
                 attachment_slots: HashMap::new(),
                 outbound_attempts: HashMap::new(),
                 dm_offers: Vec::new(),
+                org_pubkey: rec.org_pubkey.clone(),
+                // Identity was mandatory at create/join time; if the blob
+                // vanished, the org group cannot sign control traffic — skip
+                // it rather than degrade to unauthenticated frames.
+                org_signer: match rec.org_pubkey.as_deref() {
+                    Some(_) => match load_org_signer(Some(p.as_ref())) {
+                        Ok(signer) => Some(signer),
+                        Err(error) => {
+                            eprintln!(
+                                "group rehydrate: org signer unavailable for {}: {error}",
+                                rec.group_id
+                            );
+                            continue;
+                        }
+                    },
+                    None => None,
+                },
+                roster_cache: None,
             };
             // A member may have missed commits while offline; ask the admin
             // for a replay. Best-effort: the mesh may not be connected yet —
@@ -504,7 +548,7 @@ impl PrivateGroupRuntime {
                         from_fingerprint: session.crypto.fingerprint(),
                         have_epoch,
                     };
-                    let _ = publish_json(&session.node, &session.control_channel, &request);
+                    let _ = session.publish_control(&request);
                 }
             }
             if let Ok(messages) = p.list_group_messages(&rec.group_id) {
@@ -594,7 +638,17 @@ impl PrivateGroupRuntime {
         let label = sanitize_label(request.label)?;
         let listen_port = request.listen_port;
         let static_peer = request.static_peer.clone();
-        let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
+        let org_signer = match request.org_pubkey.as_deref() {
+            Some(_) => Some(load_org_signer(self.persistence.as_deref())?),
+            None => None,
+        };
+        // Org groups bind the MLS leaf to the durable moss peer-id
+        // (ADR 0004); plain groups keep the display-name credential.
+        let credential_identity = org_signer
+            .as_ref()
+            .map(org_signing::peer_id_hex)
+            .unwrap_or_else(|| request.display_name.clone());
+        let mut crypto = MlsSessionCrypto::new(&credential_identity)?;
         crypto.create_group()?;
         let group_id = crypto.random_token("group")?;
         let mesh_id = crypto.random_token("groupmesh")?;
@@ -643,6 +697,9 @@ impl PrivateGroupRuntime {
             attachment_slots: HashMap::new(),
             outbound_attempts: HashMap::new(),
             dm_offers: Vec::new(),
+            org_pubkey: request.org_pubkey,
+            org_signer,
+            roster_cache: None,
         };
 
         self.groups.insert(group_id.clone(), session);
@@ -666,7 +723,15 @@ impl PrivateGroupRuntime {
         }
         let listen_port = request.listen_port;
         let static_peer = request.static_peer.clone();
-        let mut crypto = MlsSessionCrypto::new(&request.display_name)?;
+        let org_signer = match request.org_pubkey.as_deref() {
+            Some(_) => Some(load_org_signer(self.persistence.as_deref())?),
+            None => None,
+        };
+        let credential_identity = org_signer
+            .as_ref()
+            .map(org_signing::peer_id_hex)
+            .unwrap_or_else(|| request.display_name.clone());
+        let mut crypto = MlsSessionCrypto::new(&credential_identity)?;
         let participant_id = crypto.random_token("participant")?;
         let key_package = crypto.key_package_bytes()?;
         let node = start_node(
@@ -687,7 +752,13 @@ impl PrivateGroupRuntime {
             key_package_b64: encode(&key_package),
         };
         let control_channel = format!("{CONTROL_CHANNEL_PREFIX}{}", invite.group_id);
-        publish_json(&node, &control_channel, &envelope)?;
+        publish_control_message(
+            &node,
+            &control_channel,
+            &invite.mesh_id,
+            org_context(request.org_pubkey.as_deref(), org_signer.as_ref()),
+            &envelope,
+        )?;
         let session = GroupSession {
             group_id: invite.group_id.clone(),
             mesh_id: invite.mesh_id,
@@ -719,6 +790,9 @@ impl PrivateGroupRuntime {
             attachment_slots: HashMap::new(),
             outbound_attempts: HashMap::new(),
             dm_offers: Vec::new(),
+            org_pubkey: request.org_pubkey,
+            org_signer,
+            roster_cache: None,
         };
         self.groups.insert(invite.group_id.clone(), session);
         self.poll(&invite.group_id)
@@ -793,14 +867,10 @@ impl PrivateGroupRuntime {
             target_fingerprint,
             invite_uri,
         };
-        publish_json(
-            &session.node,
-            &session.control_channel,
-            &ControlEnvelope::DmOffer {
-                group_id: session.group_id.clone(),
-                offer,
-            },
-        )
+        session.publish_control(&ControlEnvelope::DmOffer {
+            group_id: session.group_id.clone(),
+            offer,
+        })
     }
 
     pub fn dismiss_dm_offer(
@@ -1127,13 +1197,13 @@ impl PrivateGroupRuntime {
                         from_fingerprint: own_fp.clone(),
                         commit_b64: encode(&commit_bytes),
                     };
-                    publish_json(&session.node, &session.control_channel, &commit_envelope)?;
+                    session.publish_control(&commit_envelope)?;
                     let handoff = ControlEnvelope::AdminHandoff {
                         group_id: session.group_id.clone(),
                         from_fingerprint: own_fp,
                         next_admin_fingerprint: next_admin,
                     };
-                    publish_json(&session.node, &session.control_channel, &handoff)?;
+                    session.publish_control(&handoff)?;
                 }
             } else {
                 // Non-admin emits a self-Remove proposal so the current admin
@@ -1144,7 +1214,7 @@ impl PrivateGroupRuntime {
                     from_fingerprint: own_fp,
                     proposal_b64: encode(&proposal_bytes),
                 };
-                publish_json(&session.node, &session.control_channel, &envelope)?;
+                session.publish_control(&envelope)?;
             }
         }
 
@@ -1509,7 +1579,127 @@ impl GroupSession {
             mls_group_id: self.crypto.group_id_bytes().unwrap_or_default(),
             listen_port: self.listen_port,
             static_peer: self.static_peer.clone(),
+            org_pubkey: self.org_pubkey.clone(),
         }
+    }
+
+    /// Control-channel publish. Org groups wrap every frame in the signed
+    /// envelope (ADR 0007) — including resync traffic, closing the
+    /// unauthenticated-resync residual from the plain-group path.
+    fn publish_control<T: Serialize>(&self, value: &T) -> Result<(), PrivateGroupError> {
+        publish_control_message(
+            &self.node,
+            &self.control_channel,
+            &self.mesh_id,
+            org_context(self.org_pubkey.as_deref(), self.org_signer.as_ref()),
+            value,
+        )
+    }
+
+    /// Inbound control frame → (inner payload, verified sender peer-id).
+    /// Org groups accept only valid `OrgSigned` frames; plain groups pass
+    /// the payload through with no sender claim.
+    fn unwrap_control(&self, payload: Vec<u8>) -> Result<(Vec<u8>, Option<String>), PrivateGroupError> {
+        let Some(org_pubkey) = self.org_pubkey.as_deref() else {
+            return Ok((payload, None));
+        };
+        let env: OrgSigned = decode_json(&payload)?;
+        let ctx = OrgContext {
+            org_pubkey,
+            mesh_id: &self.mesh_id,
+            channel_kind: &self.control_channel,
+        };
+        org_envelope::verify(&env, &ctx)
+            .map_err(|e| PrivateGroupError::Codec(format!("org envelope rejected: {e}")))?;
+        Ok((env.payload, Some(env.peer_id)))
+    }
+
+    /// Latest verified roster for this group's org, re-verified only when
+    /// the stored bytes change.
+    fn org_roster(&mut self) -> Option<Roster> {
+        let org_pubkey = self.org_pubkey.as_deref()?;
+        let bytes = self
+            .persistence
+            .as_ref()?
+            .get_org_roster(org_pubkey)
+            .ok()??;
+        if let Some((cached_bytes, roster)) = self.roster_cache.as_ref() {
+            if *cached_bytes == bytes {
+                return Some(roster.clone());
+            }
+        }
+        let roster = org_roster::verify(&bytes, org_pubkey, None).ok()?;
+        self.roster_cache = Some((bytes, roster.clone()));
+        Some(roster)
+    }
+
+    fn roster_contains(&mut self, peer_id: &str) -> bool {
+        self.org_roster()
+            .is_some_and(|r| r.members.iter().any(|m| m.moss_peer_id == peer_id))
+    }
+
+    /// Org admission rule (ADR 0004): the KeyPackage's credential identity
+    /// must equal the envelope's verified peer-id AND be in the roster.
+    /// `replace_member` removes any stale leaf with the same identity in the
+    /// same commit (rejoin/device-replace dedup); with none it's a plain Add.
+    fn admit_org_member(
+        &mut self,
+        sender_peer_id: Option<&str>,
+        participant_id: String,
+        key_package: &[u8],
+        own_fp: String,
+    ) -> Result<(), PrivateGroupError> {
+        let Some(sender) = sender_peer_id else {
+            return Ok(());
+        };
+        let identity = self.crypto.key_package_identity(key_package)?;
+        if identity != sender {
+            eprintln!(
+                "group {}: key package identity does not match envelope sender; dropped",
+                self.group_id
+            );
+            return Ok(());
+        }
+        if !self.roster_contains(&identity) {
+            eprintln!(
+                "group {}: joiner {identity} not in org roster; dropped",
+                self.group_id
+            );
+            return Ok(());
+        }
+        let pre_epoch = self.crypto.epoch();
+        let outcome = self.crypto.replace_member(&identity, key_package)?;
+        self.broadcast_admission(pre_epoch, &outcome, participant_id, own_fp)
+    }
+
+    fn broadcast_admission(
+        &mut self,
+        pre_epoch: Option<u64>,
+        outcome: &AddOutcome,
+        participant_id: String,
+        own_fp: String,
+    ) -> Result<(), PrivateGroupError> {
+        if let Some(epoch) = pre_epoch {
+            self.log_commit(epoch, &outcome.commit_bytes);
+        }
+        let commit_b64 = encode(&outcome.commit_bytes);
+        let welcome_envelope = ControlEnvelope::Welcome {
+            group_id: self.group_id.clone(),
+            for_participant_id: participant_id,
+            from_fingerprint: own_fp.clone(),
+            welcome_b64: encode(&outcome.welcome_bytes),
+            commit_b64: commit_b64.clone(),
+            tree_b64: encode(&outcome.tree_bytes),
+        };
+        self.publish_control(&welcome_envelope)?;
+        // Existing members need the Commit on the control channel so their
+        // MLS tree advances; the Welcome above is consumed only by the joiner.
+        let commit_envelope = ControlEnvelope::Commit {
+            group_id: self.group_id.clone(),
+            from_fingerprint: own_fp,
+            commit_b64,
+        };
+        self.publish_control(&commit_envelope)
     }
 
     fn handle_moss_message(
@@ -1520,7 +1710,8 @@ impl GroupSession {
             return Ok(());
         }
         if message.channel == self.control_channel {
-            self.handle_control(message.payload)
+            let (payload, sender_peer_id) = self.unwrap_control(message.payload)?;
+            self.handle_control(payload, sender_peer_id)
         } else if message.channel == self.data_channel {
             self.handle_data(message.payload)
         } else if message.channel == self.blob_channel {
@@ -1585,7 +1776,7 @@ impl GroupSession {
         };
         // Undo the request reservation if publishing failed, so the next gap
         // sighting retries instead of going silent until restart.
-        let result = publish_json(&self.node, &self.control_channel, &request);
+        let result = self.publish_control(&request);
         if result.is_err() {
             self.sequencer.rearm();
         }
@@ -1622,7 +1813,7 @@ impl GroupSession {
             for_fingerprint,
             commits,
         };
-        publish_json(&self.node, &self.control_channel, &response)
+        self.publish_control(&response)
     }
 
     /// Requester side: feed an admin's replay through sequencing. If a gap
@@ -1664,7 +1855,11 @@ impl GroupSession {
         );
     }
 
-    fn handle_control(&mut self, payload: Vec<u8>) -> Result<(), PrivateGroupError> {
+    fn handle_control(
+        &mut self,
+        payload: Vec<u8>,
+        sender_peer_id: Option<String>,
+    ) -> Result<(), PrivateGroupError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
         let own_fp = self.crypto.fingerprint();
         match envelope {
@@ -1683,30 +1878,17 @@ impl GroupSession {
                 if self.crypto.key_package_signer_is_member(&key_package)? {
                     return Ok(());
                 }
+                if self.org_pubkey.is_some() {
+                    return self.admit_org_member(
+                        sender_peer_id.as_deref(),
+                        participant_id,
+                        &key_package,
+                        own_fp,
+                    );
+                }
                 let pre_epoch = self.crypto.epoch();
                 let outcome = self.crypto.add_members(&[key_package.as_slice()])?;
-                if let Some(epoch) = pre_epoch {
-                    self.log_commit(epoch, &outcome.commit_bytes);
-                }
-                let commit_b64 = encode(&outcome.commit_bytes);
-                let welcome_envelope = ControlEnvelope::Welcome {
-                    group_id: self.group_id.clone(),
-                    for_participant_id: participant_id.clone(),
-                    from_fingerprint: own_fp.clone(),
-                    welcome_b64: encode(&outcome.welcome_bytes),
-                    commit_b64: commit_b64.clone(),
-                    tree_b64: encode(&outcome.tree_bytes),
-                };
-                publish_json(&self.node, &self.control_channel, &welcome_envelope)?;
-                // Existing members need the Commit on the control channel so
-                // their MLS tree advances; the Welcome above is consumed only
-                // by the new joiner.
-                let commit_envelope = ControlEnvelope::Commit {
-                    group_id: self.group_id.clone(),
-                    from_fingerprint: own_fp,
-                    commit_b64,
-                };
-                publish_json(&self.node, &self.control_channel, &commit_envelope)
+                self.broadcast_admission(pre_epoch, &outcome, participant_id, own_fp)
             }
             ControlEnvelope::Welcome {
                 group_id,
@@ -1785,7 +1967,7 @@ impl GroupSession {
                     from_fingerprint: own_fp,
                     commit_b64: encode(&commit_bytes),
                 };
-                publish_json(&self.node, &self.control_channel, &commit_envelope)
+                self.publish_control(&commit_envelope)
             }
             ControlEnvelope::ResyncRequest {
                 group_id,
@@ -1993,7 +2175,7 @@ impl GroupSession {
             from_fingerprint: self.device_fingerprint.clone(),
             manifest_ciphertext_b64: encode(&ciphertext),
         };
-        publish_json(&self.node, &self.control_channel, &envelope)?;
+        self.publish_control(&envelope)?;
 
         let descriptor = descriptor_of(&manifest);
         self.attachment_slots.insert(
@@ -2105,6 +2287,11 @@ impl GroupSession {
             dm_offers: self.dm_offers.clone(),
             mesh: self.mesh_info(),
             needs_rejoin: self.needs_rejoin,
+            org_pubkey: self.org_pubkey.clone(),
+            member_peer_ids: match self.org_pubkey {
+                Some(_) => self.crypto.member_identities(),
+                None => Vec::new(),
+            },
             events: snapshot_event_log()
                 .into_iter()
                 .map(|event| SnapshotEvent {
@@ -2314,6 +2501,51 @@ fn publish_json<T: Serialize>(
     let payload =
         serde_json::to_vec(value).map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
     node.publish(channel, &payload)
+        .map_err(|error| PrivateGroupError::Moss(error.to_string()))
+}
+
+fn org_context<'a>(
+    org_pubkey: Option<&'a str>,
+    org_signer: Option<&'a SigningKey>,
+) -> Option<(&'a str, &'a SigningKey)> {
+    org_pubkey.zip(org_signer)
+}
+
+/// Publish on a group control channel: wrapped in the org signed envelope
+/// when an org binding is present, raw JSON otherwise (ADR 0007).
+fn publish_control_message<T: Serialize>(
+    node: &MossNode,
+    control_channel: &str,
+    mesh_id: &str,
+    org: Option<(&str, &SigningKey)>,
+    value: &T,
+) -> Result<(), PrivateGroupError> {
+    match org {
+        Some((org_pubkey, signer)) => {
+            let payload = serde_json::to_vec(value)
+                .map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
+            let ctx = OrgContext {
+                org_pubkey,
+                mesh_id,
+                channel_kind: control_channel,
+            };
+            let env = org_envelope::sign(signer, &ctx, &payload);
+            publish_json(node, control_channel, &env)
+        }
+        None => publish_json(node, control_channel, value),
+    }
+}
+
+/// The node identity key doubles as the org control-channel signer. Its
+/// absence is an error, not a downgrade: an org group must never fall back
+/// to unauthenticated control traffic.
+fn load_org_signer(persistence: Option<&Persistence>) -> Result<SigningKey, PrivateGroupError> {
+    let blob = persistence
+        .ok_or_else(|| PrivateGroupError::Moss("org group requires persistence".to_string()))?
+        .get_moss_identity()
+        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?
+        .ok_or_else(|| PrivateGroupError::Moss("moss identity unavailable".to_string()))?;
+    org_signing::signing_key_from_identity(&blob)
         .map_err(|error| PrivateGroupError::Moss(error.to_string()))
 }
 
@@ -2531,6 +2763,155 @@ mod tests {
         assert_eq!(channel_group_id("public-channel/x"), None);
     }
 
+    fn org_key() -> SigningKey {
+        SigningKey::from_bytes(&[61u8; 32])
+    }
+
+    fn org_key_hex() -> String {
+        hex::encode(org_key().verifying_key().to_bytes())
+    }
+
+    fn identity_blob(seed: [u8; 32]) -> Vec<u8> {
+        let key = SigningKey::from_bytes(&seed);
+        let mut blob = vec![1u8];
+        blob.extend_from_slice(&seed);
+        blob.extend_from_slice(&key.verifying_key().to_bytes());
+        blob.extend_from_slice(&[0u8; 64]);
+        blob
+    }
+
+    fn put_signed_roster(p: &Persistence, members: &[(&str, &str)]) {
+        let mut doc = serde_json::json!({
+            "org_pubkey": org_key_hex(),
+            "org_name": "acme",
+            "version": 1,
+            "members": members
+                .iter()
+                .map(|(id, role)| serde_json::json!({
+                    "moss_peer_id": id, "name": "m", "role": role,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let bytes = org_roster::sign_roster(&mut doc, &org_key()).unwrap();
+        p.put_org_roster(&org_key_hex(), &bytes).unwrap();
+    }
+
+    fn org_signed_control(sender: &SigningKey, session_channel: &str, mesh_id: &str, envelope: &ControlEnvelope) -> Vec<u8> {
+        let org = org_key_hex();
+        let ctx = OrgContext {
+            org_pubkey: &org,
+            mesh_id,
+            channel_kind: session_channel,
+        };
+        let env = org_envelope::sign(sender, &ctx, &serde_json::to_vec(envelope).unwrap());
+        serde_json::to_vec(&env).unwrap()
+    }
+
+    #[test]
+    fn org_admission_enforces_identity_and_roster_with_replace_dedup() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-org-group-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [23u8; 32]).expect("store should open"));
+
+        let admin_seed = [71u8; 32];
+        persistence.put_moss_identity(&identity_blob(admin_seed)).unwrap();
+        let admin_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&admin_seed));
+        let member_key = SigningKey::from_bytes(&[72u8; 32]);
+        let member_peer = org_signing::peer_id_hex(&member_key);
+        let stranger_key = SigningKey::from_bytes(&[73u8; 32]);
+        put_signed_roster(
+            &persistence,
+            &[(admin_peer.as_str(), "admin"), (member_peer.as_str(), "member")],
+        );
+
+        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
+        let mut runtime =
+            PrivateGroupRuntime::from_shared(moss, temp_store(), Some(persistence.clone()));
+        let created = runtime
+            .create_group(CreateGroupRequest {
+                label: Some("Org Group".to_string()),
+                display_name: "Alice".to_string(),
+                listen_port: 42360,
+                static_peer: None,
+                org_pubkey: Some(org_key_hex()),
+            })
+            .expect("org group should be created");
+
+        // ADR 0004: the creator's leaf credential is their peer-id.
+        {
+            let session = runtime.groups.get(&created.group_id).unwrap();
+            assert_eq!(session.crypto.member_identities(), vec![admin_peer.clone()]);
+        }
+        let (control_channel, mesh_id) = {
+            let s = runtime.groups.get(&created.group_id).unwrap();
+            (s.control_channel.clone(), s.mesh_id.clone())
+        };
+        let key_package_env = |identity: &str, participant: &str| {
+            let mut crypto = MlsSessionCrypto::new(identity).unwrap();
+            ControlEnvelope::KeyPackage {
+                group_id: created.group_id.clone(),
+                participant_id: participant.to_string(),
+                from_device: "peer".to_string(),
+                from_fingerprint: "fp".to_string(),
+                key_package_b64: encode(&crypto.key_package_bytes().unwrap()),
+            }
+        };
+        let deliver = |runtime: &mut PrivateGroupRuntime, payload: Vec<u8>| {
+            let session = runtime.groups.get_mut(&created.group_id).unwrap();
+            let _ = session.handle_moss_message(MossReceivedMessage {
+                channel: control_channel.clone(),
+                payload,
+            });
+        };
+
+        // Roster member with matching credential: admitted.
+        let env = key_package_env(&member_peer, "p-bob");
+        deliver(&mut runtime, org_signed_control(&member_key, &control_channel, &mesh_id, &env));
+        {
+            let session = runtime.groups.get(&created.group_id).unwrap();
+            assert_eq!(session.crypto.member_count(), 2, "member should be admitted");
+        }
+
+        // Stranger (valid envelope, not in roster): dropped.
+        let stranger_peer = org_signing::peer_id_hex(&stranger_key);
+        let env = key_package_env(&stranger_peer, "p-eve");
+        deliver(&mut runtime, org_signed_control(&stranger_key, &control_channel, &mesh_id, &env));
+        // Credential != envelope sender (member relays someone else's kp): dropped.
+        let env = key_package_env(&stranger_peer, "p-eve2");
+        deliver(&mut runtime, org_signed_control(&member_key, &control_channel, &mesh_id, &env));
+        // Raw, unenveloped frame on an org control channel: dropped.
+        let env = key_package_env(&member_peer, "p-raw");
+        deliver(&mut runtime, serde_json::to_vec(&env).unwrap());
+        {
+            let session = runtime.groups.get(&created.group_id).unwrap();
+            assert_eq!(session.crypto.member_count(), 2, "rejections must not admit");
+        }
+
+        // Rejoin with a FRESH key package (device reinstall): replace, not add.
+        let env = key_package_env(&member_peer, "p-bob-2");
+        deliver(&mut runtime, org_signed_control(&member_key, &control_channel, &mesh_id, &env));
+        {
+            let session = runtime.groups.get(&created.group_id).unwrap();
+            assert_eq!(
+                session.crypto.member_count(),
+                2,
+                "stale leaf must be replaced in the same commit"
+            );
+            let snapshot = session.snapshot();
+            assert_eq!(snapshot.org_pubkey.as_deref(), Some(org_key_hex().as_str()));
+            assert_eq!(snapshot.member_peer_ids.len(), 2);
+        }
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
     #[test]
     fn group_history_and_session_survive_restart() {
         let _guard = MOSS_TEST_LOCK
@@ -2558,6 +2939,7 @@ mod tests {
                     display_name: "Alice".to_string(),
                     listen_port: 42240,
                     static_peer: None,
+                    org_pubkey: None,
                 })
                 .expect("group should be created");
             groups
@@ -2635,6 +3017,7 @@ mod tests {
                     display_name: "Alice".to_string(),
                     listen_port: 42241,
                     static_peer: None,
+                    org_pubkey: None,
                 })
                 .expect("group should be created");
             let _publish_fail = fail_next_test_publish("simulated publish failure");
@@ -2708,6 +3091,7 @@ mod tests {
                     display_name: "Alice".to_string(),
                     listen_port: 42242,
                     static_peer: None,
+                    org_pubkey: None,
                 })
                 .expect("group should be created");
             let _publish_fail = fail_next_test_publish("simulated publish failure");
