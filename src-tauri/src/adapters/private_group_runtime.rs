@@ -1384,9 +1384,7 @@ fn absorb_resync_commits(
         // Duplicates and stale entries no-op inside the sequencer.
         sequence_commit(crypto, sequencer, persistence, group_id, &commit.commit_b64)?;
     }
-    Ok(crypto
-        .epoch()
-        .is_some_and(|current| sequencer.gap(current)))
+    Ok(crypto.epoch().is_some_and(|current| sequencer.gap(current)))
 }
 
 fn log_group_commit(
@@ -2370,8 +2368,14 @@ mod tests {
 
         let mut seq = CommitSequencer::new();
         // Only the later commit arrived -> gap.
-        let out = sequence_commit(&mut member, &mut seq, None, "g-rs", &encode(&c2.commit_bytes))
-            .unwrap();
+        let out = sequence_commit(
+            &mut member,
+            &mut seq,
+            None,
+            "g-rs",
+            &encode(&c2.commit_bytes),
+        )
+        .unwrap();
         assert_eq!(out, SequenceOutcome::Gapped);
 
         // Admin replay carries the missing commit (and a duplicate).
@@ -2408,7 +2412,14 @@ mod tests {
         let c2 = admin.add_members(&[kp_e.as_slice()]).unwrap();
 
         let mut seq = CommitSequencer::new();
-        sequence_commit(&mut member, &mut seq, None, "g-rj", &encode(&c2.commit_bytes)).unwrap();
+        sequence_commit(
+            &mut member,
+            &mut seq,
+            None,
+            "g-rj",
+            &encode(&c2.commit_bytes),
+        )
+        .unwrap();
         // Admin has nothing to replay (fresh state) -> member must rejoin.
         let needs_rejoin =
             absorb_resync_commits(&mut member, &mut seq, None, "g-rj", Vec::new()).unwrap();
