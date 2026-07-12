@@ -165,6 +165,15 @@ enum OrgMessage {
         moss_peer_id: String,
         display_name: String,
     },
+    /// Roster-driven DM bootstrap (spec §4): carries a regular DM invite URI
+    /// so both sides land in the existing create/accept machinery. Accepted
+    /// only from verified roster members, accept-once by `offer_id`.
+    DmOffer {
+        offer_id: String,
+        target_peer_id: String,
+        from_name: String,
+        invite_uri: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -184,6 +193,8 @@ struct OrgSession {
     org_name: String,
     mesh_id: String,
     display_name: String,
+    listen_port: u16,
+    static_peer: Option<String>,
     node: MossNode,
     control_channel: String,
     signer: SigningKey,
@@ -194,12 +205,25 @@ struct OrgSession {
     roster_bytes: Option<Vec<u8>>,
     dm_offers: Vec<OrgDmOfferView>,
     dm_links: Vec<OrgDmLink>,
+    seen_offer_ids: std::collections::HashSet<String>,
     pending_removals: Vec<String>,
     #[cfg(test)]
     roster_publishes: u32,
 }
 
 impl OrgSession {
+    fn to_record(&self) -> PersistedOrgRecord {
+        PersistedOrgRecord {
+            org_pubkey: self.org_pubkey.clone(),
+            org_name: self.org_name.clone(),
+            mesh_id: self.mesh_id.clone(),
+            display_name: self.display_name.clone(),
+            listen_port: self.listen_port,
+            static_peer: self.static_peer.clone(),
+            dm_links: self.dm_links.clone(),
+        }
+    }
+
     fn in_roster(&self) -> bool {
         self.roster
             .as_ref()
@@ -332,7 +356,38 @@ impl OrgSession {
                     self.publish_roster();
                 }
             }
+            OrgMessage::DmOffer {
+                offer_id,
+                target_peer_id,
+                from_name,
+                invite_uri,
+            } => {
+                if target_peer_id != self.own_peer_id {
+                    return;
+                }
+                if !self.sender_in_roster(sender_peer_id) {
+                    eprintln!("org dm offer from non-member dropped: {sender_peer_id}");
+                    return;
+                }
+                // Accept-once: gossip redelivers, and a replayed offer must
+                // not resurface after accept/dismiss (spec replay handling).
+                if !self.seen_offer_ids.insert(offer_id.clone()) {
+                    return;
+                }
+                self.dm_offers.push(OrgDmOfferView {
+                    offer_id,
+                    from_peer_id: sender_peer_id.to_string(),
+                    from_name,
+                    invite_uri,
+                });
+            }
         }
+    }
+
+    fn sender_in_roster(&self, sender_peer_id: &str) -> bool {
+        self.roster
+            .as_ref()
+            .is_some_and(|r| r.members.iter().any(|m| m.moss_peer_id == sender_peer_id))
     }
 
     fn absorb_roster_bytes(&mut self, persistence: Option<&Persistence>, bytes: &[u8]) {
@@ -389,6 +444,29 @@ fn encode(bytes: &[u8]) -> String {
 fn decode(encoded: &str) -> Result<Vec<u8>, OrgError> {
     base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
         .map_err(|e| OrgError::Codec(e.to_string()))
+}
+
+fn random_id() -> Result<String, OrgError> {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .map_err(|e| OrgError::Codec(e.to_string()))?;
+    Ok(hex::encode(bytes))
+}
+
+fn upsert_link(links: &mut Vec<OrgDmLink>, peer_id: &str, session_id: Option<String>) {
+    if let Some(link) = links.iter_mut().find(|link| link.peer_id == peer_id) {
+        // Never downgrade a known session id back to None on a re-offer.
+        if session_id.is_some() {
+            link.session_id = session_id;
+        }
+        return;
+    }
+    links.push(OrgDmLink {
+        peer_id: peer_id.to_string(),
+        session_id,
+    });
 }
 
 pub struct OrgRuntime {
@@ -460,6 +538,82 @@ impl OrgRuntime {
         let mut out: Vec<OrgSnapshot> = self.orgs.values().map(OrgSession::snapshot).collect();
         out.sort_by(|a, b| a.org_name.cmp(&b.org_name));
         out
+    }
+
+    /// Offer a DM to a roster member: lib.rs creates the invite via the DM
+    /// runtime first, then routes the URI here. The link is recorded
+    /// immediately so the sender's UI can navigate before the session id is
+    /// known; `link_dm` fills it in.
+    pub fn send_dm_offer(
+        &mut self,
+        org_pubkey: &str,
+        target_peer_id: &str,
+        invite_uri: &str,
+    ) -> Result<(), OrgError> {
+        let session = self
+            .orgs
+            .get_mut(org_pubkey)
+            .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        let message = OrgMessage::DmOffer {
+            offer_id: random_id()?,
+            target_peer_id: target_peer_id.to_string(),
+            from_name: session.display_name.clone(),
+            invite_uri: invite_uri.to_string(),
+        };
+        publish_signed(session, &message)?;
+        upsert_link(&mut session.dm_links, target_peer_id, None);
+        let record = session.to_record();
+        self.persist_record(&record)
+    }
+
+    /// Consume a pending offer; returns its invite URI for the DM runtime's
+    /// accept path.
+    pub fn accept_dm_offer(
+        &mut self,
+        org_pubkey: &str,
+        offer_id: &str,
+    ) -> Result<String, OrgError> {
+        let session = self
+            .orgs
+            .get_mut(org_pubkey)
+            .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        let position = session
+            .dm_offers
+            .iter()
+            .position(|offer| offer.offer_id == offer_id)
+            .ok_or_else(|| OrgError::Codec(format!("unknown dm offer {offer_id}")))?;
+        let offer = session.dm_offers.remove(position);
+        upsert_link(&mut session.dm_links, &offer.from_peer_id, None);
+        let record = session.to_record();
+        self.persist_record(&record)?;
+        Ok(offer.invite_uri)
+    }
+
+    pub fn dismiss_dm_offer(&mut self, org_pubkey: &str, offer_id: &str) -> Result<(), OrgError> {
+        let session = self
+            .orgs
+            .get_mut(org_pubkey)
+            .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        session.dm_offers.retain(|offer| offer.offer_id != offer_id);
+        Ok(())
+    }
+
+    /// Attach the DM session id to an org link once the DM runtime created
+    /// or accepted the session. Links are never deleted on revocation — the
+    /// DM outlives org membership (spec §6), the UI just badges it.
+    pub fn link_dm(
+        &mut self,
+        org_pubkey: &str,
+        peer_id: &str,
+        session_id: &str,
+    ) -> Result<(), OrgError> {
+        let session = self
+            .orgs
+            .get_mut(org_pubkey)
+            .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        upsert_link(&mut session.dm_links, peer_id, Some(session_id.to_string()));
+        let record = session.to_record();
+        self.persist_record(&record)
     }
 
     /// Peer-ids removed by roster updates since the last call — the caller
@@ -535,6 +689,8 @@ impl OrgRuntime {
             org_name: record.org_name,
             mesh_id: record.mesh_id,
             display_name: record.display_name,
+            listen_port: record.listen_port,
+            static_peer: record.static_peer,
             node,
             signer,
             own_peer_id,
@@ -542,6 +698,7 @@ impl OrgRuntime {
             roster_bytes,
             dm_offers: Vec::new(),
             dm_links: record.dm_links,
+            seen_offer_ids: std::collections::HashSet::new(),
             pending_removals: Vec::new(),
             #[cfg(test)]
             roster_publishes: 0,
@@ -615,294 +772,5 @@ impl OrgRuntime {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::adapters::moss_ffi::{drain_received_messages, MOSS_TEST_LOCK};
-    use std::path::PathBuf;
-
-    const ORG_KEY_HEX: &str =
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-    fn bundle(mesh: &str) -> String {
-        format!("mosh://org?mesh={mesh}&name=acme#org={ORG_KEY_HEX}")
-    }
-
-    fn org_key() -> SigningKey {
-        SigningKey::from_bytes(&[2u8; 32])
-    }
-
-    fn org_key_hex() -> String {
-        hex::encode(org_key().verifying_key().to_bytes())
-    }
-
-    fn org_bundle(mesh: &str) -> String {
-        format!("mosh://org?mesh={mesh}&name=acme#org={}", org_key_hex())
-    }
-
-    fn signed_roster(version: u64, members: &[(&str, &str, &str)]) -> Vec<u8> {
-        let mut doc = serde_json::json!({
-            "org_pubkey": org_key_hex(),
-            "org_name": "acme",
-            "version": version,
-            "members": members
-                .iter()
-                .map(|(id, name, role)| serde_json::json!({
-                    "moss_peer_id": id, "name": name, "role": role,
-                }))
-                .collect::<Vec<_>>(),
-        });
-        org_roster::sign_roster(&mut doc, &org_key()).unwrap()
-    }
-
-    fn roster_wire(bytes: &[u8]) -> Vec<u8> {
-        serde_json::to_vec(&OrgWire::Roster {
-            roster_b64: encode(bytes),
-        })
-        .unwrap()
-    }
-
-    fn identity_blob(seed: [u8; 32]) -> Vec<u8> {
-        let key = SigningKey::from_bytes(&seed);
-        let mut blob = vec![1u8];
-        blob.extend_from_slice(&seed);
-        blob.extend_from_slice(&key.verifying_key().to_bytes());
-        blob.extend_from_slice(&[0u8; 64]);
-        blob
-    }
-
-    fn temp_persistence(tag: &str, seed: [u8; 32]) -> (Arc<Persistence>, PathBuf) {
-        let mut path = std::env::temp_dir();
-        path.push(format!("mosh-org-rt-{tag}-{}.redb", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        let p = Persistence::open_with_dek(&path, [9u8; 32]).expect("store should open");
-        p.put_moss_identity(&identity_blob(seed)).unwrap();
-        (Arc::new(p), path)
-    }
-
-    #[test]
-    fn parses_bundle_uri() {
-        let parsed = ParsedOrgBundle::parse(&bundle("orgmesh-1")).unwrap();
-        assert_eq!(parsed.mesh_id, "orgmesh-1");
-        assert_eq!(parsed.org_name, "acme");
-        assert_eq!(parsed.org_pubkey, ORG_KEY_HEX);
-    }
-
-    #[test]
-    fn rejects_bad_bundles() {
-        for bad in [
-            "mosh://org?mesh=m&name=x#org=zz",
-            &format!("mosh://org?name=x#org={ORG_KEY_HEX}"),
-            &format!("mosh://org?mesh=m#org={ORG_KEY_HEX}"),
-            &format!("https://org?mesh=m&name=x#org={ORG_KEY_HEX}"),
-            "mosh://org?mesh=m&name=x",
-            &format!("mosh://org?mesh=m&name=x#{ORG_KEY_HEX}"),
-        ] {
-            assert!(ParsedOrgBundle::parse(bad).is_err(), "accepted: {bad}");
-        }
-    }
-
-    #[test]
-    fn join_persists_record_and_reports_confirmation_code() {
-        let _guard = MOSS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        drain_received_messages();
-
-        let seed = [42u8; 32];
-        let (persistence, path) = temp_persistence("join", seed);
-        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
-        let mut runtime = OrgRuntime::from_shared(Arc::clone(&moss), Some(persistence.clone()));
-
-        let snapshot = runtime
-            .join_org(JoinOrgRequest {
-                bundle_uri: bundle("orgmesh-join"),
-                display_name: "Alice".into(),
-                listen_port: 42310,
-                static_peer: None,
-            })
-            .expect("join should succeed");
-
-        let expected_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&seed));
-        assert_eq!(snapshot.own_peer_id, expected_peer);
-        assert_eq!(
-            snapshot.confirmation_code,
-            org_signing::confirmation_code(&expected_peer)
-        );
-        assert!(!snapshot.in_roster);
-        assert!(snapshot.members.is_empty());
-        assert!(persistence.get_org_record(ORG_KEY_HEX).unwrap().is_some());
-
-        // Same org twice = duplicate.
-        assert!(matches!(
-            runtime.join_org(JoinOrgRequest {
-                bundle_uri: bundle("orgmesh-join"),
-                display_name: "Alice".into(),
-                listen_port: 42311,
-                static_peer: None,
-            }),
-            Err(OrgError::Duplicate(_))
-        ));
-
-        runtime.leave_org(ORG_KEY_HEX).expect("leave should work");
-        assert!(persistence.get_org_record(ORG_KEY_HEX).unwrap().is_none());
-        assert!(matches!(
-            runtime.poll(ORG_KEY_HEX),
-            Err(OrgError::NotJoined(_))
-        ));
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn rehydrate_restores_sessions_from_records() {
-        let _guard = MOSS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        drain_received_messages();
-
-        let (persistence, path) = temp_persistence("rehydrate", [43u8; 32]);
-        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
-        {
-            let mut runtime =
-                OrgRuntime::from_shared(Arc::clone(&moss), Some(persistence.clone()));
-            runtime
-                .join_org(JoinOrgRequest {
-                    bundle_uri: bundle("orgmesh-re"),
-                    display_name: "Alice".into(),
-                    listen_port: 42320,
-                    static_peer: None,
-                })
-                .expect("join should succeed");
-        }
-
-        let mut revived = OrgRuntime::from_shared(moss, Some(persistence));
-        revived.rehydrate();
-        let listing = revived.list();
-        assert_eq!(listing.len(), 1);
-        assert_eq!(listing[0].org_pubkey, ORG_KEY_HEX);
-        assert_eq!(listing[0].org_name, "acme");
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn roster_gossip_verifies_persists_and_tracks_removals() {
-        let _guard = MOSS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        drain_received_messages();
-
-        let seed = [44u8; 32];
-        let own_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&seed));
-        let other_peer = hex::encode([0x55u8; 32]);
-        let (persistence, path) = temp_persistence("roster", seed);
-        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
-        let mut runtime = OrgRuntime::from_shared(moss, Some(persistence.clone()));
-        let org = org_key_hex();
-        runtime
-            .join_org(JoinOrgRequest {
-                bundle_uri: org_bundle("orgmesh-roster"),
-                display_name: "Alice".into(),
-                listen_port: 42330,
-                static_peer: None,
-            })
-            .unwrap();
-
-        // Verified roster lands: members visible, self recognized, persisted.
-        let v2 = signed_roster(
-            2,
-            &[(own_peer.as_str(), "alice", "admin"), (other_peer.as_str(), "bob", "member")],
-        );
-        runtime.ingest_for_test(&org, &roster_wire(&v2));
-        let snap = runtime.poll(&org).unwrap();
-        assert!(snap.in_roster);
-        assert_eq!(snap.roster_version, Some(2));
-        assert_eq!(snap.members.len(), 2);
-        assert!(snap.members.iter().any(|m| m.is_self));
-        assert_eq!(persistence.get_org_roster(&org).unwrap().unwrap(), v2);
-
-        // Rollback rejected, tamper rejected.
-        let v1 = signed_roster(1, &[(own_peer.as_str(), "alice", "admin")]);
-        runtime.ingest_for_test(&org, &roster_wire(&v1));
-        let mut tampered = signed_roster(3, &[(other_peer.as_str(), "eve", "admin")]);
-        let byte = tampered.len() / 2;
-        tampered[byte] ^= 0x01;
-        runtime.ingest_for_test(&org, &roster_wire(&tampered));
-        let snap = runtime.poll(&org).unwrap();
-        assert_eq!(snap.roster_version, Some(2));
-
-        // Removal surfaces exactly once via take_pending_removals.
-        let v3 = signed_roster(3, &[(own_peer.as_str(), "alice", "admin")]);
-        runtime.ingest_for_test(&org, &roster_wire(&v3));
-        assert_eq!(runtime.take_pending_removals(&org), vec![other_peer.clone()]);
-        assert!(runtime.take_pending_removals(&org).is_empty());
-        let snap = runtime.poll(&org).unwrap();
-        assert_eq!(snap.members.len(), 1);
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn hello_and_stale_roster_trigger_republish() {
-        let _guard = MOSS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        drain_received_messages();
-
-        let seed = [45u8; 32];
-        let own_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&seed));
-        let (persistence, path) = temp_persistence("serve", seed);
-        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
-        let mut runtime = OrgRuntime::from_shared(moss, Some(persistence));
-        let org = org_key_hex();
-        runtime
-            .join_org(JoinOrgRequest {
-                bundle_uri: org_bundle("orgmesh-serve"),
-                display_name: "Alice".into(),
-                listen_port: 42340,
-                static_peer: None,
-            })
-            .unwrap();
-        let v2 = signed_roster(2, &[(own_peer.as_str(), "alice", "admin")]);
-        runtime.ingest_for_test(&org, &roster_wire(&v2));
-
-        // A newcomer's (envelope-valid) hello makes the member serve the roster.
-        let newcomer = SigningKey::from_bytes(&[46u8; 32]);
-        let hello = OrgMessage::Hello {
-            moss_peer_id: org_signing::peer_id_hex(&newcomer),
-            display_name: "Bob".into(),
-        };
-        let mesh = "orgmesh-serve".to_string();
-        let ctx = OrgContext {
-            org_pubkey: &org,
-            mesh_id: &mesh,
-            channel_kind: ORG_CHANNEL_KIND,
-        };
-        let env = org_envelope::sign(&newcomer, &ctx, &serde_json::to_vec(&hello).unwrap());
-        let wire = serde_json::to_vec(&OrgWire::Signed {
-            payload_b64: encode(&env.payload),
-            peer_id: env.peer_id.clone(),
-            sig_b64: encode(&env.sig),
-        })
-        .unwrap();
-        runtime.ingest_for_test(&org, &wire);
-        assert_eq!(runtime.orgs.get(&org).unwrap().roster_publishes, 1);
-
-        // A hello with a broken signature must NOT be served.
-        let mut bad = wire.clone();
-        let flip = bad.len() / 2;
-        bad[flip] ^= 0x01;
-        runtime.ingest_for_test(&org, &bad);
-        assert_eq!(runtime.orgs.get(&org).unwrap().roster_publishes, 1);
-
-        // A STALE roster from a lagging peer triggers convergence republish;
-        // an equal-version duplicate stays silent.
-        let v1 = signed_roster(1, &[(own_peer.as_str(), "alice", "admin")]);
-        runtime.ingest_for_test(&org, &roster_wire(&v1));
-        assert_eq!(runtime.orgs.get(&org).unwrap().roster_publishes, 2);
-        runtime.ingest_for_test(&org, &roster_wire(&v2));
-        assert_eq!(runtime.orgs.get(&org).unwrap().roster_publishes, 2);
-
-        let _ = std::fs::remove_file(&path);
-    }
-}
+#[path = "org_runtime_tests.rs"]
+mod tests;
