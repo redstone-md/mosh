@@ -355,9 +355,10 @@
         assert_eq!(snap.dm_offers[0].offer_id, "o1");
         assert_eq!(snap.dm_offers[0].from_peer_id, member_peer);
 
-        // Accept: returns the URI, records a link, persists it.
-        let uri = runtime.accept_dm_offer(&org, "o1").unwrap();
-        assert_eq!(uri, "mosh://dm?mesh=x&session=y");
+        // Accept: returns the offer view, records a link, persists it.
+        let accepted = runtime.accept_dm_offer(&org, "o1").unwrap();
+        assert_eq!(accepted.invite_uri, "mosh://dm?mesh=x&session=y");
+        assert_eq!(accepted.from_peer_id, member_peer);
         runtime.link_dm(&org, &member_peer, "session-1").unwrap();
         let snap = runtime.poll(&org).unwrap();
         assert!(snap.dm_offers.is_empty());

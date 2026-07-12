@@ -52,6 +52,15 @@ pub struct OrgDmLink {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct OrgGroupOfferView {
+    pub offer_id: String,
+    pub from_peer_id: String,
+    pub from_name: String,
+    pub group_label: Option<String>,
+    pub group_invite_uri: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct OrgSnapshot {
     pub org_pubkey: String,
     pub org_name: String,
@@ -62,6 +71,7 @@ pub struct OrgSnapshot {
     pub roster_version: Option<u64>,
     pub members: Vec<OrgMemberView>,
     pub dm_offers: Vec<OrgDmOfferView>,
+    pub group_offers: Vec<OrgGroupOfferView>,
     pub dm_links: Vec<OrgDmLink>,
 }
 
@@ -174,6 +184,15 @@ enum OrgMessage {
         from_name: String,
         invite_uri: String,
     },
+    /// Invitation into an org-bound group (spec §5): only roster members
+    /// receive offers; the invite URI feeds the normal group join flow.
+    GroupOffer {
+        offer_id: String,
+        target_peer_id: String,
+        from_name: String,
+        group_label: Option<String>,
+        group_invite_uri: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -204,6 +223,7 @@ struct OrgSession {
     /// the org signature stays valid (re-serializing could reorder fields).
     roster_bytes: Option<Vec<u8>>,
     dm_offers: Vec<OrgDmOfferView>,
+    group_offers: Vec<OrgGroupOfferView>,
     dm_links: Vec<OrgDmLink>,
     seen_offer_ids: std::collections::HashSet<String>,
     pending_removals: Vec<String>,
@@ -255,6 +275,7 @@ impl OrgSession {
                 })
                 .unwrap_or_default(),
             dm_offers: self.dm_offers.clone(),
+            group_offers: self.group_offers.clone(),
             dm_links: self.dm_links.clone(),
         }
     }
@@ -379,6 +400,31 @@ impl OrgSession {
                     from_peer_id: sender_peer_id.to_string(),
                     from_name,
                     invite_uri,
+                });
+            }
+            OrgMessage::GroupOffer {
+                offer_id,
+                target_peer_id,
+                from_name,
+                group_label,
+                group_invite_uri,
+            } => {
+                if target_peer_id != self.own_peer_id {
+                    return;
+                }
+                if !self.sender_in_roster(sender_peer_id) {
+                    eprintln!("org group offer from non-member dropped: {sender_peer_id}");
+                    return;
+                }
+                if !self.seen_offer_ids.insert(offer_id.clone()) {
+                    return;
+                }
+                self.group_offers.push(OrgGroupOfferView {
+                    offer_id,
+                    from_peer_id: sender_peer_id.to_string(),
+                    from_name,
+                    group_label,
+                    group_invite_uri,
                 });
             }
         }
@@ -566,13 +612,13 @@ impl OrgRuntime {
         self.persist_record(&record)
     }
 
-    /// Consume a pending offer; returns its invite URI for the DM runtime's
-    /// accept path.
+    /// Consume a pending offer; the returned view carries the invite URI
+    /// for the DM runtime's accept path and the peer to link afterwards.
     pub fn accept_dm_offer(
         &mut self,
         org_pubkey: &str,
         offer_id: &str,
-    ) -> Result<String, OrgError> {
+    ) -> Result<OrgDmOfferView, OrgError> {
         let session = self
             .orgs
             .get_mut(org_pubkey)
@@ -586,7 +632,63 @@ impl OrgRuntime {
         upsert_link(&mut session.dm_links, &offer.from_peer_id, None);
         let record = session.to_record();
         self.persist_record(&record)?;
-        Ok(offer.invite_uri)
+        Ok(offer)
+    }
+
+    /// Offer an org-bound group to a roster member over org-control.
+    pub fn send_group_offer(
+        &mut self,
+        org_pubkey: &str,
+        target_peer_id: &str,
+        group_invite_uri: &str,
+        group_label: Option<String>,
+    ) -> Result<(), OrgError> {
+        let session = self
+            .orgs
+            .get_mut(org_pubkey)
+            .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        let message = OrgMessage::GroupOffer {
+            offer_id: random_id()?,
+            target_peer_id: target_peer_id.to_string(),
+            from_name: session.display_name.clone(),
+            group_label,
+            group_invite_uri: group_invite_uri.to_string(),
+        };
+        publish_signed(session, &message)
+    }
+
+    /// Consume a pending group offer; the view carries the invite URI for
+    /// the group runtime's join path.
+    pub fn accept_group_offer(
+        &mut self,
+        org_pubkey: &str,
+        offer_id: &str,
+    ) -> Result<OrgGroupOfferView, OrgError> {
+        let session = self
+            .orgs
+            .get_mut(org_pubkey)
+            .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        let position = session
+            .group_offers
+            .iter()
+            .position(|offer| offer.offer_id == offer_id)
+            .ok_or_else(|| OrgError::Codec(format!("unknown group offer {offer_id}")))?;
+        Ok(session.group_offers.remove(position))
+    }
+
+    pub fn dismiss_group_offer(
+        &mut self,
+        org_pubkey: &str,
+        offer_id: &str,
+    ) -> Result<(), OrgError> {
+        let session = self
+            .orgs
+            .get_mut(org_pubkey)
+            .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        session
+            .group_offers
+            .retain(|offer| offer.offer_id != offer_id);
+        Ok(())
     }
 
     pub fn dismiss_dm_offer(&mut self, org_pubkey: &str, offer_id: &str) -> Result<(), OrgError> {
@@ -697,6 +799,7 @@ impl OrgRuntime {
             roster,
             roster_bytes,
             dm_offers: Vec::new(),
+            group_offers: Vec::new(),
             dm_links: record.dm_links,
             seen_offer_ids: std::collections::HashSet::new(),
             pending_removals: Vec::new(),

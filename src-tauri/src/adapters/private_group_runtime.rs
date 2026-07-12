@@ -900,6 +900,62 @@ impl PrivateGroupRuntime {
         })
     }
 
+    /// Crypto layer of revocation (spec §6, ADR 0008): for every group
+    /// bound to `org_pubkey` where this client may author commits, remove
+    /// ALL leaves belonging to the revoked peer-ids and broadcast the
+    /// commits. Peers not present in a group are skipped silently. Called
+    /// by lib.rs whenever the org runtime reports roster removals.
+    pub fn enforce_roster_removals(&mut self, org_pubkey: &str, removed_peer_ids: &[String]) {
+        if removed_peer_ids.is_empty() {
+            return;
+        }
+        for session in self.groups.values_mut() {
+            if session.org_pubkey.as_deref() != Some(org_pubkey) {
+                continue;
+            }
+            // The roster just changed: lag-buffered commits may apply now.
+            session.sync_roster_state();
+            if !session.acting_admin() {
+                continue;
+            }
+            let present: HashSet<String> =
+                session.crypto.member_identities().into_iter().collect();
+            for peer_id in removed_peer_ids {
+                if !present.contains(peer_id) {
+                    continue;
+                }
+                let own_fp = session.crypto.fingerprint();
+                let pre_epoch = session.crypto.epoch();
+                let commit_bytes = match session.crypto.remove_members_by_identity(peer_id) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        eprintln!(
+                            "group {}: auto-kick of {peer_id} failed: {error}",
+                            session.group_id
+                        );
+                        continue;
+                    }
+                };
+                if let Some(epoch) = pre_epoch {
+                    session.log_commit(epoch, &commit_bytes);
+                }
+                let commit_envelope = ControlEnvelope::Commit {
+                    group_id: session.group_id.clone(),
+                    from_fingerprint: own_fp,
+                    commit_b64: encode(&commit_bytes),
+                    roster_version: session.own_roster_version(),
+                };
+                if let Err(error) = session.publish_control(&commit_envelope) {
+                    eprintln!(
+                        "group {}: auto-kick commit publish failed: {error}",
+                        session.group_id
+                    );
+                }
+            }
+        }
+        self.persist_group_tail();
+    }
+
     pub fn dismiss_dm_offer(
         &mut self,
         group_id: &str,
@@ -3197,6 +3253,102 @@ mod tests {
             assert!(session.roster_lag.is_empty());
             assert_eq!(session.crypto.member_count(), 3, "commit applies once author is admin");
         }
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn enforce_roster_removals_kicks_only_when_acting_admin() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-org-kick-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [31u8; 32]).expect("store should open"));
+
+        let admin_seed = [91u8; 32];
+        persistence.put_moss_identity(&identity_blob(admin_seed)).unwrap();
+        let admin_peer = org_signing::peer_id_hex(&SigningKey::from_bytes(&admin_seed));
+        let member_b_key = SigningKey::from_bytes(&[92u8; 32]);
+        let member_b = org_signing::peer_id_hex(&member_b_key);
+
+        let put_roster = |version: u64, own_role: &str, with_b: bool| {
+            let mut members = vec![serde_json::json!({
+                "moss_peer_id": admin_peer, "name": "a", "role": own_role,
+            })];
+            if with_b {
+                members.push(serde_json::json!({
+                    "moss_peer_id": member_b, "name": "b", "role": "member",
+                }));
+            }
+            let mut doc = serde_json::json!({
+                "org_pubkey": org_key_hex(),
+                "org_name": "acme",
+                "version": version,
+                "members": members,
+            });
+            let bytes = org_roster::sign_roster(&mut doc, &org_key()).unwrap();
+            persistence.put_org_roster(&org_key_hex(), &bytes).unwrap();
+        };
+        put_roster(1, "admin", true);
+
+        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
+        let mut runtime =
+            PrivateGroupRuntime::from_shared(moss, temp_store(), Some(persistence.clone()));
+        let created = runtime
+            .create_group(CreateGroupRequest {
+                label: None,
+                display_name: "Alice".to_string(),
+                listen_port: 42380,
+                static_peer: None,
+                org_pubkey: Some(org_key_hex()),
+            })
+            .unwrap();
+        {
+            let session = runtime.groups.get_mut(&created.group_id).unwrap();
+            let mut b_crypto = MlsSessionCrypto::new(&member_b).unwrap();
+            let kp = b_crypto.key_package_bytes().unwrap();
+            session.crypto.add_members(&[kp.as_slice()]).unwrap();
+            assert_eq!(session.crypto.member_count(), 2);
+        }
+
+        // Not an admin in the current roster: no kick happens.
+        put_roster(2, "member", true);
+        runtime.enforce_roster_removals(&org_key_hex(), &[member_b.clone()]);
+        assert_eq!(
+            runtime.groups.get(&created.group_id).unwrap().crypto.member_count(),
+            2,
+            "non-admin client must not author the kick"
+        );
+
+        // Admin again and B revoked: the kick commit lands and is logged.
+        put_roster(3, "admin", false);
+        runtime.enforce_roster_removals(&org_key_hex(), &[member_b.clone()]);
+        {
+            let session = runtime.groups.get(&created.group_id).unwrap();
+            assert_eq!(session.crypto.member_count(), 1, "revoked member must be removed");
+            assert!(
+                !session.crypto.member_identities().contains(&member_b),
+                "revoked peer-id must not keep a leaf"
+            );
+        }
+        assert!(
+            !persistence
+                .list_group_commits_from(&created.group_id, 0)
+                .unwrap()
+                .is_empty(),
+            "kick commit must be logged for resync"
+        );
+        // Idempotent: revoked peer already gone.
+        runtime.enforce_roster_removals(&org_key_hex(), &[member_b]);
+        assert_eq!(
+            runtime.groups.get(&created.group_id).unwrap().crypto.member_count(),
+            1
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }
