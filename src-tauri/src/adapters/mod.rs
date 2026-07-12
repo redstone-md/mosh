@@ -13,6 +13,7 @@ pub mod network_inventory;
 pub mod openmls_crypto;
 pub mod org_envelope;
 pub mod org_roster;
+pub mod org_runtime;
 pub mod org_signing;
 pub mod outbound_delivery;
 pub mod persistence;
