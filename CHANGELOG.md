@@ -4,6 +4,37 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-13
+
+### Added
+- **Organizations: join a team roster and message its members.** A company or
+  group can now run Mosh as a closed network. You join an organization from an
+  invite link, which shows you a short confirmation code to read out to your
+  admin — no keys to copy, no way to be added by someone who doesn't already
+  have your code. Once approved you see the org's member list and can start an
+  end-to-end encrypted direct message with anyone on it in one click, without
+  swapping invite links first.
+- **Org groups.** An org admin can spin up a group chat and pull in members
+  straight from the roster. The group is bound to the organization: only people
+  the admin has approved can be in it.
+- **Membership is enforced, not advisory.** When an admin removes someone from
+  the organization, that person is automatically dropped from every org group —
+  and the removal sticks across restarts and for groups you had closed at the
+  time. Removed members lose access to future messages; a "no longer in" marker
+  shows on any direct chat with someone who has left. If a group ever falls too
+  far behind to catch up on membership changes, Mosh tells you to ask an admin
+  to re-invite you rather than showing a silently stale member list.
+- **The roster is cryptographically signed by the organization.** Membership is
+  gossiped peer-to-peer with no central server, and every client verifies the
+  organization's signature and rejects any attempt to roll the roster back to an
+  older version. Messages stay end-to-end encrypted throughout (OpenMLS +
+  Noise); the roster only decides who is allowed in, never what is said.
+
+### Notes
+- Creating and administering an organization is done with a separate admin tool
+  that holds the organization's signing key; the Mosh app never sees that key.
+  Personal one-to-one DMs and groups are unchanged and need no organization.
+
 ## [0.4.3] - 2026-07-08
 
 ### Fixed
