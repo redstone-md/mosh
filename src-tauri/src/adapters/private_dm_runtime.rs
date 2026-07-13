@@ -1008,16 +1008,24 @@ impl PrivateDmRuntime {
                 continue;
             };
             // Authenticate: the frame's sender must be the peer we exchanged
-            // ids with. Unknown/mismatched sender => drop (anti-spoof). If we
-            // have not learned peer_moss_id yet, accept and pin it (first
-            // relay frame can precede a resent handshake).
+            // ids with. If we have not learned peer_moss_id yet, accept and pin
+            // it (first relay frame can precede a resent handshake). While the
+            // MLS handshake is still incomplete, a mismatched sender re-pins
+            // instead of dropping: a peer that restarted without a persisted
+            // moss identity resumes the handshake under a fresh peer-id, and
+            // holding the stale pin would deadlock a relay-only session. Once
+            // the peer has joined, mismatches drop (anti-spoof); MLS still
+            // authenticates every payload either way.
             match session.peer_moss_id.as_deref() {
                 Some(known) if known != inbound.sender_hex => {
-                    eprintln!(
-                        "dropping relay frame: sender {} != peer",
-                        inbound.sender_hex
-                    );
-                    continue;
+                    if session.peer_joined {
+                        eprintln!(
+                            "dropping relay frame: sender {} != peer",
+                            inbound.sender_hex
+                        );
+                        continue;
+                    }
+                    session.peer_moss_id = Some(inbound.sender_hex.clone());
                 }
                 None => session.peer_moss_id = Some(inbound.sender_hex.clone()),
                 _ => {}
@@ -1541,12 +1549,13 @@ impl PrivateDmSession {
         }
     }
 
-    /// Remember the peer's moss relay peer-id, learned from the first
-    /// KeyPackage/Welcome that carries it. Sticky: once set, later handshake
-    /// retransmits never overwrite it.
+    /// Remember the peer's moss relay peer-id from the latest KeyPackage or
+    /// Welcome that carries it. Latest wins: a peer that restarts without a
+    /// persisted moss identity re-handshakes under a fresh peer-id, and pinning
+    /// the first one strands every relayed send on a dead id.
     fn note_peer_moss_id(&mut self, id: Option<String>) {
         if let Some(id) = id {
-            self.peer_moss_id.get_or_insert(id);
+            self.peer_moss_id = Some(id);
         }
     }
 
@@ -2965,6 +2974,119 @@ mod tests {
             .handle_control(payload, None)
             .expect("KeyPackage should add Bob");
         assert_eq!(session.peer_moss_id, Some(bob_moss_peer_id));
+    }
+
+    // A peer that restarts without a persisted moss identity re-handshakes
+    // under a fresh peer-id; the latest KeyPackage must replace the stale pin
+    // or every relayed send keeps targeting a dead id.
+    #[test]
+    fn key_package_with_new_moss_id_replaces_stale_pin() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42187,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let mut bob_crypto = MlsSessionCrypto::new("Bob").expect("Bob crypto should init");
+        let key_package_b64 = encode(
+            &bob_crypto
+                .key_package_bytes()
+                .expect("Bob key package should build"),
+        );
+        let make_payload = |moss_peer_id: String| {
+            serde_json::to_vec(&ControlEnvelope::KeyPackage {
+                session_id: invite.session_id.clone(),
+                participant_id: "bob-participant".to_string(),
+                from_device: "Bob".to_string(),
+                key_package_b64: key_package_b64.clone(),
+                moss_peer_id: Some(moss_peer_id),
+            })
+            .expect("KeyPackage envelope should serialize")
+        };
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+        session
+            .handle_control(make_payload("ab".repeat(32)), None)
+            .expect("first KeyPackage should add Bob");
+        assert_eq!(session.peer_moss_id, Some("ab".repeat(32)));
+
+        session
+            .handle_control(make_payload("cd".repeat(32)), None)
+            .expect("resent KeyPackage should be handled");
+        assert_eq!(
+            session.peer_moss_id,
+            Some("cd".repeat(32)),
+            "restarted peer's fresh moss id should replace the stale pin"
+        );
+    }
+
+    // Pre-join, a relay frame from an unknown sender re-pins peer_moss_id (the
+    // peer may have restarted with a fresh identity mid-handshake); post-join,
+    // a mismatched sender still drops to keep the anti-spoof guard.
+    #[test]
+    fn relay_frame_repins_before_join_and_drops_after() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42189,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let frame = serde_json::to_vec(&wire::RelayFrame {
+            session_id: invite.session_id.clone(),
+            channel_kind: wire::ChannelKind::Control,
+            bytes: vec![1, 2, 3],
+        })
+        .expect("relay frame should serialize");
+
+        {
+            let session = alice
+                .sessions
+                .get_mut(&invite.session_id)
+                .expect("Alice session should exist");
+            session.peer_moss_id = Some("ab".repeat(32));
+            assert!(!session.peer_joined, "handshake must be incomplete");
+        }
+        crate::adapters::moss_ffi::push_relay_for_test([0xCD; 32], frame.clone());
+        alice.drain_relay();
+        assert_eq!(
+            alice.sessions[&invite.session_id].peer_moss_id,
+            Some("cd".repeat(32)),
+            "pre-join mismatch should re-pin to the live sender"
+        );
+
+        alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist")
+            .peer_joined = true;
+        crate::adapters::moss_ffi::push_relay_for_test([0xEF; 32], frame);
+        alice.drain_relay();
+        assert_eq!(
+            alice.sessions[&invite.session_id].peer_moss_id,
+            Some("cd".repeat(32)),
+            "post-join mismatch must not re-pin"
+        );
     }
 
     // Task 5: a Relayed session with no peer moss-id (and no relay node) must
