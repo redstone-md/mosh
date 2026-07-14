@@ -4,6 +4,15 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-13
+
+### Fixed
+- **Direct messages follow a peer to their current address.** A one-to-one chat
+  no longer stays pinned to the first network identity it saw for someone. When
+  a contact reconnects from a new location or restarts, Mosh now tracks their
+  latest address, so messages keep flowing instead of silently going to a stale
+  endpoint.
+
 ## [0.5.0] - 2026-07-13
 
 ### Added
