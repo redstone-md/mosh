@@ -168,6 +168,17 @@ impl OutboundQueue {
         {
             return Ok(());
         }
+        // A newer re-send of a tracked message supersedes a queued older
+        // copy: during relay warm-up the resend pump enqueues one copy per
+        // cadence tick, which would otherwise stack until the TTL reaps
+        // them (and overflow the cap with enough unacked messages).
+        if job.message_id.is_some() {
+            if let Some(position) = self.jobs.iter().position(|pending| {
+                pending.job.session_id == job.session_id && pending.job.message_id == job.message_id
+            }) {
+                self.jobs.remove(position);
+            }
+        }
         if self.jobs.len() >= QUEUE_CAP {
             return Err(job);
         }
@@ -384,6 +395,20 @@ mod tests {
             2,
             "distinct user messages with equal bytes both queue"
         );
+    }
+
+    #[test]
+    fn newer_tracked_resend_replaces_queued_copy() {
+        let mut queue = OutboundQueue::default();
+        assert!(queue.push(job("s1", Some("m1"), b"resend-1"), 0).is_ok());
+        assert!(queue
+            .push(job("s1", Some("m1"), b"resend-2"), 15_000)
+            .is_ok());
+        assert_eq!(queue.jobs.len(), 1, "same message keeps one queued copy");
+        assert_eq!(queue.jobs[0].job.bytes, b"resend-2", "newest copy wins");
+        // Different session, same message id: untouched.
+        assert!(queue.push(job("s2", Some("m1"), b"other"), 0).is_ok());
+        assert_eq!(queue.jobs.len(), 2);
     }
 
     #[test]
