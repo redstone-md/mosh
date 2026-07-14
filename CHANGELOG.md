@@ -4,7 +4,7 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-07-14
 
 ### Fixed
 - **The app no longer freezes while a relayed chat is connecting.** Sending
