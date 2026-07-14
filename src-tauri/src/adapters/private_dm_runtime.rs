@@ -126,10 +126,11 @@ pub struct PrivateDmRuntime {
     sessions: HashMap<String, PrivateDmSession>,
     relay_ref: relay::RelayRef,
     relay: Option<relay::RelayHandle>,
-    // Outcomes reported by the relay send worker. Kept alive across a relay
-    // release so results for jobs the worker was still draining are not lost;
-    // replaced wholesale on the next relay start.
-    relay_results: Option<mpsc::Receiver<relay::RelayJobResult>>,
+    // Outcomes reported by relay send workers. A release→re-acquire cycle can
+    // briefly leave an old worker settling its last jobs, so every started
+    // worker's receiver is kept until it disconnects and drains empty —
+    // otherwise those tracked messages would sit Pending forever.
+    relay_results: Vec<mpsc::Receiver<relay::RelayJobResult>>,
 }
 
 /// Borrowed intake of the relay send worker, threaded through the session
@@ -264,7 +265,7 @@ impl PrivateDmRuntime {
             sessions: HashMap::new(),
             relay_ref: relay::RelayRef::default(),
             relay: None,
-            relay_results: None,
+            relay_results: Vec::new(),
         }
     }
 
@@ -281,7 +282,7 @@ impl PrivateDmRuntime {
         if self.relay.is_none() {
             let (handle, results) = relay::start_relay_node(&self.moss)?;
             self.relay = Some(handle);
-            self.relay_results = Some(results);
+            self.relay_results.push(results);
         }
         self.relay_ref.acquire();
         self.relay
@@ -290,9 +291,10 @@ impl PrivateDmRuntime {
     }
 
     /// Decrement the relay refcount; the last release drops the handle, which
-    /// disconnects the worker's intake — the worker drains its queue, exits,
-    /// and only then releases the node (MossNode::drop → Moss_Stop). The
-    /// results receiver stays so those late outcomes still drain.
+    /// disconnects the worker's intake — the worker fails its queued jobs,
+    /// exits promptly, and releases the node (MossNode::drop → Moss_Stop).
+    /// The results receiver stays in `relay_results` so those final outcomes
+    /// still settle their messages instead of stranding them Pending.
     fn release_relay(&mut self) {
         if self.relay_ref.release() == 0 {
             self.relay = None;
@@ -420,9 +422,19 @@ impl PrivateDmRuntime {
             }
             if let Ok(rows) = p.list_outbound_attempts(OUTBOUND_SCOPE_PRIVATE_DM, &rec.session_id) {
                 for row in rows {
-                    let Ok(attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row) else {
+                    let Ok(mut attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row)
+                    else {
                         continue;
                     };
+                    // A Pending attempt cannot survive a restart: whoever held
+                    // it (the relay send worker or an in-flight publish) died
+                    // with the process, so nothing will ever settle it.
+                    // Surface a retryable failure instead of a forever-spinner.
+                    if attempt.delivery_status == MessageDeliveryStatus::Pending {
+                        attempt.delivery_status = MessageDeliveryStatus::Failed;
+                        attempt.delivery_error =
+                            Some("app closed before the send completed".to_string());
+                    }
                     let Ok(mut message) =
                         serde_json::from_str::<ChatMessage>(&attempt.message_json)
                     else {
@@ -761,6 +773,12 @@ impl PrivateDmRuntime {
                     .outbound_attempts
                     .get_mut(message_id)
                     .ok_or_else(|| PrivateDmRuntimeError::MissingMessage(message_id.to_string()))?;
+                // A Pending attempt is already sitting in the relay worker's
+                // queue; enqueueing a twin would race two results for one
+                // message (a late failure could overwrite a delivered Sent).
+                if attempt.delivery_status == MessageDeliveryStatus::Pending {
+                    return Err(PrivateDmRuntimeError::Moss("send already in flight".into()));
+                }
                 attempt.retry_count = attempt.retry_count.saturating_add(1);
                 attempt.delivery_status = MessageDeliveryStatus::Pending;
                 attempt.delivery_error = None;
@@ -1117,10 +1135,16 @@ impl PrivateDmRuntime {
     /// Fire-and-forget frames (no message_id) only get their failures logged;
     /// tracked Data messages settle Pending → Sent / Failed here.
     fn drain_relay_results(&mut self) {
-        let Some(receiver) = self.relay_results.as_ref() else {
-            return;
-        };
-        let outcomes: Vec<relay::RelayJobResult> = receiver.try_iter().collect();
+        let mut outcomes: Vec<relay::RelayJobResult> = Vec::new();
+        // Collect from every live worker; drop a receiver only once its worker
+        // has exited (Disconnected) and nothing is left buffered.
+        self.relay_results.retain(|receiver| loop {
+            match receiver.try_recv() {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(mpsc::TryRecvError::Empty) => break true,
+                Err(mpsc::TryRecvError::Disconnected) => break false,
+            }
+        });
         for outcome in outcomes {
             let Some(message_id) = outcome.message_id else {
                 if let Some(error) = outcome.error {
@@ -3363,7 +3387,7 @@ mod tests {
             node: Arc::new(relay_node),
             jobs: jobs_tx,
         });
-        alice.relay_results = Some(results_rx);
+        alice.relay_results.push(results_rx);
 
         {
             let session = alice
@@ -3437,6 +3461,91 @@ mod tests {
             session.outbound_attempts.contains_key(&failed_id),
             "failed attempt stays retryable"
         );
+    }
+
+    // A message that dies in the worker queue when the app closes must not
+    // rehydrate as an eternal Pending spinner: restore normalizes it to a
+    // retryable failure.
+    #[test]
+    fn stale_pending_attempt_rehydrates_as_retryable_failure() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-dm-stale-pending-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [7u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        // Runtime #1: queue a relayed message (stays Pending) and "crash".
+        let session_id = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42193,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            let relay_node = alice
+                .moss
+                .init_default_node(
+                    "relay-stale-test-mesh",
+                    &crate::adapters::moss_ffi::MossNodeConfig::default(),
+                )
+                .expect("relay test node should init");
+            let (jobs_tx, _jobs_rx) = mpsc::channel();
+            alice.relay = Some(relay::RelayHandle {
+                node: Arc::new(relay_node),
+                jobs: jobs_tx,
+            });
+            {
+                let session = alice
+                    .sessions
+                    .get_mut(&invite.session_id)
+                    .expect("Alice session should exist");
+                session.path = DmPath::Relayed;
+                session.peer_moss_id = Some("ab".repeat(32));
+            }
+            let result = alice
+                .send_message(&invite.session_id, "doomed".to_string())
+                .expect("send should queue");
+            assert_eq!(result.delivery_status, MessageDeliveryStatus::Pending);
+            invite.session_id
+        };
+
+        // Runtime #2: rehydrate — the stale Pending must surface as Failed.
+        let mut revived =
+            PrivateDmRuntime::from_shared(runtime, temp_store(), Some(persistence.clone()));
+        revived.rehydrate();
+        let session = revived
+            .sessions
+            .get(&session_id)
+            .expect("session should rehydrate");
+        let message = session
+            .messages
+            .iter()
+            .find(|m| m.body == "doomed")
+            .expect("message should rehydrate");
+        assert_eq!(message.delivery_status, Some(MessageDeliveryStatus::Failed));
+        assert_eq!(message.retryable, Some(true));
+        let attempt = session
+            .outbound_attempts
+            .values()
+            .next()
+            .expect("attempt should rehydrate");
+        assert_eq!(attempt.delivery_status, MessageDeliveryStatus::Failed);
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]

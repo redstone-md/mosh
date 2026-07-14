@@ -40,6 +40,9 @@ const MAX_SEND_ATTEMPTS: u32 = 3;
 const RETRY_BACKOFF_MS: u64 = 2_000;
 /// Hard bound on queued jobs; overflow fails fast instead of hoarding memory.
 const QUEUE_CAP: usize = 256;
+/// Send attempts per worker tick. Each attempt can block ~5s in the FFI, so
+/// an unbounded inner loop over due jobs would starve intake and expiry.
+const MAX_SENDS_PER_TICK: usize = 4;
 
 /// One outbound relay frame. `message_id` is set only for user Data messages
 /// whose delivery status the UI tracks; fire-and-forget frames (handshake,
@@ -62,7 +65,8 @@ pub struct RelayJobResult {
 
 /// Runtime-side face of the shared relay: the node (diagnostics + lifecycle)
 /// and the job intake. Dropping the handle disconnects the intake channel;
-/// the worker drains what it holds, then exits and releases its node Arc.
+/// the worker fails whatever is still queued, exits promptly, and releases
+/// its node Arc (which stops the node once the runtime's Arc is gone too).
 pub struct RelayHandle {
     pub node: Arc<MossNode>,
     pub jobs: mpsc::Sender<RelayJob>,
@@ -136,6 +140,9 @@ struct PendingJob {
     enqueued_ms: u64,
     attempts: u32,
     next_attempt_ms: u64,
+    // Error of the most recent failed attempt, so an expiry after real
+    // attempts reports the actual send failure, not "relay not ready".
+    last_error: Option<String>,
 }
 
 /// Pure scheduling state for the worker, kept FFI-free so the dedupe / cap /
@@ -169,6 +176,7 @@ impl OutboundQueue {
             enqueued_ms: now_ms,
             attempts: 0,
             next_attempt_ms: now_ms,
+            last_error: None,
         });
         Ok(())
     }
@@ -218,7 +226,11 @@ fn job_result(pending: &PendingJob, error: Option<String>) -> RelayJobResult {
 /// Worker loop: intake with a short poll so retries/readiness still tick,
 /// expire jobs the relay never became ready for, and send due jobs with
 /// bounded retries. The blocking FFI call happens here, on this thread only —
-/// never under the DM runtime mutex.
+/// never under the DM runtime mutex. When the runtime drops the handle
+/// (relay released) the worker fails whatever is still queued and exits
+/// promptly, so its node Arc is not kept alive next to a freshly re-acquired
+/// relay node (two nodes on one mesh from one IP kill each other's
+/// announces).
 fn run_worker(
     node: Arc<MossNode>,
     jobs: mpsc::Receiver<RelayJob>,
@@ -226,37 +238,43 @@ fn run_worker(
 ) {
     let started = Instant::now();
     let mut queue = OutboundQueue::default();
-    let mut disconnected = false;
     loop {
-        if disconnected && queue.is_empty() {
-            return;
-        }
         let now = started.elapsed().as_millis() as u64;
-        if disconnected {
-            std::thread::sleep(Duration::from_millis(READY_POLL_MS));
-        } else {
-            match jobs.recv_timeout(Duration::from_millis(READY_POLL_MS)) {
-                Ok(job) => {
+        match jobs.recv_timeout(Duration::from_millis(READY_POLL_MS)) {
+            Ok(job) => {
+                intake(&mut queue, &results, job, now);
+                while let Ok(job) = jobs.try_recv() {
                     intake(&mut queue, &results, job, now);
-                    while let Ok(job) = jobs.try_recv() {
-                        intake(&mut queue, &results, job, now);
-                    }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => disconnected = true,
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                while let Some(pending) = queue.jobs.pop_front() {
+                    let _ = results.send(job_result(
+                        &pending,
+                        Some("relay released before the send completed".to_string()),
+                    ));
+                }
+                return;
             }
         }
         let now = started.elapsed().as_millis() as u64;
         for dead in queue.expire(now) {
-            let _ = results.send(job_result(
-                &dead,
-                Some("relay not ready in time".to_string()),
-            ));
+            let error = dead
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "relay not ready in time".to_string());
+            let _ = results.send(job_result(&dead, Some(error)));
         }
         if queue.is_empty() || !relay_ready(&node) {
             continue;
         }
-        while let Some(mut pending) = queue.pop_due(started.elapsed().as_millis() as u64) {
+        // Bounded batch per tick: each attempt can block ~5s, and intake /
+        // expiry must keep running between batches.
+        for _ in 0..MAX_SENDS_PER_TICK {
+            let Some(mut pending) = queue.pop_due(started.elapsed().as_millis() as u64) else {
+                break;
+            };
             match node.relay_send_to(&pending.job.target, &pending.job.bytes) {
                 Ok(()) => {
                     let _ = results.send(job_result(&pending, None));
@@ -266,6 +284,7 @@ fn run_worker(
                     if pending.attempts >= MAX_SEND_ATTEMPTS {
                         let _ = results.send(job_result(&pending, Some(error.to_string())));
                     } else {
+                        pending.last_error = Some(error.to_string());
                         pending.next_attempt_ms =
                             started.elapsed().as_millis() as u64 + RETRY_BACKOFF_MS;
                         queue.requeue(pending);
@@ -288,6 +307,7 @@ fn intake(
             enqueued_ms: now_ms,
             attempts: 0,
             next_attempt_ms: now_ms,
+            last_error: None,
         };
         let _ = results.send(job_result(
             &overflow,
