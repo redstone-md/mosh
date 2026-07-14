@@ -552,6 +552,10 @@ impl ChannelRuntime {
                 delivery_status: MessageDeliveryStatus::Pending,
                 delivery_error: None,
                 retry_count: 0,
+                // Channels have no DeliveryAck flow; the resend fields are
+                // inert here.
+                auto_resends: 0,
+                last_send_ms: sent_at_ms,
             };
             session.upsert_message(message);
             session

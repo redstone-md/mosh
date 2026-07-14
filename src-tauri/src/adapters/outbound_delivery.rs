@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub enum MessageDeliveryStatus {
     Pending,
     Sent,
+    /// The peer's runtime acknowledged receipt (private DM only). `Sent` means
+    /// "handed to the transport"; only `Delivered` proves the frame arrived.
+    Delivered,
     Failed,
 }
 
@@ -62,4 +65,10 @@ pub struct OutboundAttemptRecord {
     pub delivery_error: Option<String>,
     #[serde(default)]
     pub retry_count: u32,
+    /// Automatic re-sends performed while waiting for the peer's DeliveryAck.
+    #[serde(default)]
+    pub auto_resends: u32,
+    /// Wall-clock ms of the last (re-)send, driving the auto-resend cadence.
+    #[serde(default)]
+    pub last_send_ms: u64,
 }
