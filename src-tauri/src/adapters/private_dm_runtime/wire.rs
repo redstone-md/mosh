@@ -93,12 +93,15 @@ pub enum ControlEnvelope {
         reason: String,
     },
     /// Receipt for one Data message: the receiving runtime stored (or already
-    /// had) the message. Old clients fail to decode the unknown variant and
-    /// drop the frame — harmless, they simply never ack.
+    /// had) the message. The acked message id travels MLS-encrypted — a
+    /// plaintext ack could be forged by anyone on the pubsub mesh to fake
+    /// delivery and silence the auto-resend loop; only the MLS peer can
+    /// produce a ciphertext that decrypts. Old clients fail to decode the
+    /// unknown variant and drop the frame — harmless, they simply never ack.
     DeliveryAck {
         session_id: String,
         participant_id: String,
-        message_id: String,
+        ack_ciphertext_b64: String,
     },
 }
 
@@ -115,7 +118,8 @@ pub struct DataEnvelope {
     /// Auto-resend counter. Only purpose: make each re-send's bytes differ
     /// from the original so the receiver's frame-level sha256 dedup lets the
     /// duplicate through to the message-id re-ack path. Old clients ignore
-    /// the unknown field and dedupe by message_id as before.
+    /// the unknown field; their MLS decrypt of the replayed ciphertext fails
+    /// (forward secrecy) and the frame is dropped with a logged error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resend: Option<u32>,
 }
