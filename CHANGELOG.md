@@ -4,6 +4,25 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The app no longer freezes while a relayed chat is connecting.** Sending
+  over the relay used to block the whole interface for several seconds at a
+  time whenever the relay link was still warming up or the peer was
+  unreachable. Relay sends now run in the background: messages queue up, wait
+  for the relay to become usable, and retry on their own.
+- **Messages sent while the relay is warming up no longer fail instantly.**
+  Instead of an immediate "relay send failed", a queued message stays marked
+  as sending and goes out as soon as the relay converges (or reports a real
+  failure after retries).
+
+### Added
+- **Diagnostics show relay warm-up.** While the shared relay node has not yet
+  found a relay-capable supernode, the conversation's Path row reads "relayed
+  via supernode (warming up)" so a not-yet-usable relay is no longer
+  indistinguishable from a working one.
+
 ## [0.5.1] - 2026-07-13
 
 ### Fixed

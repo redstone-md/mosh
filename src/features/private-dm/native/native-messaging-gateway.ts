@@ -249,6 +249,12 @@ export interface SessionSnapshot {
   readonly state: string;
   /** Transport path: "direct", "relayed", or "connecting". Relayed is E2E. */
   readonly path: string;
+  /**
+   * Convergence of the shared relay node — present only while path is
+   * "relayed". false = relay still warming up (queued frames wait for a
+   * relay-capable supernode to appear).
+   */
+  readonly relay_ready?: boolean;
   readonly invite_uri: string | null;
   readonly fingerprint: string;
   readonly messages: readonly ChatMessage[];

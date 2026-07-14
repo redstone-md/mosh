@@ -43,6 +43,12 @@ pub struct SessionSnapshot {
     /// "connecting". Relayed traffic is still E2E — the supernode sees only
     /// ciphertext.
     pub path: String,
+    /// Whether the shared relay node currently sees at least one
+    /// relay-capable peer (a promoted SuperNode). Only present while `path`
+    /// is "relayed"; `false` means the relay is still warming up — queued
+    /// frames wait for convergence instead of failing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relay_ready: Option<bool>,
     pub invite_uri: Option<String>,
     pub fingerprint: String,
     pub messages: Vec<ChatMessage>,

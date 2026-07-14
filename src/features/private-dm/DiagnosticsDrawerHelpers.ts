@@ -31,11 +31,14 @@ export function relayBreakdown(mesh: MeshInfo): string {
 
 // Human label for a DM's transport path. "relayed" gets the "via supernode"
 // suffix to make clear the path is a Mesh-TURN relay (still E2E — the supernode
-// only sees ciphertext).
-export function pathLabel(path: string): string {
+// only sees ciphertext). While the shared relay node has not converged yet
+// (relayReady === false) the label says so — sends are queued, not failing.
+export function pathLabel(path: string, relayReady?: boolean): string {
   switch (path) {
     case "relayed":
-      return "relayed via supernode";
+      return relayReady === false
+        ? "relayed via supernode (warming up)"
+        : "relayed via supernode";
     case "direct":
       return "direct";
     case "connecting":
