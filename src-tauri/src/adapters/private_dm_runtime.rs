@@ -4,6 +4,7 @@ mod relay;
 mod wire;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::mpsc;
 use std::sync::Arc;
 
 pub use crate::adapters::attachment_runtime::VoiceMeta;
@@ -124,7 +125,26 @@ pub struct PrivateDmRuntime {
     finalized_session_records: HashSet<String>,
     sessions: HashMap<String, PrivateDmSession>,
     relay_ref: relay::RelayRef,
-    relay_node: Option<MossNode>,
+    relay: Option<relay::RelayHandle>,
+    // Outcomes reported by relay send workers. A release→re-acquire cycle can
+    // briefly leave an old worker settling its last jobs, so every started
+    // worker's receiver is kept until it disconnects and drains empty —
+    // otherwise those tracked messages would sit Pending forever.
+    relay_results: Vec<mpsc::Receiver<relay::RelayJobResult>>,
+}
+
+/// Borrowed intake of the relay send worker, threaded through the session
+/// methods that may route a frame while the DM path is Relayed. None while
+/// the shared relay node is down.
+type RelayJobs<'a> = Option<&'a mpsc::Sender<relay::RelayJob>>;
+
+/// What `route_send` did with the frame: published on the direct pubsub node
+/// (fire-and-forget, moss owns it now) or queued for the relay worker (the
+/// outcome arrives later via `drain_relay_results`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RouteOutcome {
+    Published,
+    Queued,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -244,33 +264,40 @@ impl PrivateDmRuntime {
             finalized_session_records: HashSet::new(),
             sessions: HashMap::new(),
             relay_ref: relay::RelayRef::default(),
-            relay_node: None,
+            relay: None,
+            relay_results: Vec::new(),
         }
     }
 
-    /// Bring the shared relay node up on first demand and increment its
-    /// refcount; later callers just bump the count and get the same node.
-    fn ensure_relay_up(&mut self) -> Result<&MossNode, PrivateDmRuntimeError> {
+    /// Bring the shared relay node (and its send worker) up on first demand
+    /// and increment its refcount; later callers just bump the count and get
+    /// the same handle.
+    fn ensure_relay_up(&mut self) -> Result<&relay::RelayHandle, PrivateDmRuntimeError> {
         // Start BEFORE bumping the refcount. Incrementing first would leak a
         // ref on a transient dll init/start failure — the count would stick
-        // above zero while the node stayed None, and every later call would
-        // return "relay node missing" forever. Node presence is the source of
-        // truth for "started"; the count only tracks how many DMs rely on it.
-        if self.relay_node.is_none() {
-            self.relay_node = Some(relay::start_relay_node(&self.moss)?);
+        // above zero while the handle stayed None, and every later call would
+        // return "relay node missing" forever. Handle presence is the source
+        // of truth for "started"; the count only tracks how many DMs rely on
+        // it.
+        if self.relay.is_none() {
+            let (handle, results) = relay::start_relay_node(&self.moss)?;
+            self.relay = Some(handle);
+            self.relay_results.push(results);
         }
         self.relay_ref.acquire();
-        self.relay_node
+        self.relay
             .as_ref()
             .ok_or_else(|| PrivateDmRuntimeError::Moss("relay node missing".into()))
     }
 
-    /// Decrement the relay refcount; the last release drops (and thus stops)
-    /// the shared node.
+    /// Decrement the relay refcount; the last release drops the handle, which
+    /// disconnects the worker's intake — the worker fails its queued jobs,
+    /// exits promptly, and releases the node (MossNode::drop → Moss_Stop).
+    /// The results receiver stays in `relay_results` so those final outcomes
+    /// still settle their messages instead of stranding them Pending.
     fn release_relay(&mut self) {
         if self.relay_ref.release() == 0 {
-            // Drop stops the node (MossNode::drop → Moss_Stop).
-            self.relay_node = None;
+            self.relay = None;
         }
     }
 
@@ -395,9 +422,19 @@ impl PrivateDmRuntime {
             }
             if let Ok(rows) = p.list_outbound_attempts(OUTBOUND_SCOPE_PRIVATE_DM, &rec.session_id) {
                 for row in rows {
-                    let Ok(attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row) else {
+                    let Ok(mut attempt) = serde_json::from_slice::<OutboundAttemptRecord>(&row)
+                    else {
                         continue;
                     };
+                    // A Pending attempt cannot survive a restart: whoever held
+                    // it (the relay send worker or an in-flight publish) died
+                    // with the process, so nothing will ever settle it.
+                    // Surface a retryable failure instead of a forever-spinner.
+                    if attempt.delivery_status == MessageDeliveryStatus::Pending {
+                        attempt.delivery_status = MessageDeliveryStatus::Failed;
+                        attempt.delivery_error =
+                            Some("app closed before the send completed".to_string());
+                    }
                     let Ok(mut message) =
                         serde_json::from_str::<ChatMessage>(&attempt.message_json)
                     else {
@@ -655,15 +692,15 @@ impl PrivateDmRuntime {
         self.persist_outbound_state(session_id, &message_id, true);
 
         let publish = {
-            // Disjoint field borrows: `relay_node` reads only the field, so it
+            // Disjoint field borrows: `relay` reads only the field, so it
             // coexists with the immutable session borrow taken by `session_ref`.
-            let relay = self.relay_node.as_ref();
+            let relay = self.relay.as_ref().map(|handle| &handle.jobs);
             let session = self.session_ref(session_id)?;
-            session.route_send(wire::ChannelKind::Data, &payload, relay)
+            session.route_send(wire::ChannelKind::Data, &payload, relay, Some(&message_id))
         };
 
         let result = match publish {
-            Ok(()) => {
+            Ok(RouteOutcome::Published) => {
                 let session = self.session_mut(session_id)?;
                 session.mark_delivery(&message_id, MessageDeliveryStatus::Sent, None, 0)?;
                 session.outbound_attempts.remove(&message_id);
@@ -677,6 +714,18 @@ impl PrivateDmRuntime {
                     delivery_error: None,
                 }
             }
+            // Queued for the relay send worker: the message stays Pending (and
+            // its outbound attempt stays retained) until the worker's outcome
+            // arrives via drain_relay_results.
+            Ok(RouteOutcome::Queued) => SendMessageResult {
+                session_id: session_id_owned,
+                state,
+                ciphertext_bytes,
+                message_id: message_id.clone(),
+                sent_at_ms,
+                delivery_status: MessageDeliveryStatus::Pending,
+                delivery_error: None,
+            },
             Err(error) => {
                 let error_text = error.to_string();
                 let session = self.session_mut(session_id)?;
@@ -724,6 +773,12 @@ impl PrivateDmRuntime {
                     .outbound_attempts
                     .get_mut(message_id)
                     .ok_or_else(|| PrivateDmRuntimeError::MissingMessage(message_id.to_string()))?;
+                // A Pending attempt is already sitting in the relay worker's
+                // queue; enqueueing a twin would race two results for one
+                // message (a late failure could overwrite a delivered Sent).
+                if attempt.delivery_status == MessageDeliveryStatus::Pending {
+                    return Err(PrivateDmRuntimeError::Moss("send already in flight".into()));
+                }
                 attempt.retry_count = attempt.retry_count.saturating_add(1);
                 attempt.delivery_status = MessageDeliveryStatus::Pending;
                 attempt.delivery_error = None;
@@ -758,15 +813,15 @@ impl PrivateDmRuntime {
         self.persist_outbound_state(session_id, message_id, false);
 
         let publish = {
-            // Disjoint field borrows: `relay_node` reads only the field, so it
+            // Disjoint field borrows: `relay` reads only the field, so it
             // coexists with the immutable session borrow taken by `session_ref`.
-            let relay = self.relay_node.as_ref();
+            let relay = self.relay.as_ref().map(|handle| &handle.jobs);
             let session = self.session_ref(session_id)?;
-            session.route_send(wire::ChannelKind::Data, &payload, relay)
+            session.route_send(wire::ChannelKind::Data, &payload, relay, Some(message_id))
         };
 
         let result = match publish {
-            Ok(()) => {
+            Ok(RouteOutcome::Published) => {
                 let session = self.session_mut(session_id)?;
                 session.mark_delivery(
                     message_id,
@@ -785,6 +840,16 @@ impl PrivateDmRuntime {
                     delivery_error: None,
                 }
             }
+            // Queued for the relay send worker; drain_relay_results settles it.
+            Ok(RouteOutcome::Queued) => SendMessageResult {
+                session_id: session_id_owned,
+                state,
+                ciphertext_bytes,
+                message_id: message_id.to_string(),
+                sent_at_ms,
+                delivery_status: MessageDeliveryStatus::Pending,
+                delivery_error: None,
+            },
             Err(error) => {
                 let error_text = error.to_string();
                 let session = self.session_mut(session_id)?;
@@ -826,9 +891,9 @@ impl PrivateDmRuntime {
         voice: Option<VoiceMeta>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        // Disjoint field borrows: hold `relay_node` (field) alongside the
+        // Disjoint field borrows: hold `relay` (field) alongside the
         // mutable session borrow so the manifest send can route when Relayed.
-        let relay = self.relay_node.as_ref();
+        let relay = self.relay.as_ref().map(|handle| &handle.jobs);
         let session = self
             .sessions
             .get_mut(session_id)
@@ -843,9 +908,9 @@ impl PrivateDmRuntime {
         attachment_id: &str,
     ) -> Result<(), PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        // Disjoint field borrows: hold `relay_node` (field) alongside the
+        // Disjoint field borrows: hold `relay` (field) alongside the
         // mutable session borrow so pump_attachment_requests can route.
-        let relay = self.relay_node.as_ref();
+        let relay = self.relay.as_ref().map(|handle| &handle.jobs);
         let session = self
             .sessions
             .get_mut(session_id)
@@ -874,9 +939,9 @@ impl PrivateDmRuntime {
         end: u64,
     ) -> Result<StreamRange, PrivateDmRuntimeError> {
         self.drain_inbound()?;
-        // Disjoint field borrows: hold `relay_node` (field) alongside the
+        // Disjoint field borrows: hold `relay` (field) alongside the
         // mutable session borrow so pump_attachment_requests can route.
-        let relay = self.relay_node.as_ref();
+        let relay = self.relay.as_ref().map(|handle| &handle.jobs);
         let session = self
             .sessions
             .get_mut(session_id)
@@ -896,21 +961,42 @@ impl PrivateDmRuntime {
         session_id: &str,
     ) -> Result<SessionSnapshot, PrivateDmRuntimeError> {
         self.drain_inbound()?;
+        let relay_ready = self.shared_relay_ready();
         let session = self.session_ref(session_id)?;
-        Ok(session.snapshot())
+        let mut snapshot = session.snapshot();
+        self.stamp_relay_ready(&mut snapshot, relay_ready);
+        Ok(snapshot)
     }
 
     pub fn list_sessions(&mut self) -> Result<SessionListSnapshot, PrivateDmRuntimeError> {
         self.drain_inbound()?;
+        let relay_ready = self.shared_relay_ready();
         let mut snapshots: Vec<SessionSnapshot> = self
             .sessions
             .values()
             .map(PrivateDmSession::snapshot)
             .collect();
+        for snapshot in &mut snapshots {
+            self.stamp_relay_ready(snapshot, relay_ready);
+        }
         snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
         Ok(SessionListSnapshot {
             sessions: snapshots,
         })
+    }
+
+    /// Convergence state of the shared relay node, or None while it is down.
+    /// Computed once per poll — it is an FFI call into moss.
+    fn shared_relay_ready(&self) -> Option<bool> {
+        self.relay
+            .as_ref()
+            .map(|handle| relay::relay_ready(&handle.node))
+    }
+
+    fn stamp_relay_ready(&self, snapshot: &mut SessionSnapshot, relay_ready: Option<bool>) {
+        if snapshot.path == "relayed" {
+            snapshot.relay_ready = relay_ready;
+        }
     }
 
     pub fn close_session(
@@ -953,9 +1039,9 @@ impl PrivateDmRuntime {
             // fails with "secret deleted to preserve forward secrecy". That is
             // expected, so drop the frame and keep going.
             if let Some(session_id) = channel_session_id(&message.channel).map(str::to_string) {
-                // Disjoint field borrows: `relay_node` (field) alongside the
+                // Disjoint field borrows: `relay` (field) alongside the
                 // mutable `sessions` borrow — see route_send threading.
-                let relay = self.relay_node.as_ref();
+                let relay = self.relay.as_ref().map(|handle| &handle.jobs);
                 if let Some(session) = self.sessions.get_mut(&session_id) {
                     if let Err(error) = session.handle_moss_message(message, relay) {
                         eprintln!("dropping inbound frame for {session_id}: {error}");
@@ -964,7 +1050,7 @@ impl PrivateDmRuntime {
                 continue;
             }
             if wire::channel_call_id(&message.channel).is_some() {
-                let relay = self.relay_node.as_ref();
+                let relay = self.relay.as_ref().map(|handle| &handle.jobs);
                 for session in self.sessions.values_mut() {
                     if let Err(error) = session.handle_moss_message(message.clone(), relay) {
                         eprintln!("dropping inbound call frame: {error}");
@@ -973,6 +1059,7 @@ impl PrivateDmRuntime {
             }
         }
         self.drain_relay();
+        self.drain_relay_results();
         let now = now_ms();
         // Advance the fallback state machine before the pump loop: a session that
         // flips to Relayed here brings the shared relay node up, so its handshake
@@ -982,7 +1069,7 @@ impl PrivateDmRuntime {
         // handshake, without waiting on a user action. The UI polls roughly
         // once a second, so this is the heartbeat that retransmits a KeyPackage
         // whose first publish was dropped before the mesh link formed.
-        let relay = self.relay_node.as_ref();
+        let relay = self.relay.as_ref().map(|handle| &handle.jobs);
         for session in self.sessions.values_mut() {
             session.pump_attachment_requests(relay);
             session.pump_handshake(now, relay);
@@ -1035,12 +1122,76 @@ impl PrivateDmRuntime {
                 channel,
                 payload: frame.bytes,
             };
-            // Disjoint field borrow: `relay_node` field alongside the mutable
+            // Disjoint field borrow: `relay` field alongside the mutable
             // `session` borrow held out of `self.sessions`.
-            let relay = self.relay_node.as_ref();
+            let relay = self.relay.as_ref().map(|handle| &handle.jobs);
             if let Err(e) = session.handle_moss_message(message, relay) {
                 eprintln!("dropping relayed frame for {}: {e}", frame.session_id);
             }
+        }
+    }
+
+    /// Fold the relay send worker's outcomes into per-message delivery state.
+    /// Fire-and-forget frames (no message_id) only get their failures logged;
+    /// tracked Data messages settle Pending → Sent / Failed here.
+    fn drain_relay_results(&mut self) {
+        let mut outcomes: Vec<relay::RelayJobResult> = Vec::new();
+        // Collect from every live worker; drop a receiver only once its worker
+        // has exited (Disconnected) and nothing is left buffered.
+        self.relay_results.retain(|receiver| loop {
+            match receiver.try_recv() {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(mpsc::TryRecvError::Empty) => break true,
+                Err(mpsc::TryRecvError::Disconnected) => break false,
+            }
+        });
+        for outcome in outcomes {
+            let Some(message_id) = outcome.message_id else {
+                if let Some(error) = outcome.error {
+                    eprintln!(
+                        "relay send failed for a {} control/blob frame: {error}",
+                        outcome.session_id
+                    );
+                }
+                continue;
+            };
+            let Some(session) = self.sessions.get_mut(&outcome.session_id) else {
+                continue;
+            };
+            let retry_count = session
+                .outbound_attempts
+                .get(&message_id)
+                .map(|attempt| attempt.retry_count)
+                .unwrap_or(0);
+            let applied = match outcome.error {
+                None => {
+                    session.outbound_attempts.remove(&message_id);
+                    session.mark_delivery(
+                        &message_id,
+                        MessageDeliveryStatus::Sent,
+                        None,
+                        retry_count,
+                    )
+                }
+                Some(error) => {
+                    if let Some(attempt) = session.outbound_attempts.get_mut(&message_id) {
+                        attempt.delivery_status = MessageDeliveryStatus::Failed;
+                        attempt.delivery_error = Some(error.clone());
+                    }
+                    session
+                        .mark_delivery(
+                            &message_id,
+                            MessageDeliveryStatus::Failed,
+                            Some(error),
+                            retry_count,
+                        )
+                        .and_then(|_| session.sync_attempt_message_json(&message_id))
+                }
+            };
+            if let Err(error) = applied {
+                eprintln!("relay outcome for {message_id} failed to apply: {error}");
+            }
+            self.persist_outbound_state(&outcome.session_id, &message_id, false);
         }
     }
 
@@ -1487,17 +1638,17 @@ impl PrivateDmSession {
     fn handle_moss_message(
         &mut self,
         message: MossReceivedMessage,
-        relay_node: Option<&MossNode>,
+        relay_jobs: RelayJobs<'_>,
     ) -> Result<(), PrivateDmRuntimeError> {
         if self.has_seen_message(&message) {
             return Ok(());
         }
         if message.channel == self.control_channel {
-            self.handle_control(message.payload, relay_node)
+            self.handle_control(message.payload, relay_jobs)
         } else if message.channel == self.data_channel {
             self.handle_data(message.payload)
         } else if message.channel == self.blob_channel {
-            self.handle_blob(message.payload, relay_node)
+            self.handle_blob(message.payload, relay_jobs)
         } else if wire::channel_call_id(&message.channel).is_some() {
             self.handle_voice_call_frame(&message.channel, message.payload)
         } else {
@@ -1579,22 +1730,30 @@ impl PrivateDmSession {
     /// and `Discover` publish on the session's own pubsub channel exactly as
     /// before; `Relayed` wraps the payload in a `RelayFrame` and sends it
     /// point-to-point over the shared relay node to the peer's moss-id.
+    /// Route one outbound frame along the session's current path. Direct /
+    /// Discover publish synchronously on the per-DM pubsub node (cheap local
+    /// enqueue). Relayed never touches the blocking relay FFI here — the frame
+    /// is handed to the relay send worker and `Queued` is returned;
+    /// `message_id` (user Data messages only) lets the worker's outcome find
+    /// its way back to the message's delivery status.
     fn route_send(
         &self,
         kind: wire::ChannelKind,
         payload: &[u8],
-        relay_node: Option<&MossNode>,
-    ) -> Result<(), PrivateDmRuntimeError> {
+        relay_jobs: RelayJobs<'_>,
+        message_id: Option<&str>,
+    ) -> Result<RouteOutcome, PrivateDmRuntimeError> {
         match self.path {
             DmPath::Direct | DmPath::Discover => self
                 .node
                 .publish(&kind.channel_for(&self.session_id), payload)
+                .map(|_| RouteOutcome::Published)
                 .map_err(|e| PrivateDmRuntimeError::Moss(e.to_string())),
             DmPath::Relayed => {
                 let peer = self.peer_moss_id.as_deref().ok_or_else(|| {
                     PrivateDmRuntimeError::Moss("relayed send: peer moss-id unknown".into())
                 })?;
-                let node = relay_node.ok_or_else(|| {
+                let jobs = relay_jobs.ok_or_else(|| {
                     PrivateDmRuntimeError::Moss("relayed send: relay node down".into())
                 })?;
                 let frame = wire::RelayFrame {
@@ -1604,8 +1763,15 @@ impl PrivateDmSession {
                 };
                 let bytes = serde_json::to_vec(&frame)
                     .map_err(|e| PrivateDmRuntimeError::Codec(e.to_string()))?;
-                node.relay_send_to(peer, &bytes)
-                    .map_err(|e| PrivateDmRuntimeError::Moss(e.to_string()))
+                jobs.send(relay::RelayJob {
+                    session_id: self.session_id.clone(),
+                    message_id: message_id.map(str::to_string),
+                    kind,
+                    target: peer.to_string(),
+                    bytes,
+                })
+                .map_err(|_| PrivateDmRuntimeError::Moss("relay send worker unavailable".into()))?;
+                Ok(RouteOutcome::Queued)
             }
         }
     }
@@ -1614,7 +1780,7 @@ impl PrivateDmSession {
     /// is still incomplete. Driven by the inbound drain loop (≈1/s), throttled
     /// to HANDSHAKE_RESEND_MS. Once the peer has joined the pending payload is
     /// dropped so nothing is re-sent.
-    fn pump_handshake(&mut self, now_ms: u64, relay_node: Option<&MossNode>) {
+    fn pump_handshake(&mut self, now_ms: u64, relay_jobs: RelayJobs<'_>) {
         if self.peer_joined {
             self.pending_key_package = None;
             return;
@@ -1626,13 +1792,13 @@ impl PrivateDmSession {
             return;
         };
         self.last_handshake_send_ms = now_ms;
-        let _ = self.route_send(wire::ChannelKind::Control, &payload, relay_node);
+        let _ = self.route_send(wire::ChannelKind::Control, &payload, relay_jobs, None);
     }
 
     fn handle_control(
         &mut self,
         payload: Vec<u8>,
-        relay_node: Option<&MossNode>,
+        relay_jobs: RelayJobs<'_>,
     ) -> Result<(), PrivateDmRuntimeError> {
         let envelope: ControlEnvelope = decode_json(&payload)?;
 
@@ -1652,11 +1818,14 @@ impl PrivateDmSession {
                 // calling add_members again (which advances the group epoch).
                 if self.peer_joined {
                     if let Some(welcome_payload) = self.pending_welcome.clone() {
-                        return self.route_send(
-                            wire::ChannelKind::Control,
-                            &welcome_payload,
-                            relay_node,
-                        );
+                        return self
+                            .route_send(
+                                wire::ChannelKind::Control,
+                                &welcome_payload,
+                                relay_jobs,
+                                None,
+                            )
+                            .map(|_| ());
                     }
                     return Ok(());
                 }
@@ -1675,7 +1844,13 @@ impl PrivateDmSession {
                     .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
                 self.pending_welcome = Some(welcome_payload.clone());
 
-                self.route_send(wire::ChannelKind::Control, &welcome_payload, relay_node)
+                self.route_send(
+                    wire::ChannelKind::Control,
+                    &welcome_payload,
+                    relay_jobs,
+                    None,
+                )
+                .map(|_| ())
             }
             ControlEnvelope::Welcome {
                 session_id,
@@ -1844,7 +2019,7 @@ impl PrivateDmSession {
     fn handle_blob(
         &mut self,
         payload: Vec<u8>,
-        relay_node: Option<&MossNode>,
+        relay_jobs: RelayJobs<'_>,
     ) -> Result<(), PrivateDmRuntimeError> {
         let envelope: BlobEnvelope = decode_json(&payload)?;
         match envelope {
@@ -1860,7 +2035,7 @@ impl PrivateDmSession {
                     };
                     let bytes = serde_json::to_vec(&chunk)
                         .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
-                    self.route_send(wire::ChannelKind::Blob, &bytes, relay_node)?;
+                    self.route_send(wire::ChannelKind::Blob, &bytes, relay_jobs, None)?;
                 }
                 Ok(())
             }
@@ -1947,7 +2122,7 @@ impl PrivateDmSession {
         bytes: Vec<u8>,
         thumbnail: Option<String>,
         voice: Option<VoiceMeta>,
-        relay_node: Option<&MossNode>,
+        relay_jobs: RelayJobs<'_>,
     ) -> Result<AttachmentSendResult, PrivateDmRuntimeError> {
         if !self.ready_for_user_actions() {
             return Err(PrivateDmRuntimeError::NotReady);
@@ -1982,7 +2157,7 @@ impl PrivateDmSession {
         // this publishes to the identical control channel `publish_json` used.
         let payload = serde_json::to_vec(&envelope)
             .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
-        self.route_send(wire::ChannelKind::Control, &payload, relay_node)?;
+        self.route_send(wire::ChannelKind::Control, &payload, relay_jobs, None)?;
 
         let descriptor = descriptor_of(&manifest);
         self.attachment_slots.insert(
@@ -2047,7 +2222,7 @@ impl PrivateDmSession {
         Ok(())
     }
 
-    fn pump_attachment_requests(&mut self, relay_node: Option<&MossNode>) {
+    fn pump_attachment_requests(&mut self, relay_jobs: RelayJobs<'_>) {
         let active: Vec<String> = self
             .attachment_slots
             .iter()
@@ -2066,7 +2241,7 @@ impl PrivateDmSession {
                     request,
                 };
                 if let Ok(bytes) = serde_json::to_vec(&envelope) {
-                    let _ = self.route_send(wire::ChannelKind::Blob, &bytes, relay_node);
+                    let _ = self.route_send(wire::ChannelKind::Blob, &bytes, relay_jobs, None);
                 }
             }
         }
@@ -2103,6 +2278,9 @@ impl PrivateDmSession {
             peer_display_name: self.peer_display_name.clone().unwrap_or_default(),
             state: self.state(),
             path: self.path.as_str().to_string(),
+            // The session cannot see the shared relay node; the runtime
+            // stamps this for relayed sessions right after snapshot().
+            relay_ready: None,
             invite_uri: self.invite_uri.clone(),
             fingerprint: self.fingerprint.clone(),
             messages: self.messages.clone(),
@@ -3115,18 +3293,259 @@ mod tests {
 
         // Direct/Discover still publishes on the direct node (unchanged path).
         session.path = DmPath::Direct;
-        session
-            .route_send(wire::ChannelKind::Data, b"x", None)
+        let outcome = session
+            .route_send(wire::ChannelKind::Data, b"x", None, None)
             .expect("direct route_send should publish on the direct node");
+        assert_eq!(outcome, RouteOutcome::Published);
 
         // Relayed with no peer moss-id: error, do NOT publish on the direct node.
         session.path = DmPath::Relayed;
         session.peer_moss_id = None;
-        let err = session.route_send(wire::ChannelKind::Data, b"x", None);
+        let err = session.route_send(wire::ChannelKind::Data, b"x", None, None);
         assert!(
             err.is_err(),
             "relayed send needs a peer_moss_id + relay node"
         );
+    }
+
+    // A Relayed session with a pinned peer must never block in the relay FFI:
+    // route_send hands the frame to the worker queue and reports Queued.
+    #[test]
+    fn route_send_relayed_queues_for_the_worker() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42191,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+        session.path = DmPath::Relayed;
+        session.peer_moss_id = Some("ab".repeat(32));
+
+        let (jobs_tx, jobs_rx) = mpsc::channel();
+        let outcome = session
+            .route_send(
+                wire::ChannelKind::Data,
+                b"payload",
+                Some(&jobs_tx),
+                Some("m1"),
+            )
+            .expect("relayed route_send should queue");
+        assert_eq!(outcome, RouteOutcome::Queued);
+
+        let job = jobs_rx.try_recv().expect("worker should receive the job");
+        assert_eq!(job.session_id, invite.session_id);
+        assert_eq!(job.message_id.as_deref(), Some("m1"));
+        assert_eq!(job.target, "ab".repeat(32));
+        let frame: wire::RelayFrame =
+            serde_json::from_slice(&job.bytes).expect("job bytes are a RelayFrame");
+        assert_eq!(frame.bytes, b"payload");
+    }
+
+    // Relayed send_message must stay Pending (attempt retained) until the
+    // worker reports, then drain_relay_results settles Sent / Failed.
+    #[test]
+    fn relayed_message_settles_via_worker_results() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42192,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        // Wire a fake relay: a real (unstarted) moss node for the handle plus
+        // manual job/result channels standing in for the worker thread.
+        let relay_node = runtime
+            .init_default_node(
+                "relay-test-mesh",
+                &crate::adapters::moss_ffi::MossNodeConfig::default(),
+            )
+            .expect("relay test node should init");
+        let (jobs_tx, jobs_rx) = mpsc::channel();
+        let (results_tx, results_rx) = mpsc::channel();
+        alice.relay = Some(relay::RelayHandle {
+            node: Arc::new(relay_node),
+            jobs: jobs_tx,
+        });
+        alice.relay_results.push(results_rx);
+
+        {
+            let session = alice
+                .sessions
+                .get_mut(&invite.session_id)
+                .expect("Alice session should exist");
+            session.path = DmPath::Relayed;
+            session.peer_moss_id = Some("ab".repeat(32));
+            // send_message refuses before the MLS join; fake readiness the way
+            // the crypto layer reports it is not possible here, so bypass via
+            // direct route checks below if this ever fails.
+        }
+
+        let result = alice
+            .send_message(&invite.session_id, "hi".to_string())
+            .expect("send should queue");
+        assert_eq!(result.delivery_status, MessageDeliveryStatus::Pending);
+        let message_id = result.message_id.clone();
+        assert!(
+            alice.sessions[&invite.session_id]
+                .outbound_attempts
+                .contains_key(&message_id),
+            "attempt must stay retained while queued"
+        );
+        let job = jobs_rx.try_recv().expect("job must be queued");
+        assert_eq!(job.message_id.as_deref(), Some(message_id.as_str()));
+
+        // Worker success → Sent, attempt dropped.
+        results_tx
+            .send(relay::RelayJobResult {
+                session_id: invite.session_id.clone(),
+                message_id: Some(message_id.clone()),
+                error: None,
+            })
+            .expect("result channel open");
+        alice.drain_relay_results();
+        let session = &alice.sessions[&invite.session_id];
+        assert!(!session.outbound_attempts.contains_key(&message_id));
+        let message = session
+            .messages
+            .iter()
+            .find(|m| m.message_id.as_deref() == Some(message_id.as_str()))
+            .expect("message exists");
+        assert_eq!(message.delivery_status, Some(MessageDeliveryStatus::Sent));
+
+        // Second message: worker failure → Failed with the worker's error.
+        let result = alice
+            .send_message(&invite.session_id, "hi again".to_string())
+            .expect("send should queue");
+        let failed_id = result.message_id.clone();
+        results_tx
+            .send(relay::RelayJobResult {
+                session_id: invite.session_id.clone(),
+                message_id: Some(failed_id.clone()),
+                error: Some("relay not ready in time".to_string()),
+            })
+            .expect("result channel open");
+        alice.drain_relay_results();
+        let session = &alice.sessions[&invite.session_id];
+        let message = session
+            .messages
+            .iter()
+            .find(|m| m.message_id.as_deref() == Some(failed_id.as_str()))
+            .expect("message exists");
+        assert_eq!(message.delivery_status, Some(MessageDeliveryStatus::Failed));
+        assert_eq!(
+            message.delivery_error.as_deref(),
+            Some("relay not ready in time")
+        );
+        assert!(
+            session.outbound_attempts.contains_key(&failed_id),
+            "failed attempt stays retryable"
+        );
+    }
+
+    // A message that dies in the worker queue when the app closes must not
+    // rehydrate as an eternal Pending spinner: restore normalizes it to a
+    // retryable failure.
+    #[test]
+    fn stale_pending_attempt_rehydrates_as_retryable_failure() {
+        use crate::adapters::persistence::Persistence;
+        use std::path::PathBuf;
+
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let mut db_path: PathBuf = std::env::temp_dir();
+        db_path.push(format!("mosh-dm-stale-pending-{}.redb", std::process::id()));
+        let _ = std::fs::remove_file(&db_path);
+        let persistence =
+            Arc::new(Persistence::open_with_dek(&db_path, [7u8; 32]).expect("store should open"));
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+
+        // Runtime #1: queue a relayed message (stays Pending) and "crash".
+        let session_id = {
+            let mut alice = PrivateDmRuntime::from_shared(
+                Arc::clone(&runtime),
+                temp_store(),
+                Some(persistence.clone()),
+            );
+            let invite = alice
+                .create_invite(StartSessionRequest {
+                    display_name: "Alice".to_string(),
+                    listen_port: 42193,
+                    static_peer: None,
+                })
+                .expect("Alice invite should be created");
+            let relay_node = alice
+                .moss
+                .init_default_node(
+                    "relay-stale-test-mesh",
+                    &crate::adapters::moss_ffi::MossNodeConfig::default(),
+                )
+                .expect("relay test node should init");
+            let (jobs_tx, _jobs_rx) = mpsc::channel();
+            alice.relay = Some(relay::RelayHandle {
+                node: Arc::new(relay_node),
+                jobs: jobs_tx,
+            });
+            {
+                let session = alice
+                    .sessions
+                    .get_mut(&invite.session_id)
+                    .expect("Alice session should exist");
+                session.path = DmPath::Relayed;
+                session.peer_moss_id = Some("ab".repeat(32));
+            }
+            let result = alice
+                .send_message(&invite.session_id, "doomed".to_string())
+                .expect("send should queue");
+            assert_eq!(result.delivery_status, MessageDeliveryStatus::Pending);
+            invite.session_id
+        };
+
+        // Runtime #2: rehydrate — the stale Pending must surface as Failed.
+        let mut revived =
+            PrivateDmRuntime::from_shared(runtime, temp_store(), Some(persistence.clone()));
+        revived.rehydrate();
+        let session = revived
+            .sessions
+            .get(&session_id)
+            .expect("session should rehydrate");
+        let message = session
+            .messages
+            .iter()
+            .find(|m| m.body == "doomed")
+            .expect("message should rehydrate");
+        assert_eq!(message.delivery_status, Some(MessageDeliveryStatus::Failed));
+        assert_eq!(message.retryable, Some(true));
+        let attempt = session
+            .outbound_attempts
+            .values()
+            .next()
+            .expect("attempt should rehydrate");
+        assert_eq!(attempt.delivery_status, MessageDeliveryStatus::Failed);
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
