@@ -6,6 +6,13 @@ describe("pathLabel", () => {
     expect(pathLabel("relayed")).toBe("relayed via supernode");
   });
 
+  it("marks a relayed path whose relay has not converged as warming up", () => {
+    expect(pathLabel("relayed", false)).toBe("relayed via supernode (warming up)");
+    expect(pathLabel("relayed", true)).toBe("relayed via supernode");
+    // Missing readiness (relay down / older backend) keeps the plain label.
+    expect(pathLabel("relayed", undefined)).toBe("relayed via supernode");
+  });
+
   it("passes direct and connecting through as-is", () => {
     expect(pathLabel("direct")).toBe("direct");
     expect(pathLabel("connecting")).toBe("connecting");
