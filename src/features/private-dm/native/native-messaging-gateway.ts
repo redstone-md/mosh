@@ -182,7 +182,7 @@ export interface ChatMessage {
   readonly body: string;
   readonly message_id?: string;
   readonly sent_at_ms?: number;
-  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_status?: "pending" | "sent" | "delivered" | "failed";
   readonly delivery_error?: string | null;
   readonly retryable?: boolean;
   readonly retry_count?: number;
@@ -283,7 +283,7 @@ export interface SendMessageResult {
   readonly ciphertext_bytes: number;
   readonly message_id: string;
   readonly sent_at_ms: number;
-  readonly delivery_status: "pending" | "sent" | "failed";
+  readonly delivery_status: "pending" | "sent" | "delivered" | "failed";
   readonly delivery_error?: string | null;
 }
 
@@ -305,7 +305,7 @@ export interface ChannelMessage {
   readonly body: string;
   readonly message_id?: string;
   readonly sent_at_ms?: number;
-  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_status?: "pending" | "sent" | "delivered" | "failed";
   readonly delivery_error?: string | null;
   readonly retryable?: boolean;
   readonly retry_count?: number;
@@ -334,7 +334,7 @@ export interface ChannelSendResult {
   readonly bytes: number;
   readonly message_id: string;
   readonly sent_at_ms: number;
-  readonly delivery_status: "pending" | "sent" | "failed";
+  readonly delivery_status: "pending" | "sent" | "delivered" | "failed";
   readonly delivery_error?: string | null;
 }
 
@@ -373,7 +373,7 @@ export interface GroupMessage {
   readonly body: string;
   readonly message_id?: string;
   readonly sent_at_ms?: number;
-  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_status?: "pending" | "sent" | "delivered" | "failed";
   readonly delivery_error?: string | null;
   readonly retryable?: boolean;
   readonly retry_count?: number;
@@ -410,7 +410,7 @@ export interface GroupSendResult {
   readonly bytes: number;
   readonly message_id: string;
   readonly sent_at_ms: number;
-  readonly delivery_status: "pending" | "sent" | "failed";
+  readonly delivery_status: "pending" | "sent" | "delivered" | "failed";
   readonly delivery_error?: string | null;
 }
 

@@ -38,7 +38,7 @@ export interface PeerActions {
 interface MessageMetadata {
   readonly message_id?: string;
   readonly sent_at_ms?: number;
-  readonly delivery_status?: "pending" | "sent" | "failed";
+  readonly delivery_status?: "pending" | "sent" | "delivered" | "failed";
   readonly delivery_error?: string | null;
   readonly retryable?: boolean;
   readonly retry_count?: number;
@@ -340,6 +340,7 @@ function DmMessageRow({
           />
         ) : null}
         {message.call_event ? <CallLogEntry event={message.call_event} /> : null}
+        <DeliveryTicks message={message} outbound={message.from_device === ownDeviceName} />
         <FailedMessageRetry
           message={message}
           outbound={message.from_device === ownDeviceName}
@@ -400,6 +401,33 @@ function ChannelMessageRow({
         />
       </div>
     </article>
+  );
+}
+
+// One-glance delivery state for the sender's own DM messages. "sent" only
+// means the frame left this device; "delivered" means the peer's runtime
+// acknowledged it. Failed gets its own retry row below, so it renders nothing
+// here.
+function DeliveryTicks({
+  message,
+  outbound,
+}: {
+  message: MessageMetadata;
+  outbound: boolean;
+}) {
+  if (!outbound || !message.delivery_status || message.delivery_status === "failed") {
+    return null;
+  }
+  const label =
+    message.delivery_status === "delivered"
+      ? "✓✓ delivered"
+      : message.delivery_status === "sent"
+        ? "✓ sent"
+        : "sending…";
+  return (
+    <small className="delivery-ticks" aria-label={`Delivery: ${label}`}>
+      {label}
+    </small>
   );
 }
 

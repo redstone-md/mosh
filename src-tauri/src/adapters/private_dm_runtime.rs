@@ -57,6 +57,14 @@ const T_DIRECT_STABLE_MS: u64 = 30_000;
 // stranding the session on a dead path.
 const T_DIRECT_LOST_MS: u64 = 5_000;
 
+// Cadence and cap for automatic re-sends of user messages the peer's runtime
+// has not acknowledged yet (DeliveryAck). Moss pubsub has no store-and-forward
+// — a frame published into a dead/half-open link is gone — so unacked Sent
+// messages re-publish until acked. The cap bounds chatter toward old clients
+// that never ack; receivers dedupe by message_id, so re-sends are idempotent.
+const AUTO_RESEND_MS: u64 = 15_000;
+const AUTO_RESEND_MAX: u32 = 10;
+
 /// Pure fallback decision. `direct_now` is the instantaneous direct-peer
 /// signal; `direct_stable` / `direct_gone` are its debounced edges (signal held
 /// continuously for T_DIRECT_STABLE_MS present / T_DIRECT_LOST_MS absent).
@@ -213,6 +221,10 @@ struct PrivateDmSession {
     pending_key_package: Option<Vec<u8>>,
     pending_welcome: Option<Vec<u8>>,
     last_handshake_send_ms: u64,
+    // Message ids whose delivery state changed from an INBOUND frame (peer's
+    // DeliveryAck); the runtime drains this to persist those rows, since the
+    // session itself cannot reach persistence.
+    dirty_outbound: Vec<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -661,6 +673,7 @@ impl PrivateDmRuntime {
                 message_id: Some(message_id.clone()),
                 sent_at_ms: Some(sent_at_ms),
                 ciphertext_b64: encode(&ciphertext),
+                resend: None,
             };
             let payload = serde_json::to_vec(&envelope)
                 .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
@@ -675,6 +688,8 @@ impl PrivateDmRuntime {
                 delivery_status: MessageDeliveryStatus::Pending,
                 delivery_error: None,
                 retry_count: 0,
+                auto_resends: 0,
+                last_send_ms: sent_at_ms,
             };
             session.upsert_message(message);
             session
@@ -703,7 +718,15 @@ impl PrivateDmRuntime {
             Ok(RouteOutcome::Published) => {
                 let session = self.session_mut(session_id)?;
                 session.mark_delivery(&message_id, MessageDeliveryStatus::Sent, None, 0)?;
-                session.outbound_attempts.remove(&message_id);
+                // Sent means "handed to the transport", not "arrived": the
+                // attempt stays retained (and auto re-sent) until the peer's
+                // DeliveryAck upgrades the message to Delivered.
+                if let Some(attempt) = session.outbound_attempts.get_mut(&message_id) {
+                    attempt.delivery_status = MessageDeliveryStatus::Sent;
+                    attempt.delivery_error = None;
+                    attempt.last_send_ms = sent_at_ms;
+                }
+                session.sync_attempt_message_json(&message_id)?;
                 SendMessageResult {
                     session_id: session_id_owned,
                     state,
@@ -829,7 +852,13 @@ impl PrivateDmRuntime {
                     None,
                     retry_count,
                 )?;
-                session.outbound_attempts.remove(message_id);
+                // Retained until the peer's DeliveryAck — see send_message.
+                if let Some(attempt) = session.outbound_attempts.get_mut(message_id) {
+                    attempt.delivery_status = MessageDeliveryStatus::Sent;
+                    attempt.delivery_error = None;
+                    attempt.last_send_ms = now_ms();
+                }
+                session.sync_attempt_message_json(message_id)?;
                 SendMessageResult {
                     session_id: session_id_owned,
                     state,
@@ -1070,9 +1099,22 @@ impl PrivateDmRuntime {
         // once a second, so this is the heartbeat that retransmits a KeyPackage
         // whose first publish was dropped before the mesh link formed.
         let relay = self.relay.as_ref().map(|handle| &handle.jobs);
-        for session in self.sessions.values_mut() {
+        // (session_id, message_id) pairs whose outbound attempt state changed
+        // this tick — from the peer's DeliveryAck or an auto re-send — and
+        // must be re-persisted after the mutable session borrow ends.
+        let mut dirty: Vec<(String, String)> = Vec::new();
+        for (session_id, session) in self.sessions.iter_mut() {
             session.pump_attachment_requests(relay);
             session.pump_handshake(now, relay);
+            for message_id in session.pump_unacked_resends(now, relay) {
+                dirty.push((session_id.clone(), message_id));
+            }
+            for message_id in session.take_dirty_outbound() {
+                dirty.push((session_id.clone(), message_id));
+            }
+        }
+        for (session_id, message_id) in dirty {
+            self.persist_outbound_state(&session_id, &message_id, false);
         }
         self.persist_session_tail();
         Ok(())
@@ -1158,20 +1200,36 @@ impl PrivateDmRuntime {
             let Some(session) = self.sessions.get_mut(&outcome.session_id) else {
                 continue;
             };
-            let retry_count = session
+            // No live attempt = the message already settled (the peer's ack
+            // upgraded it to Delivered, or the resend loop retired it). A
+            // buffered worker outcome must never regress that.
+            let Some((retry_count, status)) = session
                 .outbound_attempts
                 .get(&message_id)
-                .map(|attempt| attempt.retry_count)
-                .unwrap_or(0);
+                .map(|attempt| (attempt.retry_count, attempt.delivery_status))
+            else {
+                continue;
+            };
             let applied = match outcome.error {
                 None => {
-                    session.outbound_attempts.remove(&message_id);
-                    session.mark_delivery(
-                        &message_id,
-                        MessageDeliveryStatus::Sent,
-                        None,
-                        retry_count,
-                    )
+                    // Sent over the relay, still awaiting the peer's
+                    // DeliveryAck — keep the attempt for auto re-sends.
+                    if let Some(attempt) = session.outbound_attempts.get_mut(&message_id) {
+                        attempt.delivery_status = MessageDeliveryStatus::Sent;
+                        attempt.delivery_error = None;
+                        attempt.last_send_ms = now_ms();
+                    }
+                    session
+                        .mark_delivery(&message_id, MessageDeliveryStatus::Sent, None, retry_count)
+                        .and_then(|_| session.sync_attempt_message_json(&message_id))
+                }
+                Some(error) if status == MessageDeliveryStatus::Sent => {
+                    // A failed RE-send of a message the transport already took
+                    // once: keep Sent, the resend pump tries again later. Only
+                    // a first send (attempt still Pending) may fail the
+                    // message.
+                    eprintln!("relay re-send failed for {message_id}: {error}");
+                    Ok(())
                 }
                 Some(error) => {
                     if let Some(attempt) = session.outbound_attempts.get_mut(&message_id) {
@@ -1536,6 +1594,7 @@ impl PrivateDmSession {
             pending_key_package: None,
             pending_welcome: None,
             last_handshake_send_ms: 0,
+            dirty_outbound: Vec::new(),
         }
     }
 
@@ -1646,7 +1705,7 @@ impl PrivateDmSession {
         if message.channel == self.control_channel {
             self.handle_control(message.payload, relay_jobs)
         } else if message.channel == self.data_channel {
-            self.handle_data(message.payload)
+            self.handle_data(message.payload, relay_jobs)
         } else if message.channel == self.blob_channel {
             self.handle_blob(message.payload, relay_jobs)
         } else if wire::channel_call_id(&message.channel).is_some() {
@@ -1795,6 +1854,80 @@ impl PrivateDmSession {
         let _ = self.route_send(wire::ChannelKind::Control, &payload, relay_jobs, None);
     }
 
+    /// Re-send user messages the peer has not acknowledged. Moss pubsub has
+    /// no store-and-forward, so a frame published into a dead/half-open link
+    /// vanishes; unacked Sent attempts re-publish every AUTO_RESEND_MS until
+    /// the peer's DeliveryAck lands or AUTO_RESEND_MAX gives up (old client
+    /// that never acks — the message keeps its Sent status). Returns the ids
+    /// whose attempt state changed so the runtime can persist them.
+    fn pump_unacked_resends(&mut self, now_ms: u64, relay_jobs: RelayJobs<'_>) -> Vec<String> {
+        if !self.peer_joined {
+            return Vec::new();
+        }
+        let due: Vec<(String, String, u32)> = self
+            .outbound_attempts
+            .iter()
+            .filter(|(_, attempt)| {
+                attempt.delivery_status == MessageDeliveryStatus::Sent
+                    && attempt.auto_resends < AUTO_RESEND_MAX
+                    && now_ms.saturating_sub(attempt.last_send_ms) >= AUTO_RESEND_MS
+            })
+            .map(|(id, attempt)| {
+                (
+                    id.clone(),
+                    attempt.publish_payload_b64.clone(),
+                    attempt.auto_resends,
+                )
+            })
+            .collect();
+        let mut changed = Vec::new();
+        for (message_id, payload_b64, auto_resends) in due {
+            let Ok(payload) = decode(&payload_b64) else {
+                continue;
+            };
+            // Bump the resend counter INSIDE the envelope so the re-sent
+            // frame's bytes differ from the original — the receiver's
+            // frame-level sha256 dedup would otherwise swallow the duplicate
+            // before the re-ack path could run.
+            let Ok(mut envelope) = serde_json::from_slice::<DataEnvelope>(&payload) else {
+                continue;
+            };
+            envelope.resend = Some(auto_resends + 1);
+            let Ok(bytes) = serde_json::to_vec(&envelope) else {
+                continue;
+            };
+            // Only a re-send that actually left (published or queued) burns a
+            // slot — a relay that is down or a still-unknown peer id must not
+            // exhaust the budget with zero frames on the wire.
+            if self
+                .route_send(
+                    wire::ChannelKind::Data,
+                    &bytes,
+                    relay_jobs,
+                    Some(&message_id),
+                )
+                .is_err()
+            {
+                continue;
+            }
+            if let Some(attempt) = self.outbound_attempts.get_mut(&message_id) {
+                attempt.auto_resends += 1;
+                attempt.last_send_ms = now_ms;
+                // At the cap the attempt STAYS: the filter above stops the
+                // automatic loop, the message honestly keeps Sent (not
+                // Delivered), and a manual retry still has its payload.
+            }
+            changed.push(message_id);
+        }
+        changed
+    }
+
+    /// Ids whose delivery state changed from inbound frames since the last
+    /// drain — the runtime persists these rows.
+    fn take_dirty_outbound(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.dirty_outbound)
+    }
+
     fn handle_control(
         &mut self,
         payload: Vec<u8>,
@@ -1870,6 +2003,38 @@ impl PrivateDmSession {
                 self.peer_joined = true;
                 // Joined: stop retransmitting the KeyPackage.
                 self.pending_key_package = None;
+                Ok(())
+            }
+            ControlEnvelope::DeliveryAck {
+                session_id,
+                participant_id,
+                ack_ciphertext_b64,
+            } if session_id == self.session_id && participant_id != self.participant_id => {
+                // Decrypting authenticates: only the MLS peer can produce a
+                // ciphertext this group accepts. Forged or garbled acks stop
+                // here and the resend loop keeps running.
+                let Ok(ciphertext) = decode(&ack_ciphertext_b64) else {
+                    return Ok(());
+                };
+                let Ok(plaintext) = self.crypto.decrypt(&ciphertext) else {
+                    eprintln!("dropping unverifiable delivery ack for {session_id}");
+                    return Ok(());
+                };
+                let Ok(message_id) = String::from_utf8(plaintext) else {
+                    return Ok(());
+                };
+                // The peer's runtime holds the message: settle it as
+                // Delivered and stop the auto-resend loop. Unknown ids (ack
+                // for an attempt a restart already dropped) are ignored.
+                if let Some(attempt) = self.outbound_attempts.remove(&message_id) {
+                    self.mark_delivery(
+                        &message_id,
+                        MessageDeliveryStatus::Delivered,
+                        None,
+                        attempt.retry_count,
+                    )?;
+                    self.dirty_outbound.push(message_id);
+                }
                 Ok(())
             }
             ControlEnvelope::AttachmentManifest {
@@ -1986,7 +2151,11 @@ impl PrivateDmSession {
         self.messages.push(message);
     }
 
-    fn handle_data(&mut self, payload: Vec<u8>) -> Result<(), PrivateDmRuntimeError> {
+    fn handle_data(
+        &mut self,
+        payload: Vec<u8>,
+        relay_jobs: RelayJobs<'_>,
+    ) -> Result<(), PrivateDmRuntimeError> {
         let envelope: DataEnvelope = decode_json(&payload)?;
 
         if envelope.session_id != self.session_id || envelope.participant_id == self.participant_id
@@ -1994,8 +2163,21 @@ impl PrivateDmSession {
             return Ok(());
         }
 
+        // Re-ack a message we already hold BEFORE decrypting: MLS forward
+        // secrecy makes a second decrypt of the same ciphertext fail, and a
+        // duplicate arriving at all usually means our previous ack was lost.
+        // This also covers post-restart replays — rehydrated history re-acks
+        // instead of erroring on the consumed MLS secret.
+        if let Some(message_id) = envelope.message_id.as_deref() {
+            if self.has_inbound_message(message_id) {
+                self.send_delivery_ack(message_id, relay_jobs);
+                return Ok(());
+            }
+        }
+
         let plaintext = self.crypto.decrypt(&decode(&envelope.ciphertext_b64)?)?;
         self.note_verified_peer_activity(&envelope.from_device);
+        let ack_id = envelope.message_id.clone();
         let message = self.stamp_message(ChatMessage {
             from_device: envelope.from_device,
             body: String::from_utf8_lossy(&plaintext).into_owned(),
@@ -2012,8 +2194,39 @@ impl PrivateDmSession {
             return Ok(());
         }
         self.messages.push(message);
+        if let Some(message_id) = ack_id.as_deref() {
+            self.send_delivery_ack(message_id, relay_jobs);
+        }
 
         Ok(())
+    }
+
+    /// True when an inbound (peer-authored) message with this id is already
+    /// in the log — the trigger for re-acking instead of re-processing.
+    fn has_inbound_message(&self, message_id: &str) -> bool {
+        self.messages.iter().any(|existing| {
+            existing.from_device != self.device_id
+                && existing.message_id.as_deref() == Some(message_id)
+        })
+    }
+
+    /// Best-effort delivery receipt. Loss is fine: the sender keeps
+    /// re-sending until a later duplicate provokes a fresh ack. The message
+    /// id is MLS-encrypted so only the real peer can mint an ack — plaintext
+    /// would let any mesh member fake ✓✓ and silence the resend loop.
+    fn send_delivery_ack(&mut self, message_id: &str, relay_jobs: RelayJobs<'_>) {
+        let Ok(ciphertext) = self.crypto.encrypt(message_id.as_bytes()) else {
+            return;
+        };
+        let envelope = ControlEnvelope::DeliveryAck {
+            session_id: self.session_id.clone(),
+            participant_id: self.participant_id.clone(),
+            ack_ciphertext_b64: encode(&ciphertext),
+        };
+        let Ok(payload) = serde_json::to_vec(&envelope) else {
+            return;
+        };
+        let _ = self.route_send(wire::ChannelKind::Control, &payload, relay_jobs, None);
     }
 
     fn handle_blob(
@@ -2725,12 +2938,31 @@ mod tests {
         .expect("Bob should accept invite");
 
         wait_until_ready(&mut alice, &mut bob, &invite.session_id);
-        alice
+        let sent = alice
             .send_message(&invite.session_id, "hello bob".to_string())
             .expect("Alice should send");
 
         let snapshot = wait_for_message(&mut bob, &invite.session_id, "hello bob");
         assert_eq!(snapshot.state, "ready");
+
+        // Bob's runtime acks on receipt; Alice's message must reach the
+        // Delivered (✓✓) state once she drains the ack.
+        let mut delivered = false;
+        for _ in 0..40 {
+            let _ = bob.poll_session(&invite.session_id);
+            let alice_view = alice
+                .poll_session(&invite.session_id)
+                .expect("poll should pass");
+            if alice_view.messages.iter().any(|m| {
+                m.message_id.as_deref() == Some(sent.message_id.as_str())
+                    && m.delivery_status == Some(MessageDeliveryStatus::Delivered)
+            }) {
+                delivered = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(delivered, "Alice's message never reached Delivered");
     }
 
     #[test]
@@ -2918,6 +3150,7 @@ mod tests {
             message_id: Some("live-inbound-000001".to_string()),
             sent_at_ms: Some(2),
             ciphertext_b64: encode(&ciphertext),
+            resend: None,
         })
         .expect("data envelope should serialize");
 
@@ -2928,7 +3161,7 @@ mod tests {
         assert_eq!(session.state(), "waiting");
 
         session
-            .handle_data(payload)
+            .handle_data(payload, None)
             .expect("Alice should decrypt inbound data");
 
         assert!(session.peer_joined);
@@ -3415,7 +3648,8 @@ mod tests {
         let job = jobs_rx.try_recv().expect("job must be queued");
         assert_eq!(job.message_id.as_deref(), Some(message_id.as_str()));
 
-        // Worker success → Sent, attempt dropped.
+        // Worker success → Sent; the attempt stays retained awaiting the
+        // peer's DeliveryAck (auto-resend loop owns it from here).
         results_tx
             .send(relay::RelayJobResult {
                 session_id: invite.session_id.clone(),
@@ -3425,7 +3659,11 @@ mod tests {
             .expect("result channel open");
         alice.drain_relay_results();
         let session = &alice.sessions[&invite.session_id];
-        assert!(!session.outbound_attempts.contains_key(&message_id));
+        assert_eq!(
+            session.outbound_attempts[&message_id].delivery_status,
+            MessageDeliveryStatus::Sent,
+            "attempt stays retained until the peer acks"
+        );
         let message = session
             .messages
             .iter()
@@ -3546,6 +3784,236 @@ mod tests {
             .expect("attempt should rehydrate");
         assert_eq!(attempt.delivery_status, MessageDeliveryStatus::Failed);
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    // The peer's DeliveryAck upgrades Sent → Delivered and retires the
+    // attempt (stopping the auto-resend loop).
+    #[test]
+    fn forged_delivery_ack_does_not_upgrade() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42194,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let result = alice
+            .send_message(&invite.session_id, "ping".to_string())
+            .expect("send should publish");
+        assert_eq!(result.delivery_status, MessageDeliveryStatus::Sent);
+
+        // Forgery #1: garbage ciphertext — an attacker without the MLS group
+        // secrets cannot produce anything that decrypts.
+        let forged = serde_json::to_vec(&ControlEnvelope::DeliveryAck {
+            session_id: invite.session_id.clone(),
+            participant_id: "peer-participant".to_string(),
+            ack_ciphertext_b64: encode(b"not-an-mls-ciphertext"),
+        })
+        .expect("ack should serialize");
+        // Forgery #2: a REPLAYED ciphertext minted by this very group member
+        // (MLS cannot decrypt own messages, so even this is rejected).
+        let self_minted = {
+            let session = alice
+                .sessions
+                .get_mut(&invite.session_id)
+                .expect("Alice session should exist");
+            let ciphertext = session
+                .crypto
+                .encrypt(result.message_id.as_bytes())
+                .expect("encrypt should work");
+            serde_json::to_vec(&ControlEnvelope::DeliveryAck {
+                session_id: invite.session_id.clone(),
+                participant_id: "peer-participant".to_string(),
+                ack_ciphertext_b64: encode(&ciphertext),
+            })
+            .expect("ack should serialize")
+        };
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+        session
+            .handle_control(forged, None)
+            .expect("forged ack must not error");
+        session
+            .handle_control(self_minted, None)
+            .expect("replayed ack must not error");
+
+        let session = &alice.sessions[&invite.session_id];
+        assert!(
+            session.outbound_attempts.contains_key(&result.message_id),
+            "attempt must survive forged acks"
+        );
+        let message = session
+            .messages
+            .iter()
+            .find(|m| m.message_id.as_deref() == Some(result.message_id.as_str()))
+            .expect("message exists");
+        assert_eq!(
+            message.delivery_status,
+            Some(MessageDeliveryStatus::Sent),
+            "no forged Delivered"
+        );
+    }
+
+    // Unacked Sent messages re-publish on the resend cadence and give up
+    // (keeping Sent) after AUTO_RESEND_MAX tries.
+    #[test]
+    fn unacked_sent_message_auto_resends_then_gives_up() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42195,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+        let result = alice
+            .send_message(&invite.session_id, "ping".to_string())
+            .expect("send should publish");
+        let message_id = result.message_id;
+
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+        session.peer_joined = true;
+
+        // Not due yet: last_send_ms is fresh.
+        assert!(session.pump_unacked_resends(now_ms(), None).is_empty());
+
+        // A re-send whose publish FAILS must not burn a resend slot.
+        session
+            .outbound_attempts
+            .get_mut(&message_id)
+            .expect("attempt retained")
+            .last_send_ms = 0;
+        {
+            let _publish_fail = wire::fail_next_test_publish("simulated outage");
+            assert!(
+                session.pump_unacked_resends(now_ms(), None).is_empty(),
+                "failed publish is not a resend"
+            );
+        }
+        assert_eq!(session.outbound_attempts[&message_id].auto_resends, 0);
+
+        for expected in 1..=AUTO_RESEND_MAX {
+            session
+                .outbound_attempts
+                .get_mut(&message_id)
+                .expect("attempt retained")
+                .last_send_ms = 0;
+            let changed = session.pump_unacked_resends(now_ms(), None);
+            assert_eq!(changed, vec![message_id.clone()], "resend #{expected}");
+            assert_eq!(
+                session.outbound_attempts[&message_id].auto_resends,
+                expected
+            );
+        }
+        // Cap reached: the loop stops but the attempt SURVIVES, so a manual
+        // retry still has its payload and the ack can still land later.
+        session
+            .outbound_attempts
+            .get_mut(&message_id)
+            .expect("attempt survives the cap")
+            .last_send_ms = 0;
+        assert!(
+            session.pump_unacked_resends(now_ms(), None).is_empty(),
+            "cap stops the automatic loop"
+        );
+        let message = session
+            .messages
+            .iter()
+            .find(|m| m.message_id.as_deref() == Some(message_id.as_str()))
+            .expect("message exists");
+        assert_eq!(
+            message.delivery_status,
+            Some(MessageDeliveryStatus::Sent),
+            "message keeps Sent when the peer never acks"
+        );
+    }
+
+    // A duplicate inbound Data frame (peer re-sent because our ack was lost)
+    // must re-ack from the stored message id, never re-decrypt.
+    #[test]
+    fn duplicate_inbound_data_reacks_without_decrypt() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42196,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let (jobs_tx, jobs_rx) = mpsc::channel();
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+        session.path = DmPath::Relayed;
+        session.peer_moss_id = Some("ab".repeat(32));
+        // Seed the already-received inbound message.
+        session.messages.push(ChatMessage {
+            from_device: "Peer".to_string(),
+            body: "hi".to_string(),
+            message_id: Some("m-dup".to_string()),
+            sent_at_ms: Some(1),
+            attachment: None,
+            call_event: None,
+            delivery_status: None,
+            delivery_error: None,
+            retryable: None,
+            retry_count: None,
+        });
+
+        let dup = serde_json::to_vec(&DataEnvelope {
+            session_id: invite.session_id.clone(),
+            participant_id: "peer-participant".to_string(),
+            from_device: "Peer".to_string(),
+            message_id: Some("m-dup".to_string()),
+            sent_at_ms: Some(1),
+            // Garbage ciphertext: decrypt would fail, proving the re-ack
+            // path returns before touching MLS.
+            ciphertext_b64: encode(b"not-a-ciphertext"),
+            resend: Some(1),
+        })
+        .expect("dup should serialize");
+        session
+            .handle_data(dup, Some(&jobs_tx))
+            .expect("dup must not error");
+
+        let job = jobs_rx.try_recv().expect("re-ack should queue");
+        assert_eq!(job.kind, wire::ChannelKind::Control);
+        let frame: wire::RelayFrame =
+            serde_json::from_slice(&job.bytes).expect("job bytes are a RelayFrame");
+        let ack = String::from_utf8(frame.bytes).expect("ack is JSON");
+        assert!(ack.contains("DeliveryAck"), "control frame is an ack");
+        assert!(
+            ack.contains("ack_ciphertext_b64") && !ack.contains("m-dup"),
+            "acked id travels encrypted, never in the clear"
+        );
     }
 
     #[test]
@@ -3790,10 +4258,15 @@ mod tests {
             (invite, failed.message_id)
         };
 
+        // The successful retry keeps the attempt persisted (as Sent) until the
+        // peer's DeliveryAck retires it — it must survive, not vanish.
         let stored_attempt = persistence
             .get_outbound_attempt("private_dm", &invite.session_id, &failed_message_id)
-            .expect("lookup should pass");
-        assert!(stored_attempt.is_none());
+            .expect("lookup should pass")
+            .expect("attempt should stay persisted while unacked");
+        let stored: OutboundAttemptRecord =
+            serde_json::from_slice(&stored_attempt).expect("attempt row should decode");
+        assert_eq!(stored.delivery_status, MessageDeliveryStatus::Sent);
 
         let _ = std::fs::remove_file(&db_path);
     }

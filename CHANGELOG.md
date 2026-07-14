@@ -18,6 +18,11 @@ All notable changes to Mosh are documented here. Format follows
   failure after retries).
 
 ### Added
+- **Delivery receipts in direct messages.** Your own messages now show their
+  real journey: *sending…* → *✓ sent* (left this device) → *✓✓ delivered*
+  (the peer's app confirmed receipt). Until a message is confirmed, Mosh
+  automatically re-sends it in the background — so a message published into a
+  dead connection no longer vanishes silently while looking "sent".
 - **Diagnostics show relay warm-up.** While the shared relay node has not yet
   found a relay-capable supernode, the conversation's Path row reads "relayed
   via supernode (warming up)" so a not-yet-usable relay is no longer

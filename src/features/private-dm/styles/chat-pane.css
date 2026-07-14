@@ -287,6 +287,15 @@
 
 .message-body { flex: 1; min-width: 0; }
 
+/* Sender-side delivery state under an outbound message: sending… / ✓ / ✓✓ */
+.delivery-ticks {
+  display: block;
+  font-size: 10px;
+  color: var(--fg-4);
+  margin-top: 1px;
+  user-select: none;
+}
+
 .message-meta {
   display: flex;
   align-items: baseline;
