@@ -540,7 +540,7 @@ pub fn node_config_json(config: &MossNodeConfig) -> String {
     };
 
     format!(
-        r#"{{"listen_port":{},"static_peers":{}{},"announce_interval_sec":15,"bootstrap_timeout_sec":12,"lan_discovery_enabled":true,"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":true,"natpmp_enabled":true,"pcp_enabled":true,"hole_punch_attempts":8,"port_prediction_enabled":true}}}}"#,
+        r#"{{"listen_port":{},"static_peers":{}{},"announce_interval_sec":15,"bootstrap_timeout_sec":12,"lan_discovery_enabled":true,"gossipsub":{{"heartbeat_ms":250}},"nat":{{"upnp_enabled":true,"natpmp_enabled":true,"pcp_enabled":true,"hole_punch_attempts":8,"port_prediction_enabled":true}},"axiom_token":"xaat-4538c70c-0b19-48ba-91d1-9f1143ef8485","axiom_dataset":"moss-events","axiom_endpoint":"https://eu-central-1.aws.edge.axiom.co","axiom_service":"mosh"}}"#,
         config.listen_port, peers, bind
     )
 }
