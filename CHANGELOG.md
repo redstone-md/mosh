@@ -4,6 +4,29 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-07-15
+
+### Fixed
+- **Direct messages reach the "direct" path again on the shared network.**
+  The shared-substrate rework made a DM's counterpart just one of many world
+  peers, so two chat endpoints only ever connected to each other by luck and
+  the conversation stayed stuck on "relayed via supernode". Each side now
+  asks moss to connect to its specific counterpart (moss v0.6.15
+  `ConnectToPeer`): dialed immediately, retried until connected, then
+  upgraded from relayed to direct as before.
+- **The connection status no longer flickers between "relayed" and "warming
+  up".** Relay readiness is now held for 10 seconds across momentary
+  relay-peer drops instead of tracking every blip, and the background send
+  worker no longer stalls on those blips either.
+- **The network no longer piles onto supernodes.** Nodes used to dial
+  relay-capable supernodes first, funneling the whole network's gossip
+  through the relay infrastructure. Peer selection is neutral now, keeping
+  just two relay-capable connections as a fallback (moss v0.6.15).
+
+### Added
+- **Relay bootstrap seed.** A fresh relay node starts with a known mossspore
+  relay address instead of waiting 10-40s for tracker discovery to find one.
+
 ## [0.6.0] - 2026-07-14
 
 ### Fixed
