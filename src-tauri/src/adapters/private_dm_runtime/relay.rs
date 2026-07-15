@@ -99,6 +99,37 @@ pub fn relay_ready(node: &MossNode) -> bool {
         .is_some_and(|info| info.relay_capable_peer_count > 0)
 }
 
+/// How long readiness survives a capability gap. The capable-peer count flaps
+/// with substrate churn; without a hold the UI flickers between "relayed" and
+/// "warming up" and the send worker stalls on every blip.
+pub const READY_HOLD: Duration = Duration::from_secs(10);
+
+/// Debounced relay readiness: ready while a relay-capable peer is visible now
+/// or was within [`READY_HOLD`]. Pure state machine — the FFI read stays in
+/// [`relay_ready`], so this is unit-testable with injected clocks.
+pub struct RelayReadiness {
+    last_capable: Option<Instant>,
+}
+
+impl RelayReadiness {
+    pub const fn new() -> Self {
+        Self { last_capable: None }
+    }
+
+    pub fn ready_at(&mut self, capable_now: bool, now: Instant) -> bool {
+        if capable_now {
+            self.last_capable = Some(now);
+            return true;
+        }
+        self.last_capable
+            .is_some_and(|seen| now.duration_since(seen) < READY_HOLD)
+    }
+
+    pub fn observe(&mut self, node: &MossNode) -> bool {
+        self.ready_at(relay_ready(node), Instant::now())
+    }
+}
+
 /// Bring up the shared relay node: Init on RELAY_MESH_ID, wire the relay
 /// callback (no pubsub/message callback — the relay mesh carries only
 /// point-to-point relay frames, never a DM topic), Start, then dial each
@@ -249,6 +280,7 @@ fn run_worker(
 ) {
     let started = Instant::now();
     let mut queue = OutboundQueue::default();
+    let mut readiness = RelayReadiness::new();
     loop {
         let now = started.elapsed().as_millis() as u64;
         match jobs.recv_timeout(Duration::from_millis(READY_POLL_MS)) {
@@ -277,7 +309,7 @@ fn run_worker(
                 .unwrap_or_else(|| "relay not ready in time".to_string());
             let _ = results.send(job_result(&dead, Some(error)));
         }
-        if queue.is_empty() || !relay_ready(&node) {
+        if queue.is_empty() || !readiness.observe(&node) {
             continue;
         }
         // Bounded batch per tick: each attempt can block ~5s, and intake /
@@ -339,6 +371,32 @@ mod tests {
             target: "ab".repeat(32),
             bytes: bytes.to_vec(),
         }
+    }
+
+    // The capable-peer count flaps with substrate churn; readiness must hold
+    // through a short gap instead of flickering the UI between "relayed" and
+    // "warming up" every time a relay peer blips.
+    #[test]
+    fn readiness_holds_through_short_capability_gaps() {
+        let mut readiness = RelayReadiness::new();
+        let t0 = Instant::now();
+        assert!(
+            !readiness.ready_at(false, t0),
+            "never-capable is not ready"
+        );
+        assert!(readiness.ready_at(true, t0), "capable now is ready");
+        assert!(
+            readiness.ready_at(false, t0 + Duration::from_secs(9)),
+            "a gap inside READY_HOLD stays ready"
+        );
+        assert!(
+            !readiness.ready_at(false, t0 + Duration::from_secs(11)),
+            "a gap past READY_HOLD drops readiness"
+        );
+        assert!(
+            readiness.ready_at(true, t0 + Duration::from_secs(12)),
+            "capability coming back restores readiness"
+        );
     }
 
     #[test]
