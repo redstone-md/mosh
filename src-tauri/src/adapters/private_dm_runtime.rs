@@ -3404,7 +3404,10 @@ mod tests {
         let bob_id = "cd".repeat(32);
         alice_session.peer_moss_id = Some(bob_id.clone());
         alice_session.pump_peer_connect();
-        assert_eq!(alice_session.connect_requested_for.as_deref(), Some(bob_id.as_str()));
+        assert_eq!(
+            alice_session.connect_requested_for.as_deref(),
+            Some(bob_id.as_str())
+        );
 
         // Peer re-handshakes under a fresh moss identity -> re-register.
         let fresh_id = "ef".repeat(32);

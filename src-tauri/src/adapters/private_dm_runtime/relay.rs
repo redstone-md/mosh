@@ -380,10 +380,7 @@ mod tests {
     fn readiness_holds_through_short_capability_gaps() {
         let mut readiness = RelayReadiness::new();
         let t0 = Instant::now();
-        assert!(
-            !readiness.ready_at(false, t0),
-            "never-capable is not ready"
-        );
+        assert!(!readiness.ready_at(false, t0), "never-capable is not ready");
         assert!(readiness.ready_at(true, t0), "capable now is ready");
         assert!(
             readiness.ready_at(false, t0 + Duration::from_secs(9)),
