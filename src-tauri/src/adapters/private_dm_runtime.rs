@@ -218,6 +218,10 @@ struct PrivateDmSession {
     fingerprint: String,
     // ponytail: not persisted, relearned on next handshake resend
     peer_moss_id: Option<String>,
+    // The peer id last handed to moss as an explicit connect target. moss
+    // retries a registered target on its own, so each id value needs exactly
+    // one FFI call; a re-handshake under a fresh id re-registers.
+    connect_requested_for: Option<String>,
     invite_uri: Option<String>,
     // Transport coordinates kept so the persisted session record can be
     // rebuilt verbatim (notably to refresh the joiner's group_id after join).
@@ -1131,6 +1135,7 @@ impl PrivateDmRuntime {
         let mut dirty: Vec<(String, String)> = Vec::new();
         for (session_id, session) in self.sessions.iter_mut() {
             session.pump_attachment_requests(relay);
+            session.pump_peer_connect();
             session.pump_handshake(now, relay);
             for message_id in session.pump_unacked_resends(now, relay) {
                 dirty.push((session_id.clone(), message_id));
@@ -1598,6 +1603,7 @@ impl PrivateDmSession {
             mesh_id,
             fingerprint,
             peer_moss_id: None,
+            connect_requested_for: None,
             invite_uri,
             listen_port,
             static_peer,
@@ -1858,6 +1864,29 @@ impl PrivateDmSession {
                 .map_err(|_| PrivateDmRuntimeError::Moss("relay send worker unavailable".into()))?;
                 Ok(RouteOutcome::Queued)
             }
+        }
+    }
+
+    /// Hand the counterpart's moss id to moss as an explicit connect target.
+    /// The substrate is room-blind, so organic discovery only reaches the
+    /// counterpart by chance; the explicit target is dialed immediately and
+    /// retried by moss's maintenance loop until connected (direct first,
+    /// relay fallback), bypassing glare and dial ranking. One FFI call per id
+    /// value: moss keeps the registration, and a peer that re-handshakes
+    /// under a fresh identity re-registers on the id change. Driven by the
+    /// same ~1s drain tick as pump_handshake.
+    fn pump_peer_connect(&mut self) {
+        let Some(id) = self.peer_moss_id.clone() else {
+            return;
+        };
+        if self.connect_requested_for.as_deref() == Some(id.as_str()) {
+            return;
+        }
+        match self.node.connect_to_peer(&id) {
+            Ok(()) => self.connect_requested_for = Some(id),
+            // Leave connect_requested_for unset so the next tick retries the
+            // registration itself (e.g. node not started yet during rehydrate).
+            Err(error) => eprintln!("connect_to_peer({id}) failed: {error}"),
         }
     }
 
@@ -3312,6 +3341,72 @@ mod tests {
             .get(&invite.session_id)
             .expect("Bob session should exist");
         assert_eq!(bob_session.peer_moss_id.as_deref(), Some(alice_id.as_str()));
+    }
+
+    // On the room-blind shared substrate two DM endpoints only ever connect by
+    // chance, so each session must hand its counterpart's moss id to moss as an
+    // explicit connect target the moment the id is known: Bob from the invite,
+    // Alice from the first handshake frame; a re-handshake under a fresh id
+    // must re-register.
+    #[test]
+    fn sessions_request_explicit_connect_to_counterpart() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42172,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+
+        let mut bob = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        bob.accept_invite(AcceptInviteRequest {
+            invite_uri: invite.invite_uri.clone(),
+            display_name: "Bob".to_string(),
+            listen_port: 42173,
+            static_peer: Some("127.0.0.1:42172".to_string()),
+        })
+        .expect("Bob should accept invite");
+
+        // Bob's id was preseeded from the invite, so the accept-time drain tick
+        // must already have registered the explicit target.
+        let bob_session = bob
+            .sessions
+            .get(&invite.session_id)
+            .expect("Bob session should exist");
+        assert_eq!(
+            bob_session.connect_requested_for, bob_session.peer_moss_id,
+            "Bob requests an explicit connect to the invite's moss id"
+        );
+        assert!(bob_session.connect_requested_for.is_some());
+
+        // Alice has not learned Bob's id yet: nothing to request.
+        let alice_session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+        assert_eq!(alice_session.connect_requested_for, None);
+
+        // Alice learns the id -> the next pump registers it.
+        let bob_id = "cd".repeat(32);
+        alice_session.peer_moss_id = Some(bob_id.clone());
+        alice_session.pump_peer_connect();
+        assert_eq!(alice_session.connect_requested_for.as_deref(), Some(bob_id.as_str()));
+
+        // Peer re-handshakes under a fresh moss identity -> re-register.
+        let fresh_id = "ef".repeat(32);
+        alice_session.peer_moss_id = Some(fresh_id.clone());
+        alice_session.pump_peer_connect();
+        assert_eq!(
+            alice_session.connect_requested_for.as_deref(),
+            Some(fresh_id.as_str())
+        );
     }
 
     // D2 regression: the KeyPackage->Welcome handshake is a one-shot publish.
