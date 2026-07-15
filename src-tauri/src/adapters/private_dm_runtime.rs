@@ -165,6 +165,8 @@ pub struct PrivateDmRuntime {
     // worker's receiver is kept until it disconnects and drains empty —
     // otherwise those tracked messages would sit Pending forever.
     relay_results: Vec<mpsc::Receiver<relay::RelayJobResult>>,
+    // Debounces the snapshot's relay_ready flag (see shared_relay_ready).
+    relay_readiness: relay::RelayReadiness,
 }
 
 /// Borrowed intake of the relay send worker, threaded through the session
@@ -308,6 +310,7 @@ impl PrivateDmRuntime {
             relay_ref: relay::RelayRef::default(),
             relay: None,
             relay_results: Vec::new(),
+            relay_readiness: relay::RelayReadiness::new(),
         }
     }
 
@@ -1045,11 +1048,15 @@ impl PrivateDmRuntime {
     }
 
     /// Convergence state of the shared relay node, or None while it is down.
-    /// Computed once per poll — it is an FFI call into moss.
-    fn shared_relay_ready(&self) -> Option<bool> {
-        self.relay
-            .as_ref()
-            .map(|handle| relay::relay_ready(&handle.node))
+    /// Computed once per poll — it is an FFI call into moss. Debounced via
+    /// RelayReadiness so a relay-capable peer blip does not flicker the UI
+    /// between "relayed" and "warming up".
+    fn shared_relay_ready(&mut self) -> Option<bool> {
+        let capable_now = relay::relay_ready(&self.relay.as_ref()?.node);
+        Some(
+            self.relay_readiness
+                .ready_at(capable_now, std::time::Instant::now()),
+        )
     }
 
     fn stamp_relay_ready(&self, snapshot: &mut SessionSnapshot, relay_ready: Option<bool>) {
