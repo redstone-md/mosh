@@ -129,6 +129,22 @@ pub struct MeshInfo {
     pub supernode_ready: bool,
     #[serde(default)]
     pub public_key: String,
+    /// Per-peer identity of every currently connected peer. On the shared
+    /// substrate a node connects network-wide, so `direct_peer_count` counts
+    /// unrelated world peers; presence for one counterpart must match this list
+    /// by `id` (the peer's moss public-key hex) instead of trusting a count.
+    #[serde(default)]
+    pub peer_details: Vec<PeerDetail>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PeerDetail {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub addr: String,
+    #[serde(default)]
+    pub relayed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
