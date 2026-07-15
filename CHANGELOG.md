@@ -23,10 +23,6 @@ All notable changes to Mosh are documented here. Format follows
   through the relay infrastructure. Peer selection is neutral now, keeping
   just two relay-capable connections as a fallback (moss v0.6.15).
 
-### Added
-- **Relay bootstrap seed.** A fresh relay node starts with a known mossspore
-  relay address instead of waiting 10-40s for tracker discovery to find one.
-
 ## [0.6.0] - 2026-07-14
 
 ### Fixed
