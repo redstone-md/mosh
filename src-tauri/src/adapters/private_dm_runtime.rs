@@ -21,7 +21,7 @@ use crate::adapters::voice_call_runtime::{CallPhase, CallState};
 pub use contracts::{
     AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
     AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
-    DmOffer, InviteCreated, MeshInfo, MessageDeliveryStatus, OutgoingCall, PendingCall,
+    DmOffer, InviteCreated, MeshInfo, MessageDeliveryStatus, OutgoingCall, PeerDetail, PendingCall,
     PrivateDmRuntimeError, SendMessageResult, SessionListSnapshot, SessionSnapshot, SnapshotEvent,
     StartSessionRequest,
 };
@@ -88,6 +88,32 @@ fn next_path(
         DmPath::Direct if direct_gone => DmPath::Relayed,
         other => other,
     }
+}
+
+/// True when our specific counterpart is currently a connected peer — direct OR
+/// relayed. The per-DM node rides the SHARED substrate (its `mesh_id` is only a
+/// pub/sub room), so it connects network-wide and `peer_count` counts unrelated
+/// world nodes; it can no longer stand in for "the counterpart is here". Match
+/// moss's `peer_details` by id. Before the id is known (creator, pre-handshake)
+/// we cannot single the peer out, so fall back to "any peer"; readiness is also
+/// gated on `peer_joined`, which only flips on a verified counterpart frame.
+fn peer_is_live(peer_moss_id: Option<&str>, info: &MeshInfo) -> bool {
+    match peer_moss_id {
+        Some(id) => info.peer_details.iter().any(|p| p.id == id),
+        None => info.peer_count > 0 || info.direct_peer_count > 0 || info.relayed_peer_count > 0,
+    }
+}
+
+/// True when our counterpart is reachable as a DIRECT (non-relayed) peer — the
+/// signal to migrate to / hold the Direct path. On the shared substrate
+/// `direct_peer_count` also counts unrelated world peers, so we match
+/// `peer_details` by id and require `!relayed`. Unknown id ⇒ no confirmed direct
+/// peer, so the fallback timer moves the session to Relayed until it proves out.
+fn peer_is_direct(peer_moss_id: Option<&str>, info: &MeshInfo) -> bool {
+    let Some(id) = peer_moss_id else {
+        return false;
+    };
+    info.peer_details.iter().any(|p| p.id == id && !p.relayed)
 }
 
 fn now_ms() -> u64 {
@@ -2566,21 +2592,29 @@ impl PrivateDmSession {
         self.peer_joined && self.crypto.is_ready() && self.has_live_peer()
     }
 
+    /// True when our specific counterpart (`peer_moss_id`) is a currently
+    /// connected peer of the per-DM node — direct OR relayed. The per-DM node
+    /// now rides the SHARED substrate (mesh_id is only a pub/sub room), so it
+    /// connects to peers network-wide and a bare `peer_count` counts unrelated
+    /// world nodes — it can no longer stand in for "the counterpart is here".
+    /// We match moss's `peer_details` list by id instead. Before the id is known
+    /// (creator side, pre-handshake) we cannot single the peer out, so fall back
+    /// to "any peer"; readiness is additionally gated on `peer_joined`, which
+    /// only flips on a verified frame from the actual counterpart.
     fn has_live_peer(&self) -> bool {
-        self.mesh_info().is_some_and(|info| {
-            info.peer_count > 0 || info.direct_peer_count > 0 || info.relayed_peer_count > 0
-        })
+        self.mesh_info()
+            .is_some_and(|info| peer_is_live(self.peer_moss_id.as_deref(), &info))
     }
 
-    /// True when a genuine DIRECT peer exists on the per-DM mesh, i.e. a peer we
-    /// reached without moss's internal relay. The per-DM node lives on the secret
-    /// per-DM `mesh_id` (separate from the shared `moss-relay/1` node), and moss
-    /// reports `direct_peer_count` for peers where `!peer.relayed`, so a non-zero
-    /// count means a real hole-punched link — the signal to migrate to / stay
-    /// Direct. Kept a single method so the signal is swappable.
+    /// True when our counterpart is reachable as a DIRECT (non-relayed) peer of
+    /// the per-DM node — the signal to migrate to / hold the Direct path. On the
+    /// shared substrate `direct_peer_count` also counts unrelated world peers, so
+    /// we match `peer_details` by id and require `!relayed`. An unknown id means
+    /// no confirmed direct peer yet, so the fallback timer moves the session to
+    /// Relayed until the counterpart proves reachable.
     fn has_direct_peer(&self) -> bool {
         self.mesh_info()
-            .is_some_and(|info| info.direct_peer_count > 0)
+            .is_some_and(|info| peer_is_direct(self.peer_moss_id.as_deref(), &info))
     }
 
     fn call_start(&mut self) -> Result<CallStarted, PrivateDmRuntimeError> {
@@ -2822,6 +2856,69 @@ fn start_node(
 mod tests {
     use super::*;
     use crate::adapters::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
+
+    fn peer(id: &str, relayed: bool) -> PeerDetail {
+        PeerDetail {
+            id: id.to_string(),
+            addr: "10.0.0.1:4001".to_string(),
+            relayed,
+        }
+    }
+
+    // On the shared substrate the per-DM node connects to unrelated world nodes,
+    // so presence must match our counterpart by id, not trust a bare peer count.
+    #[test]
+    fn presence_matches_counterpart_id_not_world_peer_count() {
+        let counterpart = "aa".repeat(32);
+        let stranger = "bb".repeat(32);
+
+        // World is full of peers, but not our counterpart: NOT live, NOT direct.
+        let crowd = MeshInfo {
+            peer_count: 50,
+            direct_peer_count: 40,
+            relayed_peer_count: 10,
+            peer_details: vec![peer(&stranger, false), peer(&"cc".repeat(32), false)],
+            ..Default::default()
+        };
+        assert!(!peer_is_live(Some(&counterpart), &crowd));
+        assert!(!peer_is_direct(Some(&counterpart), &crowd));
+
+        // Counterpart present but only relayed: live, but NOT a direct peer.
+        let relayed = MeshInfo {
+            peer_count: 3,
+            peer_details: vec![peer(&stranger, false), peer(&counterpart, true)],
+            ..Default::default()
+        };
+        assert!(peer_is_live(Some(&counterpart), &relayed));
+        assert!(!peer_is_direct(Some(&counterpart), &relayed));
+
+        // Counterpart present and direct: live AND direct.
+        let direct = MeshInfo {
+            peer_count: 3,
+            peer_details: vec![peer(&counterpart, false)],
+            ..Default::default()
+        };
+        assert!(peer_is_live(Some(&counterpart), &direct));
+        assert!(peer_is_direct(Some(&counterpart), &direct));
+    }
+
+    // Before the counterpart's id is known (creator, pre-handshake) `live` falls
+    // back to "any peer" while `direct` stays false so the fallback timer can run.
+    #[test]
+    fn presence_unknown_id_falls_back_to_any_peer() {
+        let crowd = MeshInfo {
+            peer_count: 5,
+            direct_peer_count: 5,
+            peer_details: vec![peer(&"dd".repeat(32), false)],
+            ..Default::default()
+        };
+        assert!(peer_is_live(None, &crowd));
+        assert!(!peer_is_direct(None, &crowd));
+
+        let empty = MeshInfo::default();
+        assert!(!peer_is_live(None, &empty));
+        assert!(!peer_is_direct(None, &empty));
+    }
 
     fn temp_store() -> Arc<AttachmentStore> {
         let mut path = std::env::temp_dir();
