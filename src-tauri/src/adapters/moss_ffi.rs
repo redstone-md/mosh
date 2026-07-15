@@ -187,6 +187,7 @@ pub struct MossFfiRuntime {
     stop: MossStop,
     subscribe: MossSubscribe,
     connect: MossConnect,
+    connect_to_peer: MossConnect,
     publish: MossPublish,
     set_callback: MossSetCallback,
     set_event_callback: MossSetEventCallback,
@@ -245,6 +246,7 @@ impl MossFfiRuntime {
             stop: load_symbol(&library, b"Moss_Stop\0")?,
             subscribe: load_symbol(&library, b"Moss_Subscribe\0")?,
             connect: load_symbol(&library, b"Moss_Connect\0")?,
+            connect_to_peer: load_symbol(&library, b"Moss_ConnectToPeer\0")?,
             publish: load_symbol(&library, b"Moss_Publish\0")?,
             set_callback: load_symbol(&library, b"Moss_SetCallback\0")?,
             set_event_callback: load_symbol(&library, b"Moss_SetEventCallback\0")?,
@@ -327,6 +329,18 @@ impl MossNode {
 
         check_code("connect", unsafe {
             (self.runtime.connect)(self.handle, address.as_ptr())
+        })
+    }
+
+    /// Ask moss to establish a connection to a specific peer id (explicit
+    /// target). Non-blocking: moss registers the target and keeps retrying
+    /// from its maintenance loop, bypassing the glare rule and dial ranking;
+    /// safe to call repeatedly for the same id.
+    pub fn connect_to_peer(&self, peer_id_hex: &str) -> Result<(), MossFfiError> {
+        let peer = c_string(peer_id_hex)?;
+
+        check_code("connect_to_peer", unsafe {
+            (self.runtime.connect_to_peer)(self.handle, peer.as_ptr())
         })
     }
 
