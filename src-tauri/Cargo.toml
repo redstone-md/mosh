@@ -1,6 +1,6 @@
 [package]
 name = "mosh"
-version = "0.6.6"
+version = "0.6.7"
 description = "Desktop-first decentralized messenger"
 authors = ["Mosh contributors"]
 license = "GPL-3.0-or-later"
