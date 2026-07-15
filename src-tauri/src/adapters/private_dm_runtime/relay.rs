@@ -27,7 +27,7 @@ pub const RELAY_MESH_ID: &str = "moss-relay/1";
 /// untrusted (relay is E2E), so a stale/hostile entry only wastes one dial.
 /// Fill with real `host:port` addresses after deploying spores (S3) and ship
 /// the update via an app release. Empty = relay simply has nobody to dial yet.
-pub const RELAY_BOOTSTRAP_SPORES: &[&str] = &[];
+pub const RELAY_BOOTSTRAP_SPORES: &[&str] = &["94.130.74.148:4001"];
 
 /// Worker cadence for intake polling and relay-convergence checks.
 const READY_POLL_MS: u64 = 500;
