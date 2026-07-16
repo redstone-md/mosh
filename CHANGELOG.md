@@ -4,6 +4,32 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] - 2026-07-16
+
+### Fixed
+- **Windows client no longer crashes under sustained load.** The bundled moss
+  runtime is now built with the Go 1.25.x toolchain (pinned via `GOTOOLCHAIN`
+  in `scripts/moss-prepare.mjs`). Go 1.26.1's Windows runtime corrupts memory
+  (`0xc0000005`) under the heavy concurrent UDP the DHT drives, crashing the
+  client after a few minutes. Bisected across seven soak runs: DHT-off was
+  stable, every DHT-on build on 1.26.1 crashed at 2–11 min, the race detector
+  was clean (not a data race), and forcing raw sockets did not help — but the
+  same build on Go 1.25 ran a full 13-minute soak with DHT enabled at 259/259
+  messages and 0% loss. DHT stays fully enabled.
+
+### Changed
+- Bundled moss runtime → v0.6.20 (public `SetMessageCallback`, `dht_enabled`
+  config toggle, `MOSS_FORCE_RAW_UDP` escape hatch).
+
+## [0.6.7] - 2026-07-15
+
+### Added
+- **Opt-in error telemetry to Axiom.** moss's own failures (listen/tracker/
+  handshake/relay, including the Wine/Proton bind failure) and periodic node
+  stats now ship to the `moss-events` dataset, so real-world client failures are
+  queryable instead of relying on the user to send logs. Ingest-only token,
+  embedded like a Sentry DSN. Bundled moss → v0.6.18.
+
 ## [0.6.6] - 2026-07-15
 
 ### Fixed
