@@ -24,7 +24,12 @@ pub struct NetworkInterfaceInfo {
     /// Overlay meshes and VM host adapters stay virtual, but do not trigger
     /// the VPN warning by themselves.
     pub is_vpn: bool,
-    /// True when the system's IPv4 default route points through this NIC.
+    /// True when this NIC is the one that actually carries public IPv4
+    /// traffic right now — i.e. the interface the OS picks to reach the
+    /// internet. This is deliberately a *best-route* answer (longest-prefix
+    /// match plus metric), not "owns a `/0`", so split-default tunnels that
+    /// install `0.0.0.0/1` + `128.0.0.0/1` instead of a default route are
+    /// caught, and a stale high-metric `/0` no longer counts.
     /// Combined with `is_virtual = true` this is the single best signal
     /// that "an active VPN owns this user's traffic right now".
     pub is_default_route: bool,
@@ -119,11 +124,12 @@ mod windows_impl {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        FreeMibTable, GetAdaptersAddresses, GetIpForwardTable2, GAA_FLAG_INCLUDE_PREFIX,
-        GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
-        IP_ADAPTER_ADDRESSES_LH, MIB_IPFORWARD_TABLE2,
+        GetAdaptersAddresses, GetBestRoute2, GAA_FLAG_INCLUDE_PREFIX, GAA_FLAG_SKIP_ANYCAST,
+        GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH,
+        MIB_IPFORWARD_ROW2,
     };
     use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows_sys::Win32::Networking::WinSock::SOCKADDR_INET;
 
     // IANA-registered ifType values, hard-coded because windows-sys 0.61
     // doesn't re-export the IF_TYPE_* constants. See
@@ -143,7 +149,7 @@ mod windows_impl {
 
     pub fn enumerate() -> Result<Vec<NetworkInterfaceInfo>, String> {
         let raw = unsafe { fetch_adapters()? };
-        let default_route_indices = unsafe { collect_default_route_indices() };
+        let default_route_index = unsafe { best_route_index() };
 
         let mut out = Vec::with_capacity(raw.len());
         for adapter in &raw {
@@ -176,7 +182,7 @@ mod windows_impl {
                 && (name_looks_vpn(&searchable_name)
                     || if_type == IF_TYPE_TUNNEL
                     || if_type == IF_TYPE_PPP);
-            let is_default_route = default_route_indices.contains(&index);
+            let is_default_route = default_route_index == Some(index);
             out.push(NetworkInterfaceInfo {
                 name,
                 description,
@@ -284,29 +290,33 @@ mod windows_impl {
         OsString::from_wide(slice).to_string_lossy().into_owned()
     }
 
-    /// Returns interface indices that carry the IPv4 default route.
-    unsafe fn collect_default_route_indices() -> Vec<u32> {
-        let mut table: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
-        if GetIpForwardTable2(AF_INET, &mut table) != NO_ERROR || table.is_null() {
-            return Vec::new();
+    /// The interface Windows would actually use to reach the public internet.
+    ///
+    /// `GetBestRoute2` performs the longest-prefix match *and* the metric
+    /// comparison inside the stack, so split-default tunnels that publish
+    /// `0.0.0.0/1` + `128.0.0.0/1` instead of a `/0` win here exactly as they
+    /// do for real traffic. Returns `None` on any failure so callers degrade
+    /// to "no interface owns egress" rather than to a wrong answer.
+    unsafe fn best_route_index() -> Option<u32> {
+        let mut destination: SOCKADDR_INET = std::mem::zeroed();
+        destination.Ipv4.sin_family = AF_INET;
+        destination.Ipv4.sin_addr.S_un.S_addr = u32::from_ne_bytes([1, 1, 1, 1]);
+
+        let mut best_route: MIB_IPFORWARD_ROW2 = std::mem::zeroed();
+        let mut best_source: SOCKADDR_INET = std::mem::zeroed();
+        let ret = GetBestRoute2(
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            &destination,
+            0,
+            &mut best_route,
+            &mut best_source,
+        );
+        if ret != NO_ERROR {
+            return None;
         }
-        let mut out = Vec::new();
-        let count = (*table).NumEntries as usize;
-        let base = (*table).Table.as_ptr();
-        for i in 0..count {
-            let row = &*base.add(i);
-            let prefix_len = row.DestinationPrefix.PrefixLength;
-            if prefix_len != 0 {
-                continue;
-            }
-            let family = row.DestinationPrefix.Prefix.si_family;
-            if family != AF_INET {
-                continue;
-            }
-            out.push(row.InterfaceIndex);
-        }
-        FreeMibTable(table as *mut _);
-        out
+        Some(best_route.InterfaceIndex)
     }
 }
 

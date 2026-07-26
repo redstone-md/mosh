@@ -123,6 +123,17 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// A moss peer id is 64 hex characters; the leading 16 identify it uniquely
+/// enough for a log line without making the line unreadable.
+fn short_peer_id(peer_hex: &str) -> &str {
+    let end = peer_hex
+        .char_indices()
+        .nth(16)
+        .map(|(i, _)| i)
+        .unwrap_or(peer_hex.len());
+    &peer_hex[..end]
+}
+
 fn random_b64(bytes: usize) -> String {
     use rand::RngCore;
     let mut buf = vec![0u8; bytes];
@@ -1158,6 +1169,14 @@ impl PrivateDmRuntime {
         Ok(())
     }
 
+    /// Whether any live session has this sender pinned as its counterpart.
+    /// Used to tell our peer's traffic apart from the substrate's.
+    fn relay_sender_is_known(&self, sender_hex: &str) -> bool {
+        self.sessions
+            .values()
+            .any(|session| session.peer_moss_id.as_deref() == Some(sender_hex))
+    }
+
     /// Reconstruct the direct-path `MossReceivedMessage` shape for frames that
     /// arrived over the point-to-point relay instead of pubsub, and feed them
     /// through the same `handle_moss_message` dedup/dispatch as the direct
@@ -1167,7 +1186,18 @@ impl PrivateDmRuntime {
             let frame: wire::RelayFrame = match decode_json(&inbound.data) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("dropping malformed relay frame: {e}");
+                    // The relay inbox is process-global and carries every frame
+                    // the shared substrate routes here, not only ours, so a
+                    // stranger's payload failing to parse is ordinary
+                    // background traffic — logging it drowns the console. A
+                    // frame from a peer we hold a session with is a different
+                    // matter: that one should have parsed.
+                    if self.relay_sender_is_known(&inbound.sender_hex) {
+                        eprintln!(
+                            "dropping malformed relay frame from session peer {}: {e}",
+                            short_peer_id(&inbound.sender_hex)
+                        );
+                    }
                     continue;
                 }
             };
