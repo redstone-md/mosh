@@ -4,6 +4,51 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The app no longer dies when a relayed contact disconnects.** Moss is loaded
+  inside Mosh, so a crash in it took the whole window down — and an ordinary
+  disconnect could trigger one. Fixed upstream in moss v0.8.1.
+- **Chats and lobbies appear promptly instead of on the fourth try.** Nodes were
+  drowning each other in peer announcements — one relay took 21,808 of them in
+  two minutes against 29 keepalive pings — and the keepalives that got discarded
+  in the flood killed healthy connections after about 37 seconds. Median
+  connection life between two updated peers went from 37s to 632s (moss v0.8.7
+  through v0.8.10).
+- **Conversations with only a couple of participants can find each other again.**
+  On the shared network the peers around you are strangers, so a two-person room
+  never formed a mesh and sends failed with "no peers". Moss now runs a discovery
+  layer that resolves who else is in your room (v0.7.0, repaired in v0.7.7 and
+  v0.8.2).
+- **Mid-session stalls of several seconds are gone.** Two separate causes: a
+  discovery lookup was running on the connection hot path (v0.7.7), and the app
+  was redialling peers it already held, opening ~1.7 connections a second with
+  95% dying instantly (v0.7.8).
+- **Unreachable peers are no longer retried once a second forever.** Failed dials
+  now back off up to five minutes; direct-message counterparts are exempt and
+  still retried at the old cadence (v0.8.1).
+- **Connection type is detected correctly.** No node could previously work out it
+  was behind a symmetric NAT, so it kept attempting hole punches that could not
+  succeed. Such pairs now take the relay first and get upgraded to direct
+  afterwards (moss v0.7.1, v0.7.2).
+- **The Axiom error telemetry added in 0.6.7 actually reports now.** The moss FFI
+  was dropping the `axiom_*` config keys on the floor, so no Mosh client has ever
+  shipped an event despite the setting being wired up. Fixed in moss v0.7.0, and
+  the sink is enabled before the node starts, so a first-start bind failure is
+  reported instead of dying with the node.
+
+### Changed
+- **Moss core updated from v0.6.20 to v0.8.14.** Installers grow by ~2.3 MB.
+- **Network telemetry is on by default.** Separate from the Axiom sink above:
+  moss now contributes anonymised, noise-added aggregate network metrics — no
+  address, no stable identity, and it stays inside the mesh rather than going to
+  a third party. Opt out by adding `"telemetry":{"enabled":false}` to the node
+  config in `src-tauri/src/adapters/moss_ffi.rs`.
+- **Room membership is announced to the discovery layer.** Every 30 seconds each
+  node publishes, under an opaque hash, which rooms it is in, so sparse rooms can
+  find each other. There is no switch to turn this off.
+
 ## [0.6.8] - 2026-07-16
 
 ### Fixed
