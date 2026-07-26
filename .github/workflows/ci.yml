@@ -67,7 +67,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            mosh-core
+            mosh-probe
 
       - name: Install dependencies
         run: npm ci
@@ -83,10 +86,16 @@ jobs:
         run: npm run moss:prepare
 
       - name: Rustfmt check
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          cargo fmt --manifest-path mosh-core/Cargo.toml --check
+          cargo fmt --manifest-path mosh-probe/Cargo.toml --check
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: |
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path mosh-core/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path mosh-probe/Cargo.toml --all-targets -- -D warnings
 
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -98,3 +107,11 @@ jobs:
       # profile in src-tauri/.config/nextest.toml.
       - name: Cargo test (nextest)
         run: cargo nextest run --profile ci --manifest-path src-tauri/Cargo.toml
+
+      # The adapter suite deliberately does NOT use nextest. Its ~40 Moss tests
+      # serialise through the in-process MOSS_TEST_LOCK, which nextest's
+      # process-per-test isolation would defeat — several real loopback
+      # handshakes racing each other is exactly what makes them flaky. One
+      # process, one lock, one at a time.
+      - name: Cargo test (mosh-core adapters)
+        run: cargo test --manifest-path mosh-core/Cargo.toml

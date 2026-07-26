@@ -34,5 +34,7 @@ Thumbs.db
 .continuum/
 .aislop/
 docs/UX_UI_FIX_PLAN.md
+# Merged run artifact from scripts/probe-e2e.mjs — regenerated every run.
+probe-timeline.jsonl
 
 
