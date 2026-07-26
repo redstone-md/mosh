@@ -4,15 +4,18 @@ import type {
   NativeMessagingGateway,
   NetworkInterfaceInfo,
 } from "../native/native-messaging-gateway";
+import { adapterLabel, bypassCandidates, defaultBypassAdapter } from "./bypass-adapter";
 
 interface Props {
   readonly gateway: NativeMessagingGateway;
 }
 
 /**
- * Manual VPN-bypass toggle for the Advanced section. Reads/writes the
- * app-wide bind interface via Tauri commands. Independent of the auto
- * detection banner — the user can flip this even when no VPN was flagged.
+ * Changes the VPN-bypass answer after the fact, for the Advanced section.
+ *
+ * Writes the same stored answer the startup question does, so the two cannot
+ * disagree, and relaunches: a node's bind is fixed when the node is built, so
+ * nothing already running would pick the change up otherwise.
  */
 export function BindInterfaceField({ gateway }: Props) {
   const [interfaces, setInterfaces] = useState<readonly NetworkInterfaceInfo[]>([]);
@@ -29,7 +32,7 @@ export function BindInterfaceField({ gateway }: Props) {
       ]);
       setInterfaces(list);
       setCurrent(bind);
-      setPicked((existing) => existing || bind || defaultPick(list));
+      setPicked((existing) => existing || bind || defaultBypassAdapter(list));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not read network state");
     }
@@ -39,13 +42,7 @@ export function BindInterfaceField({ gateway }: Props) {
     void refresh();
   }, [refresh]);
 
-  const physicalInterfaces = useMemo(
-    () =>
-      interfaces.filter(
-        (iface) => iface.is_up && !iface.is_loopback && !iface.is_virtual,
-      ),
-    [interfaces],
-  );
+  const physicalInterfaces = useMemo(() => bypassCandidates(interfaces), [interfaces]);
 
   const enabled = current !== null && current !== "";
 
@@ -53,12 +50,10 @@ export function BindInterfaceField({ gateway }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await gateway.setBindInterface(value);
-      const next = await gateway.getBindInterface();
-      setCurrent(next);
+      await gateway.setVpnBypassConsent(value);
+      await gateway.restartApp();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not apply override");
-    } finally {
       setBusy(false);
     }
   };
@@ -87,13 +82,7 @@ export function BindInterfaceField({ gateway }: Props) {
             aria-label="Physical network adapter"
             value={picked}
             disabled={busy}
-            onChange={(event) => {
-              const next = event.target.value;
-              setPicked(next);
-              if (enabled) {
-                void apply(next);
-              }
-            }}
+            onChange={(event) => setPicked(event.target.value)}
           >
             {physicalInterfaces.map((iface) => (
               <option key={iface.name} value={iface.name}>
@@ -107,31 +96,20 @@ export function BindInterfaceField({ gateway }: Props) {
             disabled={busy || (!enabled && !picked)}
             onClick={() => void apply(enabled ? null : picked || null)}
           >
-            {enabled ? "Release" : "Bind"}
+            {busy ? "Restarting..." : enabled ? "Release" : "Bind"}
           </button>
         </div>
       )}
       {enabled ? (
         <p className="bind-interface-active">
-          <IconCheck size={13} /> New sessions use the selected adapter.
+          <IconCheck size={13} /> Every conversation uses {current}.
         </p>
       ) : null}
       <p className="bind-interface-hint">
-        Binding can expose your LAN IP to peers, trackers, and STUN.
+        Binding can expose your LAN IP to peers, trackers, and STUN. Mosh
+        restarts to apply either choice.
       </p>
       {error ? <p className="bind-interface-error">{error}</p> : null}
     </div>
   );
-}
-
-function defaultPick(list: readonly NetworkInterfaceInfo[]): string {
-  const candidate = list.find(
-    (iface) => iface.is_up && !iface.is_loopback && !iface.is_virtual && !!iface.ipv4,
-  );
-  return candidate?.name ?? "";
-}
-
-function adapterLabel(iface: NetworkInterfaceInfo): string {
-  const address = iface.ipv4 ? ` - ${iface.ipv4}` : "";
-  return `${iface.name}${address}`;
 }

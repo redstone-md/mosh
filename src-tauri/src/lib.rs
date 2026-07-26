@@ -1306,25 +1306,84 @@ fn detect_vpn() -> Result<VpnDetection, String> {
 }
 
 #[tauri::command]
-fn set_bind_interface(value: Option<String>) -> Result<(), String> {
-    // Reject names that look like virtual / VPN adapters when something
-    // non-empty was passed — turning the override on but pointing it at
-    // the very tunnel we are trying to bypass would silently defeat the
-    // feature.
-    if let Some(name) = value.as_ref() {
-        if !name.is_empty() && adapters::network_inventory::name_looks_virtual(name) {
-            return Err(format!(
-                "interface {name:?} looks virtual / VPN — pick a physical NIC"
-            ));
+fn get_bind_interface() -> Option<String> {
+    adapters::moss_ffi::current_bind_interface()
+}
+
+/// Where the stored VPN answer lives. Shares the app data directory with the
+/// history database so there is one place to wipe, not two.
+fn vpn_consent_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("mosh"))
+}
+
+/// Applies a previously stored "yes" before any node exists.
+///
+/// A node's bind interface is baked at Moss_Init and never re-read, so this
+/// has to run ahead of `PrivateDmState::ready` — after that, saved
+/// conversations have already started on whatever path the OS chose.
+///
+/// An answer that no longer resolves to a live NIC is cleared rather than
+/// passed through: moss refuses to construct a node it cannot bind, so a
+/// renamed adapter would take the whole app down instead of one feature.
+fn apply_stored_vpn_bypass(app: &tauri::AppHandle) {
+    let dir = vpn_consent_dir(app);
+    let Some(consent) = adapters::vpn_consent::load(&dir) else {
+        return;
+    };
+    let interfaces = adapters::network_inventory::list_interfaces().unwrap_or_default();
+    match adapters::vpn_consent::resolve(&consent, &interfaces) {
+        Some(iface) => adapters::moss_ffi::set_bind_interface(Some(iface.name.clone())),
+        None => {
+            eprintln!(
+                "vpn bypass: stored adapter {:?} (index {}) is gone; asking again",
+                consent.interface, consent.index
+            );
+            if let Err(error) = adapters::vpn_consent::clear(&dir) {
+                eprintln!("vpn bypass: could not clear stale answer: {error}");
+            }
         }
     }
-    adapters::moss_ffi::set_bind_interface(value);
-    Ok(())
 }
 
 #[tauri::command]
-fn get_bind_interface() -> Option<String> {
-    adapters::moss_ffi::current_bind_interface()
+fn get_vpn_bypass_consent(app: tauri::AppHandle) -> Option<adapters::vpn_consent::VpnBypassConsent> {
+    adapters::vpn_consent::load(&vpn_consent_dir(&app))
+}
+
+/// Records the answer. `Some(name)` is a yes and is remembered; `None` is a
+/// refusal and is deliberately not stored, so the question returns next launch
+/// — a remembered no would silently strand someone whose network changed.
+///
+/// Storing the answer is all this does. Applying it is `restart_app`'s job:
+/// a node's bind is fixed at construction, so anything already running keeps
+/// the path it started on. Relaunching is the only way to be sure the answer
+/// covers every node, and it costs one launch, once.
+#[tauri::command]
+fn set_vpn_bypass_consent(app: tauri::AppHandle, interface: Option<String>) -> Result<(), String> {
+    let dir = vpn_consent_dir(&app);
+    let Some(name) = interface.filter(|name| !name.is_empty()) else {
+        return adapters::vpn_consent::clear(&dir).map_err(|error| error.to_string());
+    };
+    let interfaces = adapters::network_inventory::list_interfaces()?;
+    let iface = interfaces
+        .iter()
+        .find(|iface| iface.name == name && iface.is_up && !iface.is_loopback && !iface.is_virtual)
+        .ok_or_else(|| format!("interface {name:?} is not a usable physical adapter"))?;
+    adapters::vpn_consent::save(
+        &dir,
+        &adapters::vpn_consent::VpnBypassConsent {
+            interface: iface.name.clone(),
+            index: iface.index,
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1342,6 +1401,10 @@ pub fn run() {
         .setup(|app| {
             let persistence_load = load_persistence(app.handle());
             app.manage(PersistenceStatusState(persistence_load.status.clone()));
+            // Before any state below, because each of them rehydrates saved
+            // conversations into live nodes and a node's bind cannot change
+            // afterwards.
+            apply_stored_vpn_bypass(app.handle());
             match tauri_moss::load_moss_runtime_from_app_handle(app.handle()) {
                 Ok(moss) => {
                     let moss = Arc::new(moss);
@@ -1378,8 +1441,10 @@ pub fn run() {
             native_runtime_status,
             list_network_interfaces,
             detect_vpn,
-            set_bind_interface,
             get_bind_interface,
+            get_vpn_bypass_consent,
+            set_vpn_bypass_consent,
+            restart_app,
             private_dm_create_invite,
             private_dm_accept_invite,
             private_dm_send_message,

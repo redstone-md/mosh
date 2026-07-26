@@ -1,78 +1,3 @@
-.vpn-banner {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  margin: 0;
-  padding: 13px 14px;
-  border-radius: 12px;
-  background: rgba(232, 106, 90, 0.09);
-  border: 1px solid rgba(232, 106, 90, 0.3);
-  text-align: left;
-  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.18);
-}
-
-.vpn-banner-icon {
-  color: var(--danger);
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.vpn-banner-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: 1;
-}
-
-.vpn-banner-body strong {
-  font-size: 14px;
-  color: var(--fg-1);
-}
-
-.vpn-banner-detail {
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--fg-2);
-  margin: 0;
-}
-
-.vpn-banner-warning {
-  color: var(--warn);
-}
-
-.vpn-banner-active {
-  color: var(--moss);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.vpn-banner-error {
-  color: var(--danger);
-  font-size: 12px;
-  margin: 4px 0 0;
-}
-
-.vpn-banner-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  margin-top: 6px;
-}
-
-.vpn-banner-select {
-  height: 32px;
-  background: var(--bg-1);
-  color: var(--fg-1);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  padding: 0 34px 0 10px;
-  font-size: 12px;
-  min-width: 220px;
-  max-width: 100%;
-}
-
 .bind-interface-field {
   display: flex;
   flex-direction: column;
@@ -161,17 +86,69 @@
 }
 
 @media (max-width: 560px) {
-  .vpn-banner-actions,
-  .bind-interface-controls {
-    grid-template-columns: 1fr;
-  }
+      }
 
-  .vpn-banner-actions {
-    display: grid;
-  }
+/* The startup question. A scrim, because the answer has to be given before
+   anything behind it can work. */
+.vpn-consent-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+}
 
-  .vpn-banner-select,
-  .vpn-banner-actions .btn {
-    width: 100%;
-  }
+.vpn-consent {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 14px;
+  background: var(--bg-1);
+  border: 1px solid rgba(232, 106, 90, 0.3);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  text-align: left;
+}
+
+.vpn-consent-icon {
+  color: var(--danger);
+}
+
+.vpn-consent h2 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--fg-1);
+}
+
+.vpn-consent p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-2);
+}
+
+.vpn-consent code {
+  color: var(--fg-1);
+}
+
+.vpn-consent-caveat {
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+
+.vpn-consent-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.vpn-consent-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 6px;
+  flex-wrap: wrap;
 }

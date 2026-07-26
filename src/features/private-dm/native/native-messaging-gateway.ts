@@ -34,8 +34,10 @@ const PRIVATE_DM_CALL_SEND_FRAME_COMMAND = "private_dm_call_send_frame";
 const PRIVATE_DM_CALL_DRAIN_FRAMES_COMMAND = "private_dm_call_drain_frames";
 const LIST_NETWORK_INTERFACES_COMMAND = "list_network_interfaces";
 const DETECT_VPN_COMMAND = "detect_vpn";
-const SET_BIND_INTERFACE_COMMAND = "set_bind_interface";
 const GET_BIND_INTERFACE_COMMAND = "get_bind_interface";
+const GET_VPN_BYPASS_CONSENT_COMMAND = "get_vpn_bypass_consent";
+const SET_VPN_BYPASS_CONSENT_COMMAND = "set_vpn_bypass_consent";
+const RESTART_APP_COMMAND = "restart_app";
 const PRIVATE_GROUP_SEND_ATTACHMENT_COMMAND = "private_group_send_attachment";
 const PRIVATE_GROUP_DOWNLOAD_ATTACHMENT_COMMAND = "private_group_download_attachment";
 const PRIVATE_GROUP_CANCEL_ATTACHMENT_COMMAND = "private_group_cancel_attachment";
@@ -582,8 +584,19 @@ export interface NativeMessagingGateway {
   ): Promise<void>;
   listNetworkInterfaces(): Promise<readonly NetworkInterfaceInfo[]>;
   detectVpn(): Promise<VpnDetection>;
-  setBindInterface(value: string | null): Promise<void>;
+  /** Reports the adapter Moss is bound to right now. Changing it is
+   * `setVpnBypassConsent` plus a relaunch — a running node cannot be rebound. */
   getBindInterface(): Promise<string | null>;
+  getVpnBypassConsent(): Promise<VpnBypassConsent | null>;
+  /** `null` refuses the bypass and is not remembered — the question returns. */
+  setVpnBypassConsent(interfaceName: string | null): Promise<void>;
+  restartApp(): Promise<void>;
+}
+
+/** A remembered "yes": route Moss around the tunnel, using this adapter. */
+export interface VpnBypassConsent {
+  readonly interface: string;
+  readonly index: number;
 }
 
 export interface NetworkInterfaceInfo {
@@ -955,12 +968,20 @@ export class TauriNativeMessagingGateway implements NativeMessagingGateway {
     return invoke<VpnDetection>(DETECT_VPN_COMMAND);
   }
 
-  async setBindInterface(value: string | null): Promise<void> {
-    await invoke(SET_BIND_INTERFACE_COMMAND, { value });
-  }
-
   async getBindInterface(): Promise<string | null> {
     return invoke<string | null>(GET_BIND_INTERFACE_COMMAND);
+  }
+
+  async getVpnBypassConsent(): Promise<VpnBypassConsent | null> {
+    return invoke<VpnBypassConsent | null>(GET_VPN_BYPASS_CONSENT_COMMAND);
+  }
+
+  async setVpnBypassConsent(interfaceName: string | null): Promise<void> {
+    await invoke(SET_VPN_BYPASS_CONSENT_COMMAND, { interface: interfaceName });
+  }
+
+  async restartApp(): Promise<void> {
+    await invoke(RESTART_APP_COMMAND);
   }
 }
 

@@ -28,6 +28,7 @@ import type {
   SessionSnapshot,
   StartSessionRequest,
   VoiceMeta,
+  VpnBypassConsent,
   VpnDetection,
 } from "./native-messaging-gateway";
 import {
@@ -733,11 +734,17 @@ export class DemoNativeMessagingGateway implements NativeMessagingGateway {
 
   async orgGroupInviteMembers(): Promise<void> {}
 
-  async setBindInterface(value: string | null): Promise<void> {
-    this.state.setBindInterface(value);
-  }
-
   async getBindInterface(): Promise<string | null> {
     return this.state.getBindInterface();
   }
+
+  // The demo has no VPN and no process to relaunch: it answers "never asked"
+  // so the consent modal stays out of the browser-only build.
+  async getVpnBypassConsent(): Promise<VpnBypassConsent | null> {
+    return null;
+  }
+
+  async setVpnBypassConsent(): Promise<void> {}
+
+  async restartApp(): Promise<void> {}
 }

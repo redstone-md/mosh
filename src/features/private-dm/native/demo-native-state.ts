@@ -28,7 +28,7 @@ const MESSAGE_STEP_MS = 62_000;
 
 export class DemoNativeState {
   private sequence = 100;
-  private bindInterface: string | null = null;
+  private readonly bindInterface: string | null = null;
   private sessions: SessionSnapshot[] = [seedSession()];
   private channels: ChannelSnapshot[] = [seedChannel()];
   private groups: GroupSnapshot[] = [seedGroup()];
@@ -266,10 +266,6 @@ export class DemoNativeState {
 
   fingerprint(seed: string): string {
     return `${seed}${this.sequence}`.toUpperCase().padEnd(16, "0").slice(0, 16);
-  }
-
-  setBindInterface(value: string | null): void {
-    this.bindInterface = value;
   }
 
   getBindInterface(): string | null {

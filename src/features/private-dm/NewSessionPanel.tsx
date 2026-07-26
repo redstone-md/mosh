@@ -11,7 +11,6 @@ import type { OnboardStep } from "./NewSessionPanel.types";
 import type { NativeMessagingGateway } from "./native/native-messaging-gateway";
 import type { InviteCreateState } from "./private-dm-setup.types";
 import type { PersistenceWarning } from "./use-runtime-persistence-status";
-import { VpnBanner } from "./vpn/VpnBanner";
 
 export function NewSessionPanel(props: {
   displayName: string;
@@ -44,7 +43,6 @@ export function NewSessionPanel(props: {
   return (
     <div className="onboard scroll">
       <div className="onboard-shell">
-        <VpnBanner gateway={props.gateway} />
         {props.persistenceWarning ? (
           <PersistenceWarningBanner warning={props.persistenceWarning} />
         ) : null}
