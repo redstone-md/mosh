@@ -46,6 +46,7 @@ import { MediaViewer } from "./MediaViewer";
 import { CallOverlay } from "./voice-call/CallOverlay";
 import { IncomingCallModal } from "./voice-call/IncomingCallModal";
 import { OutgoingCallModal } from "./voice-call/OutgoingCallModal";
+import { VpnConsentModal } from "./vpn/VpnConsentModal";
 import { useVoiceCallOrchestration } from "./voice-call/use-voice-call-orchestration";
 import { NewSessionPanel } from "./NewSessionPanel";
 
@@ -247,6 +248,7 @@ export function PrivateDmScreen({
 
   return (
     <main className="mosh-window" aria-label={shellText.productName}>
+      <VpnConsentModal gateway={gateway} />
       <header className="titlebar">
         <button
           className="btn btn-ghost btn-icon titlebar-nav"

@@ -362,8 +362,10 @@ export function createGateway(initial: SessionSnapshot[] = []): NativeMessagingG
     orgAcceptGroupOffer: vi.fn(async () => groupSnapshot()),
     orgDismissGroupOffer: vi.fn(async () => {}),
     orgGroupInviteMembers: vi.fn(async () => {}),
-    setBindInterface: vi.fn(async () => {}),
     getBindInterface: vi.fn(async () => null),
+    getVpnBypassConsent: vi.fn(async () => null),
+    setVpnBypassConsent: vi.fn(async () => {}),
+    restartApp: vi.fn(async () => {}),
   };
 }
 

@@ -1,6 +1,8 @@
 # VPN bypass: one question, asked before anything starts
 
-Status: planned. Nothing below is implemented yet.
+Status: shipped. Phase 1 landed in moss `1d552c3`; phase 2 in this branch.
+Where the build differs from the plan, the plan text below was corrected to
+match what exists — the reasoning is kept, the wrong details are not.
 
 ## Why
 
@@ -29,9 +31,9 @@ The app has a VPN-bypass control today. It did not help, and could not:
 4. Turning the bypass on split the node's identity in two (below), which is
    worse than leaving it off.
 
-## Phase 1 — moss binds every socket, or none (BLOCKING)
+## Phase 1 — moss binds every socket, or none (DONE)
 
-**Do not ship the UI before this lands.** With `bind_interface` set today, moss
+Shipped as moss `1d552c3`. With `bind_interface` set today, moss
 binds some sockets to the chosen NIC and leaves the rest on the default route,
 so the node advertises two different external addresses and its peers argue
 about which is right.
@@ -47,18 +49,31 @@ three minutes**. With bypass off it was **138**.
 | tracker UDP — `internal/bootstrap/tracker_udp.go:44` | TCP listener — `internal/transport/listener.go:19`, `net.Listen("tcp4", addr)` |
 | LAN discovery — `internal/mesh/lan_discovery.go:63` | TCP probe — `internal/mesh/node_network_probe.go:87` |
 
-`internal/transport/bind.go` already has the per-platform primitive
+`internal/transport/bind.go` already had the per-platform primitive
 (`applyBindInterface`, using `IP_UNICAST_IF` on Windows, `SO_BINDTODEVICE` on
-Linux) and `DialerWithBind`. The work is threading `bindIfIndex` to the four
-remaining call sites, not writing new plumbing.
+Linux) and `DialerWithBind`, so this was threading `bindIfIndex`, not new
+plumbing.
 
-Two freebies while in that file: `applyBindToPacket` (`bind.go:58-69`) has zero
-callers and its doc comment is false, and `bind.go:75` describes NAT-PMP probes
-that no NAT code performs.
+Three of the four were bound. **The TCP listener was deliberately left on
+`0.0.0.0`**: `SO_BINDTODEVICE` on a listening socket refuses connections that
+arrive over the tunnel, and on Windows `IP_UNICAST_IF` on a listener does
+nothing at all — binding it is either harmful or pointless. Outbound TCP is
+covered by the bound dialer instead. The UDP listener is the opposite case and
+keeps its bind, because one socket serves every destination and so it alone
+chooses the source address.
 
-**Done when:** with a bypass configured, every socket the node opens reports the
-same local interface, and `advertised_addr` stops alternating across a
-ten-minute session. Verify with `mosh-probe doctor` on both ends.
+`applyBindToPacket` had zero callers and a false doc comment; it is now
+`ApplyBindToPacket` and is what binds the DHT socket. The NAT-PMP claim at
+`bind.go:75` was wrong and is gone — PCP still reaches on-link gateways over
+its own chain and is the one remaining way to advertise a tunnel-side address.
+
+`TestNoUnboundSocketCallSites` walks `internal/` and fails when a socket
+appears somewhere that cannot honour the bind, with a reason recorded per
+allowlisted file. The split is invisible at runtime, so the invariant is
+guarded where it is written.
+
+**Still to verify in the field:** that `advertised_addr` stops alternating
+across a ten-minute session with a bypass configured. That is phase 3.
 
 ## Phase 2 — one blocking question, before any node starts
 
@@ -70,16 +85,29 @@ about to have, and today nothing can, because `rehydrate()` runs inside
 `PrivateDmState::ready` (`src-tauri/src/lib.rs:92`) which is called from
 `.setup()` (`:1348`) before `.invoke_handler` is even attached.
 
-So the stored answer must be read in `.setup()` **before** `:1348`, and applied
-via `set_bind_interface` there. The modal only has to run before the first node
-is created — on a fresh install, or whenever the answer is absent.
+`apply_stored_vpn_bypass` therefore runs in `.setup()` before any state is
+managed. That covers a remembered yes.
+
+It does not cover *changing* the answer, and no amount of ordering can: the
+nodes for saved conversations are already built by the time a webview exists to
+click anything. **So answering yes relaunches the app.** One launch, once, and
+the setting is then true for every node rather than for none of them. The
+advanced control does the same thing for the same reason, which also means the
+two paths write one stored answer and cannot disagree.
+
+`set_bind_interface` was removed. It was the command that promised what it
+could not deliver, and with the consent path in place nothing called it.
 
 ### Wording
 
-> **VPN is intercepting Mosh's traffic**
-> Your VPN carries all of Mosh's network traffic, which stops other people from
-> finding you.
-> [ Route Mosh around the VPN ] [ Not now ]
+> **A VPN is carrying Mosh's traffic**
+> Everything Mosh sends goes through your VPN, which stops other people from
+> finding you. Mosh can use `Wi-Fi` instead.
+> [ Keep using the VPN ] [ Route around the VPN ]
+
+Shown only when `vpn_owns_default_route` — a VPN adapter that exists but does
+not carry our traffic is not a problem, and blocking for it would be a lie.
+Naming the adapter it would switch to keeps the claim checkable.
 
 Present tense and concrete. Not "may become unstable" — with `is_default_route`
 now honest, we can state what is actually happening.
@@ -95,7 +123,8 @@ under advanced connection settings.
 
 ### Storage
 
-A plain JSON file in `app_config_dir()`, not redb: the adapter name is not a
+A plain JSON file in `app_data_dir()` (beside the history database, so there is
+one place to wipe rather than two), not redb: the adapter name is not a
 secret, and it must still be readable when the encrypted store fails to open.
 Persist `{ "bypass": true, "interface": "Wi-Fi", "index": 24 }`.
 
@@ -109,21 +138,18 @@ neither resolves.
 
 ### Which adapter
 
-The existing heuristic is already right — `defaultPick` in
-`src/features/private-dm/vpn/VpnBanner.tsx:167-172` takes the first
-`is_up && !is_loopback && !is_virtual` interface with an IPv4.
-
-One fix: `!!iface.ipv4` accepts `169.254.x` (APIPA — "no address was issued"),
-so an unplugged NIC can win. Exclude `169.254/16`.
+`vpn/bypass-adapter.ts` now holds the one heuristic both screens use: up, not
+loopback, not virtual, with an IPv4 that is not `169.254/16`. APIPA meant an
+unplugged NIC could win, because "no address was issued" still reads as having
+an address.
 
 If several candidates remain, take the first. Any of them bypasses the tunnel;
 there is nothing to get wrong.
 
-### Remove
+### Removed
 
-The adapter dropdown leaves the normal path entirely. It belongs in advanced
-connection settings, alongside the yes/no toggle, and nowhere else. A user
-should never be asked to reason about `ipv4-tun`.
+`VpnBanner` is gone. The adapter dropdown lives in advanced connection settings
+and nowhere else — a user should never be asked to reason about `ipv4-tun`.
 
 ## Phase 3 — prove it
 
