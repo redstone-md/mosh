@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::contracts::PrivateDmRuntimeError;
-use crate::adapters::attachment_runtime::{ChunkFrame, ChunkRequest};
-use crate::adapters::moss_ffi::MossNode;
+use crate::attachment_runtime::{ChunkFrame, ChunkRequest};
+use crate::moss_ffi::MossNode;
 
 pub const CONTROL_CHANNEL_PREFIX: &str = "mls-control/";
 pub const DATA_CHANNEL_PREFIX: &str = "mls-data/";
@@ -193,8 +193,8 @@ pub fn decode(encoded: &str) -> Result<Vec<u8>, PrivateDmRuntimeError> {
 }
 
 #[cfg(test)]
-pub fn fail_next_test_publish(message: &str) -> crate::adapters::moss_ffi::TestPublishFailureGuard {
-    crate::adapters::moss_ffi::fail_next_test_publish(message)
+pub fn fail_next_test_publish(message: &str) -> crate::moss_ffi::TestPublishFailureGuard {
+    crate::moss_ffi::fail_next_test_publish(message)
 }
 
 #[cfg(test)]

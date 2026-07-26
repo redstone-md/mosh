@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::attachment_runtime::VoiceMeta;
-use crate::adapters::mls_crypto::MlsCryptoError;
-pub use crate::adapters::outbound_delivery::MessageDeliveryStatus;
+use crate::attachment_runtime::VoiceMeta;
+use crate::mls_crypto::MlsCryptoError;
+pub use crate::outbound_delivery::MessageDeliveryStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartSessionRequest {
@@ -337,14 +337,14 @@ impl From<MlsCryptoError> for PrivateDmRuntimeError {
     }
 }
 
-impl From<crate::adapters::attachment_runtime::AttachmentRuntimeError> for PrivateDmRuntimeError {
-    fn from(error: crate::adapters::attachment_runtime::AttachmentRuntimeError) -> Self {
+impl From<crate::attachment_runtime::AttachmentRuntimeError> for PrivateDmRuntimeError {
+    fn from(error: crate::attachment_runtime::AttachmentRuntimeError) -> Self {
         Self::Attachment(error.to_string())
     }
 }
 
-impl From<crate::adapters::attachment_store::AttachmentStoreError> for PrivateDmRuntimeError {
-    fn from(error: crate::adapters::attachment_store::AttachmentStoreError) -> Self {
+impl From<crate::attachment_store::AttachmentStoreError> for PrivateDmRuntimeError {
+    fn from(error: crate::attachment_store::AttachmentStoreError) -> Self {
         Self::Attachment(error.to_string())
     }
 }

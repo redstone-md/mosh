@@ -9,13 +9,13 @@ use std::sync::Arc;
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::moss_ffi::{
+use crate::moss_ffi::{
     clear_event_log, drain_messages_where, MossFfiRuntime, MossNode, MossNodeConfig,
 };
-use crate::adapters::org_envelope::{self, OrgContext, OrgSigned};
-use crate::adapters::org_roster::{self, Roster, RosterError};
-use crate::adapters::org_signing;
-use crate::adapters::persistence::Persistence;
+use crate::org_envelope::{self, OrgContext, OrgSigned};
+use crate::org_roster::{self, Roster, RosterError};
+use crate::org_signing;
+use crate::persistence::Persistence;
 
 const ORG_CONTROL_PREFIX: &str = "org-control/";
 const ORG_CHANNEL_KIND: &str = "org-control";

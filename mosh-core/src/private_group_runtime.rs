@@ -3,24 +3,24 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::attachment_runtime::{
+use crate::attachment_runtime::{
     AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest,
     OutgoingAttachment, StreamRange, CHUNK_SIZE,
 };
-use crate::adapters::attachment_store::AttachmentStore;
-use crate::adapters::commit_sequencer::{CommitSequencer, Disposition};
-use crate::adapters::message_id::MessageIdGen;
-use crate::adapters::mls_crypto::{AddOutcome, MlsCryptoError, MlsSessionCrypto};
-use crate::adapters::moss_ffi::{
+use crate::attachment_store::AttachmentStore;
+use crate::commit_sequencer::{CommitSequencer, Disposition};
+use crate::message_id::MessageIdGen;
+use crate::mls_crypto::{AddOutcome, MlsCryptoError, MlsSessionCrypto};
+use crate::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
-use crate::adapters::org_envelope::{self, OrgContext, OrgSigned};
-use crate::adapters::org_roster::{self, Roster};
-use crate::adapters::org_signing;
-use crate::adapters::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
-use crate::adapters::persistence::Persistence;
-use crate::adapters::private_dm_runtime::{
+use crate::org_envelope::{self, OrgContext, OrgSigned};
+use crate::org_roster::{self, Roster};
+use crate::org_signing;
+use crate::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
+use crate::persistence::Persistence;
+use crate::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
 };
@@ -201,14 +201,14 @@ impl From<MlsCryptoError> for PrivateGroupError {
     }
 }
 
-impl From<crate::adapters::attachment_runtime::AttachmentRuntimeError> for PrivateGroupError {
-    fn from(error: crate::adapters::attachment_runtime::AttachmentRuntimeError) -> Self {
+impl From<crate::attachment_runtime::AttachmentRuntimeError> for PrivateGroupError {
+    fn from(error: crate::attachment_runtime::AttachmentRuntimeError) -> Self {
         Self::Attachment(error.to_string())
     }
 }
 
-impl From<crate::adapters::attachment_store::AttachmentStoreError> for PrivateGroupError {
-    fn from(error: crate::adapters::attachment_store::AttachmentStoreError) -> Self {
+impl From<crate::attachment_store::AttachmentStoreError> for PrivateGroupError {
+    fn from(error: crate::attachment_store::AttachmentStoreError) -> Self {
         Self::Attachment(error.to_string())
     }
 }
@@ -889,7 +889,7 @@ impl PrivateGroupRuntime {
         let offer = DmOffer {
             offer_id: format!(
                 "offer-{}",
-                &crate::adapters::attachment_crypto::sha256_hex(invite_uri.as_bytes())[..16]
+                &crate::attachment_crypto::sha256_hex(invite_uri.as_bytes())[..16]
             ),
             from_device: session.display_name.clone(),
             from_fingerprint: session.device_fingerprint.clone(),
@@ -1967,7 +1967,7 @@ impl GroupSession {
         let key = format!(
             "{}:{}",
             message.channel,
-            crate::adapters::attachment_crypto::sha256_hex(&message.payload)
+            crate::attachment_crypto::sha256_hex(&message.payload)
         );
         if !self.seen_set.insert(key.clone()) {
             return true;
@@ -2849,10 +2849,10 @@ fn optional_query(url: &url::Url, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::moss_ffi::{
+    use crate::moss_ffi::{
         drain_received_messages, fail_next_test_publish, MossFfiRuntime, MOSS_TEST_LOCK,
     };
-    use crate::adapters::persistence::Persistence;
+    use crate::persistence::Persistence;
     use std::path::PathBuf;
 
     fn temp_store() -> Arc<AttachmentStore> {

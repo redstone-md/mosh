@@ -5,7 +5,7 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::RngCore;
 use redb::{Database, ReadableTable, TableDefinition};
 
-use crate::adapters::secure_storage::{OsSecureSecretStore, SecureSecretStore};
+use crate::secure_storage::{OsSecureSecretStore, SecureSecretStore};
 
 const NONCE_LEN: usize = 12;
 
@@ -720,7 +720,7 @@ impl Persistence {
     }
 }
 
-impl crate::adapters::moss_ffi::MossKeyStore for Persistence {
+impl crate::moss_ffi::MossKeyStore for Persistence {
     fn load_identity(&self) -> Option<Vec<u8>> {
         match self.get_moss_identity() {
             Ok(value) => value,

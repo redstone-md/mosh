@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::attachment_crypto::{
+use crate::attachment_crypto::{
     decrypt_chunk, encrypt_chunk, random_key, random_nonce_prefix, sha256_hex,
     AttachmentCryptoError, ATTACHMENT_KEY_LEN, ATTACHMENT_NONCE_PREFIX_LEN,
 };

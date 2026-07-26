@@ -7,17 +7,17 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::mpsc;
 use std::sync::Arc;
 
-pub use crate::adapters::attachment_runtime::VoiceMeta;
-use crate::adapters::attachment_runtime::{
+pub use crate::attachment_runtime::VoiceMeta;
+use crate::attachment_runtime::{
     AttachmentManifest, AttachmentRuntime, ChunkOutcome, OutgoingAttachment, StreamRange,
     CHUNK_SIZE,
 };
-use crate::adapters::attachment_store::AttachmentStore;
-use crate::adapters::message_id::MessageIdGen;
-use crate::adapters::mls_crypto::MlsSessionCrypto;
-use crate::adapters::outbound_delivery::OutboundAttemptRecord;
-use crate::adapters::persistence::Persistence;
-use crate::adapters::voice_call_runtime::{CallPhase, CallState};
+use crate::attachment_store::AttachmentStore;
+use crate::message_id::MessageIdGen;
+use crate::mls_crypto::MlsSessionCrypto;
+use crate::outbound_delivery::OutboundAttemptRecord;
+use crate::persistence::Persistence;
+use crate::voice_call_runtime::{CallPhase, CallState};
 pub use contracts::{
     AcceptInviteRequest, ActiveCall, AttachmentDescriptor, AttachmentSendResult, AttachmentState,
     AttachmentView, CallEvent, CallOfferBody, CallStarted, ChatMessage, CloseSessionResult,
@@ -142,7 +142,7 @@ fn apply_delivery(
     message.retryable = Some(matches!(status, MessageDeliveryStatus::Failed));
 }
 
-use crate::adapters::moss_ffi::{
+use crate::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
@@ -1163,7 +1163,7 @@ impl PrivateDmRuntime {
     /// through the same `handle_moss_message` dedup/dispatch as the direct
     /// path — the relay callback has no channel, so `RelayFrame` re-tags it.
     fn drain_relay(&mut self) {
-        for inbound in crate::adapters::moss_ffi::drain_relay_frames() {
+        for inbound in crate::moss_ffi::drain_relay_frames() {
             let frame: wire::RelayFrame = match decode_json(&inbound.data) {
                 Ok(f) => f,
                 Err(e) => {
@@ -1774,7 +1774,7 @@ impl PrivateDmSession {
         let key = format!(
             "{}:{}",
             message.channel,
-            crate::adapters::attachment_crypto::sha256_hex(&message.payload)
+            crate::attachment_crypto::sha256_hex(&message.payload)
         );
         if !self.seen_moss_messages.insert(key.clone()) {
             return true;
@@ -2891,7 +2891,7 @@ fn start_node(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
+    use crate::moss_ffi::{drain_received_messages, MossFfiRuntime, MOSS_TEST_LOCK};
 
     fn peer(id: &str, relayed: bool) -> PeerDetail {
         PeerDetail {
@@ -3100,7 +3100,7 @@ mod tests {
 
     #[test]
     fn waiting_creator_invite_survives_restart() {
-        use crate::adapters::persistence::Persistence;
+        use crate::persistence::Persistence;
         use std::path::PathBuf;
 
         let _guard = MOSS_TEST_LOCK
@@ -3156,7 +3156,7 @@ mod tests {
 
     #[test]
     fn restored_inbound_history_waits_for_live_peer() {
-        use crate::adapters::persistence::Persistence;
+        use crate::persistence::Persistence;
         use std::path::PathBuf;
 
         let _guard = MOSS_TEST_LOCK
@@ -3680,7 +3680,7 @@ mod tests {
             session.peer_moss_id = Some("ab".repeat(32));
             assert!(!session.peer_joined, "handshake must be incomplete");
         }
-        crate::adapters::moss_ffi::push_relay_for_test([0xCD; 32], frame.clone());
+        crate::moss_ffi::push_relay_for_test([0xCD; 32], frame.clone());
         alice.drain_relay();
         assert_eq!(
             alice.sessions[&invite.session_id].peer_moss_id,
@@ -3693,7 +3693,7 @@ mod tests {
             .get_mut(&invite.session_id)
             .expect("Alice session should exist")
             .peer_joined = true;
-        crate::adapters::moss_ffi::push_relay_for_test([0xEF; 32], frame);
+        crate::moss_ffi::push_relay_for_test([0xEF; 32], frame);
         alice.drain_relay();
         assert_eq!(
             alice.sessions[&invite.session_id].peer_moss_id,
@@ -3813,7 +3813,7 @@ mod tests {
         let relay_node = runtime
             .init_default_node(
                 "relay-test-mesh",
-                &crate::adapters::moss_ffi::MossNodeConfig::default(),
+                &crate::moss_ffi::MossNodeConfig::default(),
             )
             .expect("relay test node should init");
         let (jobs_tx, jobs_rx) = mpsc::channel();
@@ -3908,7 +3908,7 @@ mod tests {
     // retryable failure.
     #[test]
     fn stale_pending_attempt_rehydrates_as_retryable_failure() {
-        use crate::adapters::persistence::Persistence;
+        use crate::persistence::Persistence;
         use std::path::PathBuf;
 
         let _guard = MOSS_TEST_LOCK
@@ -3941,7 +3941,7 @@ mod tests {
                 .moss
                 .init_default_node(
                     "relay-stale-test-mesh",
-                    &crate::adapters::moss_ffi::MossNodeConfig::default(),
+                    &crate::moss_ffi::MossNodeConfig::default(),
                 )
                 .expect("relay test node should init");
             let (jobs_tx, _jobs_rx) = mpsc::channel();
@@ -4220,7 +4220,7 @@ mod tests {
 
     #[test]
     fn history_and_session_survive_restart() {
-        use crate::adapters::persistence::Persistence;
+        use crate::persistence::Persistence;
         use std::path::PathBuf;
 
         let _guard = MOSS_TEST_LOCK
@@ -4307,7 +4307,7 @@ mod tests {
 
     #[test]
     fn failed_send_rehydrates_as_retryable_message() {
-        use crate::adapters::persistence::Persistence;
+        use crate::persistence::Persistence;
         use std::path::PathBuf;
 
         let _guard = MOSS_TEST_LOCK
@@ -4395,7 +4395,7 @@ mod tests {
 
     #[test]
     fn retry_message_reuses_message_id_and_clears_failed_attempt() {
-        use crate::adapters::persistence::Persistence;
+        use crate::persistence::Persistence;
         use std::path::PathBuf;
 
         let _guard = MOSS_TEST_LOCK
@@ -4484,7 +4484,7 @@ mod tests {
     #[test]
     #[ignore]
     fn joiner_history_and_session_survive_restart() {
-        use crate::adapters::persistence::Persistence;
+        use crate::persistence::Persistence;
         use std::path::PathBuf;
 
         let _guard = MOSS_TEST_LOCK

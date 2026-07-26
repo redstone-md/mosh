@@ -3,20 +3,20 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::attachment_crypto::sha256_hex;
-use crate::adapters::attachment_runtime::{
+use crate::attachment_crypto::sha256_hex;
+use crate::attachment_runtime::{
     AttachmentManifest, AttachmentRuntime, ChunkFrame, ChunkOutcome, ChunkRequest,
     OutgoingAttachment, StreamRange, CHUNK_SIZE,
 };
-use crate::adapters::attachment_store::AttachmentStore;
-use crate::adapters::message_id::MessageIdGen;
-use crate::adapters::moss_ffi::{
+use crate::attachment_store::AttachmentStore;
+use crate::message_id::MessageIdGen;
+use crate::moss_ffi::{
     clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
     MossNodeConfig, MossReceivedMessage,
 };
-use crate::adapters::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
-use crate::adapters::persistence::Persistence;
-use crate::adapters::private_dm_runtime::{
+use crate::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
+use crate::persistence::Persistence;
+use crate::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
 };
@@ -203,14 +203,14 @@ impl std::fmt::Display for ChannelRuntimeError {
 
 impl std::error::Error for ChannelRuntimeError {}
 
-impl From<crate::adapters::attachment_runtime::AttachmentRuntimeError> for ChannelRuntimeError {
-    fn from(error: crate::adapters::attachment_runtime::AttachmentRuntimeError) -> Self {
+impl From<crate::attachment_runtime::AttachmentRuntimeError> for ChannelRuntimeError {
+    fn from(error: crate::attachment_runtime::AttachmentRuntimeError) -> Self {
         Self::Attachment(error.to_string())
     }
 }
 
-impl From<crate::adapters::attachment_store::AttachmentStoreError> for ChannelRuntimeError {
-    fn from(error: crate::adapters::attachment_store::AttachmentStoreError) -> Self {
+impl From<crate::attachment_store::AttachmentStoreError> for ChannelRuntimeError {
+    fn from(error: crate::attachment_store::AttachmentStoreError) -> Self {
         Self::Attachment(error.to_string())
     }
 }
@@ -1515,10 +1515,10 @@ impl AttachmentSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::moss_ffi::{
+    use crate::moss_ffi::{
         drain_received_messages, fail_next_test_publish, MossFfiRuntime, MOSS_TEST_LOCK,
     };
-    use crate::adapters::persistence::Persistence;
+    use crate::persistence::Persistence;
     use std::path::PathBuf;
 
     fn temp_store() -> Arc<AttachmentStore> {
