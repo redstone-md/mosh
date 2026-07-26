@@ -45,6 +45,9 @@ jobs:
           submodules: recursive
           # On tag push this resolves to the tag; on dispatch, the requested tag.
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # Full history and tags: release-notes.sh lists the commits between
+          # this tag and the previous one, and a shallow clone has neither.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -94,26 +97,18 @@ jobs:
       - name: Cargo test (nextest)
         run: cargo nextest run --profile ci --manifest-path src-tauri/Cargo.toml
 
-      # Pull the tag's section out of CHANGELOG.md so the GitHub release shows
-      # the actual notes, not a "see CHANGELOG" pointer. Git Bash on the Windows
-      # runner provides awk/sed just like the macOS runners.
-      - name: Extract release notes from CHANGELOG
+      # The release body is the tag's CHANGELOG section plus the commits git says
+      # are in it. Git Bash on the Windows runner provides awk/git just like the
+      # macOS runners.
+      - name: Build release notes
         id: notes
         shell: bash
         run: |
           tag='${{ github.event.inputs.tag || github.ref_name }}'
-          version="${tag#v}"
-          section="$(awk -v ver="$version" '
-            $0 ~ "^## \\[" ver "\\]" { p=1; next }
-            p && /^## \[/ { exit }
-            p { print }
-          ' CHANGELOG.md | sed -e '/./,$!d')"
-          if [ -z "$section" ]; then
-            section="See CHANGELOG.md for release notes."
-          fi
+          notes="$(bash scripts/release-notes.sh "$tag")"
           {
             echo 'body<<CHANGELOG_EOF'
-            printf '%s\n' "$section"
+            printf '%s\n' "$notes"
             echo 'CHANGELOG_EOF'
           } >> "$GITHUB_OUTPUT"
 
