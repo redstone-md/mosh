@@ -1348,7 +1348,9 @@ fn apply_stored_vpn_bypass(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn get_vpn_bypass_consent(app: tauri::AppHandle) -> Option<adapters::vpn_consent::VpnBypassConsent> {
+fn get_vpn_bypass_consent(
+    app: tauri::AppHandle,
+) -> Option<adapters::vpn_consent::VpnBypassConsent> {
     adapters::vpn_consent::load(&vpn_consent_dir(&app))
 }
 
