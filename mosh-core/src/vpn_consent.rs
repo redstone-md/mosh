@@ -66,9 +66,8 @@ pub fn resolve<'a>(
     consent: &VpnBypassConsent,
     interfaces: &'a [NetworkInterfaceInfo],
 ) -> Option<&'a NetworkInterfaceInfo> {
-    let usable = |iface: &&NetworkInterfaceInfo| {
-        iface.is_up && !iface.is_loopback && !iface.is_virtual
-    };
+    let usable =
+        |iface: &&NetworkInterfaceInfo| iface.is_up && !iface.is_loopback && !iface.is_virtual;
     interfaces
         .iter()
         .find(|iface| iface.name == consent.interface && usable(iface))
