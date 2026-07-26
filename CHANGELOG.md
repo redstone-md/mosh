@@ -40,14 +40,18 @@ All notable changes to Mosh are documented here. Format follows
 
 ### Changed
 - **Moss core updated from v0.6.20 to v0.8.14.** Installers grow by ~2.3 MB.
-- **Network telemetry is on by default.** Separate from the Axiom sink above:
-  moss now contributes anonymised, noise-added aggregate network metrics — no
-  address, no stable identity, and it stays inside the mesh rather than going to
-  a third party. Opt out by adding `"telemetry":{"enabled":false}` to the node
-  config in `src-tauri/src/adapters/moss_ffi.rs`.
 - **Room membership is announced to the discovery layer.** Every 30 seconds each
   node publishes, under an opaque hash, which rooms it is in, so sparse rooms can
   find each other. There is no switch to turn this off.
+
+### Note
+- **Mosh's in-mesh network telemetry has been on by default since 0.6.7** and no
+  previous entry said so. It did not change in this release. It is separate from
+  the Axiom sink above and much narrower: anonymised, noise-added aggregate
+  metrics carrying no address and no stable identity, gossiped inside the mesh
+  rather than sent to a third party. Opt out by adding
+  `"telemetry":{"enabled":false}` to the node config in
+  `src-tauri/src/adapters/moss_ffi.rs`.
 
 ## [0.6.8] - 2026-07-16
 
