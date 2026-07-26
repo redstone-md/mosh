@@ -40,8 +40,13 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-  rust:
-    name: Rust (fmt + clippy + cargo test)
+  # Two Rust jobs rather than one, because they need different things and the
+  # serial version spent 24 minutes compiling the same crates three times over.
+  # mosh-core knows nothing about Tauri, so it needs neither the frontend build
+  # nor Tauri's dependency tree — running it alongside the shell roughly halves
+  # wall clock.
+  core:
+    name: Rust core (mosh-core + mosh-probe)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,8 +58,63 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Go builds the Moss shared library; cargo test self-builds it from the
-      # moss submodule, so the toolchain must be present.
+      # Only for `npm run moss:prepare` below — the adapter tests dlopen the
+      # library, so it has to exist even though nothing here links Tauri.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: moss/go.sum
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            mosh-core
+            mosh-probe
+          # Restore on every run, but only pay the (multi-minute) compress-and-
+          # upload on main. A PR reads main's cache and skips writing its own.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The adapter tests resolve the library relative to the crate root, so it
+      # must sit at src-tauri/moss-runtime/moss.dll even for this job.
+      - name: Build Moss shared library
+        run: npm run moss:prepare
+
+      - name: Rustfmt check
+        run: |
+          cargo fmt --manifest-path mosh-core/Cargo.toml --check
+          cargo fmt --manifest-path mosh-probe/Cargo.toml --check
+
+      - name: Clippy (deny warnings)
+        run: |
+          cargo clippy --manifest-path mosh-core/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path mosh-probe/Cargo.toml --all-targets -- -D warnings
+
+      # Deliberately NOT nextest. These ~40 Moss tests serialise through the
+      # in-process MOSS_TEST_LOCK, which process-per-test isolation defeats —
+      # several real loopback handshakes racing each other is exactly what makes
+      # them flaky. One process, one lock, one at a time.
+      - name: Cargo test (adapters)
+        run: cargo test --manifest-path mosh-core/Cargo.toml
+
+  shell:
+    name: Rust shell (src-tauri)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
       - uses: actions/setup-go@v5
         with:
           go-version: stable
@@ -67,10 +127,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            src-tauri
-            mosh-core
-            mosh-probe
+          workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install dependencies
         run: npm ci
@@ -86,16 +144,10 @@ jobs:
         run: npm run moss:prepare
 
       - name: Rustfmt check
-        run: |
-          cargo fmt --manifest-path src-tauri/Cargo.toml --check
-          cargo fmt --manifest-path mosh-core/Cargo.toml --check
-          cargo fmt --manifest-path mosh-probe/Cargo.toml --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
 
       - name: Clippy (deny warnings)
-        run: |
-          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path mosh-core/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path mosh-probe/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -107,11 +159,3 @@ jobs:
       # profile in src-tauri/.config/nextest.toml.
       - name: Cargo test (nextest)
         run: cargo nextest run --profile ci --manifest-path src-tauri/Cargo.toml
-
-      # The adapter suite deliberately does NOT use nextest. Its ~40 Moss tests
-      # serialise through the in-process MOSS_TEST_LOCK, which nextest's
-      # process-per-test isolation would defeat — several real loopback
-      # handshakes racing each other is exactly what makes them flaky. One
-      # process, one lock, one at a time.
-      - name: Cargo test (mosh-core adapters)
-        run: cargo test --manifest-path mosh-core/Cargo.toml
