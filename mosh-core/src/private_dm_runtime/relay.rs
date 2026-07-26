@@ -14,7 +14,7 @@
 
 use super::contracts::{MeshInfo, PrivateDmRuntimeError};
 use super::wire::ChannelKind;
-use crate::adapters::moss_ffi::{MossFfiRuntime, MossNode, MossNodeConfig};
+use crate::moss_ffi::{MossFfiRuntime, MossNode, MossNodeConfig};
 use std::collections::VecDeque;
 use std::sync::mpsc;
 use std::sync::Arc;

@@ -1,4 +1,5 @@
 pub mod adapters;
+mod tauri_moss;
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -1341,7 +1342,7 @@ pub fn run() {
         .setup(|app| {
             let persistence_load = load_persistence(app.handle());
             app.manage(PersistenceStatusState(persistence_load.status.clone()));
-            match MossFfiRuntime::load_from_app_handle(app.handle()) {
+            match tauri_moss::load_moss_runtime_from_app_handle(app.handle()) {
                 Ok(moss) => {
                     let moss = Arc::new(moss);
                     let attachment_store = load_attachment_store(app.handle());

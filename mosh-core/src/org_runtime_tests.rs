@@ -1,5 +1,5 @@
 use super::*;
-use crate::adapters::moss_ffi::{drain_received_messages, MOSS_TEST_LOCK};
+use crate::moss_ffi::{drain_received_messages, MOSS_TEST_LOCK};
 use std::path::PathBuf;
 
 const ORG_KEY_HEX: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

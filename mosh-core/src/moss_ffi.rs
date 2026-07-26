@@ -36,7 +36,7 @@ pub fn current_bind_interface() -> Option<String> {
         .clone()
 }
 
-use crate::adapters::moss_runtime::{MossDynamicRuntime, MossRuntimeError};
+use crate::moss_runtime::{MossDynamicRuntime, MossRuntimeError};
 
 const MOSS_OK: i32 = 0;
 const MOSS_ERR_NO_PEERS: i32 = -6;
@@ -218,16 +218,6 @@ pub struct MossNodeConfig {
 impl MossFfiRuntime {
     pub fn load_default() -> Result<Self, MossFfiError> {
         let path = MossDynamicRuntime::from_default_candidates()
-            .first_available_path()
-            .ok_or_else(|| {
-                MossFfiError::Runtime(MossRuntimeError::Load("library not found".into()))
-            })?;
-
-        Self::load_from_path(&path)
-    }
-
-    pub fn load_from_app_handle(handle: &tauri::AppHandle) -> Result<Self, MossFfiError> {
-        let path = MossDynamicRuntime::from_app_handle(handle)
             .first_available_path()
             .ok_or_else(|| {
                 MossFfiError::Runtime(MossRuntimeError::Load("library not found".into()))

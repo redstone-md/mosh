@@ -15,11 +15,11 @@ const REQUIRED_SYMBOLS: [&[u8]; 8] = [
 ];
 
 #[cfg(target_os = "windows")]
-const MOSS_LIBRARY_NAME: &str = "moss.dll";
+pub const MOSS_LIBRARY_NAME: &str = "moss.dll";
 #[cfg(target_os = "macos")]
-const MOSS_LIBRARY_NAME: &str = "libmoss.dylib";
+pub const MOSS_LIBRARY_NAME: &str = "libmoss.dylib";
 #[cfg(all(unix, not(target_os = "macos")))]
-const MOSS_LIBRARY_NAME: &str = "libmoss.so";
+pub const MOSS_LIBRARY_NAME: &str = "libmoss.so";
 
 pub trait MossRuntime {
     fn status(&self) -> MossRuntimeStatus;
@@ -66,12 +66,12 @@ impl MossDynamicRuntime {
         }
     }
 
-    pub fn from_app_handle(handle: &tauri::AppHandle) -> Self {
+    /// Default candidates with `path` tried first. Used by hosts (the Tauri
+    /// shell) that know a bundled resource location the core crate cannot
+    /// resolve on its own.
+    pub fn with_preferred_candidate(path: PathBuf) -> Self {
         let mut candidate_paths = default_candidate_paths();
-
-        if let Some(path) = resource_library_path(handle) {
-            candidate_paths.insert(0, path);
-        }
+        candidate_paths.insert(0, path);
 
         Self { candidate_paths }
     }
@@ -130,6 +130,23 @@ fn default_candidate_paths() -> Vec<PathBuf> {
                 .join("moss-runtime")
                 .join(MOSS_LIBRARY_NAME),
         );
+        // Same two locations seen from a sibling crate directory (mosh-core,
+        // and any future headless binary), where the repo root is one level up.
+        candidates.push(
+            current_dir
+                .join("..")
+                .join("src-tauri")
+                .join("target")
+                .join("moss-test")
+                .join(MOSS_LIBRARY_NAME),
+        );
+        candidates.push(
+            current_dir
+                .join("..")
+                .join("src-tauri")
+                .join("moss-runtime")
+                .join(MOSS_LIBRARY_NAME),
+        );
         candidates.push(current_dir.join("..").join("moss").join(MOSS_LIBRARY_NAME));
     }
 
@@ -140,18 +157,6 @@ fn default_candidate_paths() -> Vec<PathBuf> {
     }
 
     candidates
-}
-
-fn resource_library_path(handle: &tauri::AppHandle) -> Option<PathBuf> {
-    use tauri::{path::BaseDirectory, Manager};
-
-    handle
-        .path()
-        .resolve(
-            format!("moss-runtime/{MOSS_LIBRARY_NAME}"),
-            BaseDirectory::Resource,
-        )
-        .ok()
 }
 
 fn verify_required_symbols(library: &Library) -> Result<(), MossRuntimeError> {

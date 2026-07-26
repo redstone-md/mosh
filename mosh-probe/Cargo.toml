@@ -1,0 +1,16 @@
+[package]
+name = "mosh-probe"
+version = "0.6.9"
+description = "Headless two-ended reachability probe for the Mosh DM stack"
+license = "GPL-3.0-or-later"
+edition = "2021"
+publish = false
+
+[dependencies]
+mosh-core = { path = "../mosh-core" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+strip = true

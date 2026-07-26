@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::adapters::attachment_crypto::{sha256_hex, Sha256Builder};
+use crate::attachment_crypto::{sha256_hex, Sha256Builder};
 
 const ATTACHMENT_DIR_NAME: &str = "attachments";
 const MAX_FILE_NAME_LEN: usize = 200;

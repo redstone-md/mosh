@@ -3,7 +3,7 @@ use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::types::SignatureScheme;
 
-use crate::adapters::mls_storage::PersistentProvider;
+use crate::mls_storage::PersistentProvider;
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 const FINGERPRINT_LEN: usize = 16;
