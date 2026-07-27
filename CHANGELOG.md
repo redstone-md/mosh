@@ -4,6 +4,48 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-27
+
+### Fixed
+- **The VPN bypass now does something.** It never could. A connection's network
+  adapter is fixed when the connection starts, and saved conversations start
+  before the window exists — so the button changed a setting that no running
+  conversation would ever read again. It was a no-op for every existing chat,
+  however many times it was pressed, and the choice was thrown away at exit.
+- **The bypass no longer splits Mosh across two networks when it is on.**
+  Underneath, some connections honoured the chosen adapter and others silently
+  used the VPN, so Mosh advertised two different addresses and peers disagreed
+  about which was real. Fixed in moss v0.8.15.
+
+### Changed
+- **Mosh asks once, at startup, when a VPN is carrying its traffic**, and names
+  the adapter it would use instead. Answering yes is remembered and applied on
+  every launch; answering no is not remembered, so the question returns next
+  time — a wrong yes is visible and reversible, a remembered no would quietly
+  strand someone whose network changed.
+- **Mosh restarts when you change that answer.** There is no way around it:
+  connections take their network adapter when they start, so a setting changed
+  mid-session would apply to nothing until the next launch. One restart makes it
+  true for every conversation instead of none.
+- **The adapter picker moved to advanced connection settings**, and the warning
+  banner is gone. Nobody should have to reason about `ipv4-tun` to send a
+  message. The picker is still there for anyone who wants it, alongside the
+  yes/no answer.
+- The automatic pick now ignores adapters holding a `169.254.x` address. That
+  range means no address was issued, so an unplugged network card could win the
+  pick while being connected to nothing.
+- **Moss core updated from v0.8.14 to v0.8.15.**
+
+### Note
+- **This has not been shown to fix a chat that would not connect.** It makes the
+  feature work as designed and stop lying about its state, which is worth having
+  on its own. Whether routing around a VPN is what rescues two peers who cannot
+  find each other is still open: a laptop-to-server test delivered messages both
+  with the bypass and without it, and that pair cannot reproduce the reported
+  failure because one end is a public server with no NAT. The `no_relay_peer`
+  failures seen in the field have a separate cause that this release does not
+  touch.
+
 ## [0.6.9] - 2026-07-26
 
 ### Fixed

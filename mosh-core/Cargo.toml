@@ -1,6 +1,6 @@
 [package]
 name = "mosh-core"
-version = "0.6.9"
+version = "0.7.0"
 description = "Tauri-free core adapters for Mosh (crypto, transport, persistence, runtimes)"
 authors = ["Mosh contributors"]
 license = "GPL-3.0-or-later"
