@@ -4,6 +4,36 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-07-29
+
+### Fixed
+- **A file transfer that lost one chunk hung forever.** Users saw it stick at
+  63%, 32% and 0%. The receiver *did* ask again — `next_chunk_request`
+  re-requests the gaps below its cursor on every pump — but the repeat request
+  is byte-identical to the one before it, and the inbound dedup keys on
+  `channel + sha256(payload)`. So the sender dropped every repeat before
+  `handle_blob` ever saw it and never re-served, and a re-served chunk frame
+  (also byte-identical) would have died on the way back.
+
+  This is the same trap that kept the MLS handshake silent in 0.7.1: the
+  recovery mechanism is re-sending the identical bytes, and a payload-hash
+  dedup makes recovery unreachable. The blob channel is now exempt like the
+  control channel. Both directions are idempotent — serving a chunk just
+  re-encrypts it, and ingesting one already held is a no-op.
+
+  What keeps the repeats from becoming a flood is no longer the dedup but an
+  in-flight window: a chunk asked for less than 10s ago is not asked for again,
+  so the once-a-second pump stops re-requesting a batch still on the wire. The
+  request cursor still advances a fresh window every pump, so throughput is
+  unchanged.
+
+### Changed
+- Moss bumped to **v0.8.18**, which stops application delivery from stalling
+  the read loop. That was the other half of the same failure: a transfer's
+  chunks filled a shared delivery queue, the reader blocked behind it, and the
+  transport's inbound buffer discarded whatever arrived next — the lost chunks
+  above, and the pings a session dies six of.
+
 ## [0.7.1] - 2026-07-28
 
 ### Fixed

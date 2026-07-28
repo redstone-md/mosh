@@ -1,6 +1,6 @@
 [package]
 name = "mosh-probe"
-version = "0.7.1"
+version = "0.7.2"
 description = "Headless two-ended reachability probe for the Mosh DM stack"
 license = "GPL-3.0-or-later"
 edition = "2021"
