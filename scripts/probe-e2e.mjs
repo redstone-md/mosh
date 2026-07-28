@@ -11,7 +11,17 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
-const REMOTE_BIN = "/usr/local/bin/mosh-probe";
+const DEFAULT_REMOTE_BIN = "/usr/local/bin/mosh-probe";
+
+// Everything the overlay exists for only matters between two hosts that cannot
+// be dialed. A public relay on one end is the easy case and hides it, so the
+// remote half can be wrapped in anything that ends up invoking the probe —
+// notably a container on the default bridge, which is a real NAT rather than a
+// simulated one:
+//
+//   --remote-bin "docker run --rm -v /usr/local/bin:/opt/probe:ro \
+//                 debian:bookworm-slim /opt/probe/mosh-probe"
+const REMOTE_BIN = arg("remote-bin", DEFAULT_REMOTE_BIN);
 const LOCAL_BIN = path.resolve(
   "mosh-probe",
   "target",
