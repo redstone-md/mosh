@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,12 @@ pub const MAX_ATTACHMENT_SIZE: u64 = 50 * 1024 * 1024;
 // own chunked transfer rather than inline in the manifest.
 const MAX_THUMBNAIL_B64: usize = 32 * 1024;
 const MAX_REQUEST_BATCH: usize = 64;
+// How long a requested chunk counts as in flight. The receiver pumps roughly
+// once a second, and without this every pump re-asks for chunks that are still
+// on the wire — one batch of 64 becomes 64 batches. Long enough for a slow link
+// to deliver a full batch, short enough that a genuinely lost chunk is asked
+// for again while the user is still watching the progress bar.
+const CHUNK_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum AttachmentRuntimeError {
@@ -157,7 +164,10 @@ struct OutgoingTransfer {
     plaintext: Vec<u8>,
     key: [u8; ATTACHMENT_KEY_LEN],
     nonce_prefix: [u8; ATTACHMENT_NONCE_PREFIX_LEN],
-    served_chunks: BTreeMap<u64, ()>,
+    /// How many times each chunk has been encrypted and handed out. A count,
+    /// not a set: re-serving is the whole recovery mechanism, so "was it served
+    /// again after the receiver asked again" is the thing worth observing.
+    served_chunks: BTreeMap<u64, u32>,
     state: TransferState,
 }
 
@@ -169,6 +179,9 @@ struct IncomingTransfer {
     state: TransferState,
     download_started: bool,
     request_cursor: u64,
+    /// When each outstanding chunk was last asked for, so a request that is
+    /// still in flight is not asked for again on the next pump.
+    requested_at: HashMap<u64, Instant>,
     /// When a streaming player asks for bytes the receiver does not have
     /// yet, this chunk index is fetched ahead of the sequential cursor.
     priority_chunk: Option<u64>,
@@ -285,7 +298,7 @@ impl AttachmentRuntime {
                 continue;
             };
             let ciphertext = encrypt_chunk(&transfer.key, &transfer.nonce_prefix, index, slice)?;
-            transfer.served_chunks.insert(index, ());
+            *transfer.served_chunks.entry(index).or_insert(0) += 1;
             frames.push(ChunkFrame {
                 attachment_id: request.attachment_id.clone(),
                 chunk_index: index,
@@ -333,6 +346,7 @@ impl AttachmentRuntime {
                 state: TransferState::Active,
                 download_started: false,
                 request_cursor: 0,
+                requested_at: HashMap::new(),
                 priority_chunk: None,
             },
         );
@@ -410,25 +424,54 @@ impl AttachmentRuntime {
     /// the sliding cursor are re-requested first so a dropped connection
     /// resumes; otherwise the cursor advances by one window.
     pub fn next_chunk_request(&mut self, attachment_id: &str) -> Option<ChunkRequest> {
+        self.next_chunk_request_at(attachment_id, Instant::now())
+    }
+
+    /// `next_chunk_request` with the clock passed in, so the in-flight window
+    /// can be exercised without sleeping.
+    pub fn next_chunk_request_at(
+        &mut self,
+        attachment_id: &str,
+        now: Instant,
+    ) -> Option<ChunkRequest> {
         let transfer = self.incoming.get_mut(attachment_id)?;
         if !transfer.download_started || transfer.state != TransferState::Active {
             return None;
         }
+        // A chunk that is missing but was asked for moments ago is still on the
+        // wire, not lost. Asking again every pump turns one batch of 64 into 64
+        // batches and buries the link that was already struggling.
+        let wanted = |transfer: &IncomingTransfer, index: u64| {
+            !transfer.chunks.contains_key(&index)
+                && transfer
+                    .requested_at
+                    .get(&index)
+                    .is_none_or(|sent| now.saturating_duration_since(*sent) >= CHUNK_REQUEST_TIMEOUT)
+        };
         let mut indices = Vec::new();
         // A streaming player's requested region jumps the queue so playback
         // is not blocked behind the sequential cursor.
         if let Some(priority) = transfer.priority_chunk {
             for index in priority..transfer.manifest.chunk_count {
-                if !transfer.chunks.contains_key(&index) {
+                if wanted(transfer, index) {
                     indices.push(index);
                     if indices.len() >= MAX_REQUEST_BATCH {
                         break;
                     }
                 }
             }
-            if indices.is_empty() {
+            // The priority region is only satisfied once every chunk in it has
+            // arrived — chunks merely in flight must keep it pinned, or the
+            // player's region loses its place in the queue on the next pump.
+            if (priority..transfer.manifest.chunk_count)
+                .all(|index| transfer.chunks.contains_key(&index))
+            {
                 transfer.priority_chunk = None;
-            } else {
+            }
+            if !indices.is_empty() {
+                for &index in &indices {
+                    transfer.requested_at.insert(index, now);
+                }
                 return Some(ChunkRequest {
                     attachment_id: attachment_id.to_string(),
                     chunk_indices: indices,
@@ -436,7 +479,7 @@ impl AttachmentRuntime {
             }
         }
         for index in 0..transfer.request_cursor {
-            if !transfer.chunks.contains_key(&index) {
+            if wanted(transfer, index) {
                 indices.push(index);
                 if indices.len() >= MAX_REQUEST_BATCH {
                     break;
@@ -454,10 +497,23 @@ impl AttachmentRuntime {
         if indices.is_empty() {
             return None;
         }
+        for &index in &indices {
+            transfer.requested_at.insert(index, now);
+        }
         Some(ChunkRequest {
             attachment_id: attachment_id.to_string(),
             chunk_indices: indices,
         })
+    }
+
+    /// How many times the sender has encrypted and handed out a chunk. The
+    /// receiver only asks again for what it never got, so a second serve is
+    /// the recovery working.
+    pub fn served_count(&self, attachment_id: &str, chunk_index: u64) -> u32 {
+        self.outgoing
+            .get(attachment_id)
+            .and_then(|transfer| transfer.served_chunks.get(&chunk_index).copied())
+            .unwrap_or(0)
     }
 
     /// Returns the next batch of chunk indices the receiver still needs.
@@ -883,8 +939,68 @@ mod tests {
             })
             .unwrap();
         receiver.ingest_chunk(&frames[0]).unwrap();
-        let resume = receiver.next_chunk_request("a").unwrap();
+        // 0 and 2 were asked for a moment ago and count as in flight, so the
+        // gap is re-requested only once the window has passed.
+        assert!(receiver.next_chunk_request("a").is_none());
+        let later = Instant::now() + CHUNK_REQUEST_TIMEOUT;
+        let resume = receiver.next_chunk_request_at("a", later).unwrap();
         assert_eq!(resume.chunk_indices, vec![0, 2]);
+    }
+
+    // One lost chunk used to hang a transfer forever: the receiver asked again,
+    // the request was byte-identical, and the sender's payload-hash dedup
+    // dropped it. The dedup exemption lives in the DM runtime; this covers the
+    // half that must not turn the retry into a flood — and that the retry
+    // happens at all.
+    #[test]
+    fn a_lost_chunk_is_asked_for_again_once_the_window_passes() {
+        let mut sender = AttachmentRuntime::new();
+        let mut receiver = AttachmentRuntime::new();
+        let manifest = sender
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "a".to_string(),
+                file_name: "f".to_string(),
+                mime: "m".to_string(),
+                from_fingerprint: "fp".to_string(),
+                bytes: payload((CHUNK_SIZE as usize) * 2),
+                thumbnail_b64: None,
+                voice: None,
+            })
+            .unwrap();
+        receiver.register_incoming(manifest).unwrap();
+        receiver.start_download("a").unwrap();
+
+        let first = receiver.next_chunk_request("a").unwrap();
+        assert_eq!(first.chunk_indices, vec![0, 1]);
+        // Chunk 1 is lost in transit; chunk 0 arrives.
+        let frames = sender.serve_chunks(&first).unwrap();
+        receiver.ingest_chunk(&frames[0]).unwrap();
+
+        // Pumping every second must not re-ask while the chunk may still be
+        // on the wire.
+        let now = Instant::now();
+        for tick in 1..5 {
+            assert!(
+                receiver
+                    .next_chunk_request_at("a", now + Duration::from_secs(tick))
+                    .is_none(),
+                "re-asked at {tick}s — an in-flight batch would be requested \
+                 once per pump"
+            );
+        }
+
+        let retry = receiver
+            .next_chunk_request_at("a", now + CHUNK_REQUEST_TIMEOUT)
+            .expect("a chunk that never arrived must be asked for again");
+        assert_eq!(retry.chunk_indices, vec![1]);
+        for frame in sender.serve_chunks(&retry).unwrap() {
+            receiver.ingest_chunk(&frame).unwrap();
+        }
+        assert_eq!(
+            sender.served_count("a", 1),
+            2,
+            "the sender must re-serve the chunk the receiver never got"
+        );
     }
 
     #[test]

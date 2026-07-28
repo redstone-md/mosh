@@ -1811,9 +1811,20 @@ impl PrivateDmSession {
         // exactly one delivered, zero re-answers.
         //
         // Safe because every control branch is idempotent — each checks
-        // `peer_joined` before acting. Data and blob frames still dedup: those
-        // are what would otherwise double up in the message history.
-        if message.channel == self.control_channel {
+        // `peer_joined` before acting. Data frames still dedup: those are what
+        // would otherwise double up in the message history.
+        //
+        // Blob frames are exempt for the same reason as control. A receiver
+        // that never got chunk 7 asks for chunk 7 again, and that request is
+        // byte-identical to the one before it, so the sender dropped every
+        // repeat here and never re-served — one lost chunk hung the transfer
+        // for good. Users saw exactly that at 63%, 32% and 0%. Re-served chunk
+        // frames are byte-identical too, so they need the same exemption.
+        // Idempotent on both sides: serve_chunks just re-encrypts, and
+        // ingest_chunk answers Duplicate for a chunk already held. What stops
+        // the repeats from becoming a flood is the in-flight window in
+        // next_chunk_request, not this set.
+        if message.channel == self.control_channel || message.channel == self.blob_channel {
             return false;
         }
         let key = format!(
@@ -3637,6 +3648,73 @@ mod tests {
         assert!(
             session.has_seen_message(&data),
             "a repeated data frame must be suppressed"
+        );
+    }
+
+    // The same dedup, one channel over. A receiver missing chunk 7 asks for
+    // chunk 7 again, and that request is byte-identical to the last one, so
+    // every repeat was dropped before handle_blob and the sender never
+    // re-served — the transfer hung at 63% for good. Driven through
+    // handle_moss_message on purpose: the attachment tests call the handlers
+    // directly and so never cross the layer the bug lives in.
+    #[test]
+    fn a_repeated_chunk_request_still_reaches_the_sender() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42186,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+
+        session
+            .attachments
+            .prepare_outgoing(OutgoingAttachment {
+                attachment_id: "att-1".to_string(),
+                file_name: "photo.bin".to_string(),
+                mime: "application/octet-stream".to_string(),
+                from_fingerprint: session.fingerprint.clone(),
+                bytes: vec![7u8; 512],
+                thumbnail_b64: None,
+                voice: None,
+            })
+            .expect("outgoing attachment should register");
+
+        let payload = serde_json::to_vec(&BlobEnvelope::Request {
+            participant_id: "peer-participant".to_string(),
+            request: crate::attachment_runtime::ChunkRequest {
+                attachment_id: "att-1".to_string(),
+                chunk_indices: vec![0],
+            },
+        })
+        .expect("blob request should serialize");
+        let request = MossReceivedMessage {
+            channel: session.blob_channel.clone(),
+            payload,
+        };
+
+        session
+            .handle_moss_message(request.clone(), None)
+            .expect("first chunk request should be served");
+        session
+            .handle_moss_message(request, None)
+            .expect("repeat chunk request should be served again");
+        assert_eq!(
+            session.attachments.served_count("att-1", 0),
+            2,
+            "an identical re-request must reach handle_blob — re-asking \
+             unchanged is how a lost chunk is recovered"
         );
     }
 
