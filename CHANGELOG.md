@@ -4,6 +4,44 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-28
+
+### Fixed
+- **A DM whose first Welcome was lost hung on "connecting" forever.** This is
+  the cause behind the "we still can'''t connect" reports, and it was never in
+  the network layer.
+
+  The handshake already had recovery for exactly this: the joiner re-sends his
+  KeyPackage until he joins, and the creator caches her Welcome so she can
+  re-answer each repeat rather than re-running `add_members`. None of it had
+  ever executed. The inbound dedup keys on `channel + sha256(payload)`, and a
+  retransmission is by definition the identical payload — so every copy after
+  the first was dropped before the handshake code ever saw it, making the
+  re-answer branch unreachable.
+
+  Measured on a live pair before the fix: **85 KeyPackages published, one
+  delivered, zero re-answers**. After, on the same rig: 18 re-answers and the
+  message delivered. Control frames are now exempt from the dedup — every
+  branch there already guards on `peer_joined`, so a repeat is a no-op or the
+  intended re-answer. Data and blob frames still dedup, which is what keeps a
+  resent message from doubling in the history.
+
+  It stayed invisible because the existing handshake tests call the handler
+  directly and never cross the dedup layer, so a mechanism that had never once
+  worked in the field looked fully covered.
+
+### Changed
+- **Bundled moss → v0.8.16.** A UDP session closing while the read loop was
+  delivering to it panicked with `send on closed channel`; moss is linked in as
+  a shared library, so that took the whole app down rather than one session.
+  Also brings the topic-rendezvous and mesh-grafting repairs — on a live pair,
+  inbound PRUNEs went 16,933 to 0 and average routing contacts 0 to 7.78.
+
+### Verified
+- A real two-machine DM (laptop to a remote host, different networks) on this
+  exact build: both ends `ready`, path `direct`, verdict **delivered**. Run
+  twice, including once after the relay fleet was upgraded.
+
 ## [0.7.0] - 2026-07-27
 
 ### Fixed
