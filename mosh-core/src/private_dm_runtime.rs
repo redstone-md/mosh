@@ -1801,6 +1801,21 @@ impl PrivateDmSession {
     }
 
     fn has_seen_message(&mut self, message: &MossReceivedMessage) -> bool {
+        // Control frames are exempt. The handshake's entire recovery mechanism
+        // is re-sending the identical KeyPackage until the peer answers, and
+        // this dedup keys on the payload hash — so every retransmission after
+        // the first was dropped here, before handle_control ever saw it. The
+        // re-answer path written precisely for a lost Welcome was therefore
+        // unreachable, and a session whose first Welcome went missing hung on
+        // "waiting" forever. Measured on a live pair: 85 KeyPackages published,
+        // exactly one delivered, zero re-answers.
+        //
+        // Safe because every control branch is idempotent — each checks
+        // `peer_joined` before acting. Data and blob frames still dedup: those
+        // are what would otherwise double up in the message history.
+        if message.channel == self.control_channel {
+            return false;
+        }
         let key = format!(
             "{}:{}",
             message.channel,
@@ -3571,6 +3586,58 @@ mod tests {
             "repeat KeyPackage must not re-run add_members"
         );
         assert!(session.pending_welcome.is_some());
+    }
+
+    // The dedup above handle_control is what made every D2 retransmit fix
+    // ineffective in the field. Bob re-sends the *identical* KeyPackage bytes,
+    // so a payload-hash dedup drops every copy after the first and the
+    // re-answer path never runs — a session whose first Welcome was lost hung
+    // on "waiting" forever. The existing handshake tests call handle_control
+    // directly and so never crossed this layer.
+    #[test]
+    fn repeat_control_frames_reach_the_handler_while_data_still_dedups() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let invite = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42184,
+                static_peer: None,
+            })
+            .expect("Alice invite should be created");
+        let session = alice
+            .sessions
+            .get_mut(&invite.session_id)
+            .expect("Alice session should exist");
+
+        let bytes = b"identical retransmission".to_vec();
+        let control = MossReceivedMessage {
+            channel: session.control_channel.clone(),
+            payload: bytes.clone(),
+        };
+        let data = MossReceivedMessage {
+            channel: session.data_channel.clone(),
+            payload: bytes,
+        };
+
+        assert!(!session.has_seen_message(&control));
+        assert!(
+            !session.has_seen_message(&control),
+            "an identical control frame must still reach handle_control — \
+             re-sending it unchanged is how the handshake recovers"
+        );
+
+        // Data frames keep deduping, or a resent message doubles in history.
+        assert!(!session.has_seen_message(&data));
+        assert!(
+            session.has_seen_message(&data),
+            "a repeated data frame must be suppressed"
+        );
     }
 
     // Task 3: the moss peer-id rides along in the KeyPackage so Alice can
