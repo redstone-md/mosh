@@ -38,6 +38,9 @@ const HOST = arg("host");
 const TIMEOUT = arg("timeout", "180");
 const BIND = arg("bind-interface");
 const MESSAGE = arg("message", "probe ping");
+// More than one means the real test: N conversations open at the same time from
+// a single local process, against N independent remote counterparts.
+const SESSIONS = Number(arg("sessions", "1"));
 
 if (!HOST) {
   console.error("usage: probe-e2e.mjs --host user@host [--timeout 180] [--bind-interface NAME]");
@@ -75,12 +78,12 @@ function run(command, args, source, onEvent) {
   return child;
 }
 
-/** Resolves once the remote prints its invite, or rejects if it dies first. */
-function waitForInvite(remote) {
+/** Resolves once the given remote source prints its invite, or rejects if it dies first. */
+function waitForInvite(remote, source = "remote") {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("remote never emitted an invite")), 60_000);
+    const timer = setTimeout(() => reject(new Error(`${source} never emitted an invite`)), 60_000);
     const check = setInterval(() => {
-      const hit = events.find((e) => e.kind === "invite");
+      const hit = events.find((e) => e.source === source && e.kind === "invite");
       if (hit) {
         clearInterval(check);
         clearTimeout(timer);
@@ -116,14 +119,67 @@ async function report(localCode) {
 
   console.error("");
   console.error(describe("local ", last("local")));
-  console.error(describe("remote", last("remote")));
+  // Multi-session runs label each counterpart separately, so there is no single
+  // "remote" to print — report every one of them instead of nothing.
+  const remoteSources = [...new Set(events.map((e) => e.source))]
+    .filter((source) => source.startsWith("remote"))
+    .sort();
+  for (const source of remoteSources) console.error(describe(source, last(source)));
   if (flags.size) console.error(`flags: ${[...flags].join(", ")}`);
   console.error(`timeline: probe-timeline.jsonl (${events.length} events)`);
   console.error(localCode === 0 ? "VERDICT: delivered" : "VERDICT: failed");
 }
 
+/// Several conversations at once, all from ONE local process — the shape the
+/// desktop app has and a single dial does not. Each remote `listen` is its own
+/// process and therefore its own counterpart, so N of them stand in for N
+/// different people without needing N people.
+async function runMany(sessions, bindArgs) {
+  const remotes = [];
+  const invites = [];
+  for (let index = 0; index < sessions; index += 1) {
+    const source = `remote-${index}`;
+    const listenCmd = [REMOTE_BIN, "listen", "--timeout-secs", TIMEOUT].join(" ");
+    const remote = run("ssh", ["-o", "BatchMode=yes", HOST, listenCmd], source);
+    remotes.push(remote);
+    invites.push(await waitForInvite(remote, source));
+  }
+  console.error(`[runner] ${invites.length} invites received, dialing all from one process`);
+
+  const dialArgs = ["dial-many"];
+  for (const invite of invites) dialArgs.push("--invite", invite);
+  dialArgs.push("--message", MESSAGE, "--timeout-secs", TIMEOUT, ...bindArgs);
+  const local = run(LOCAL_BIN, dialArgs, "local");
+
+  const localCode = await new Promise((resolve) => local.on("close", resolve));
+  for (const remote of remotes) remote.kill();
+  await Promise.all(
+    remotes.map(
+      (remote) =>
+        new Promise((resolve) => {
+          if (remote.exitCode !== null || remote.signalCode !== null) resolve();
+          else remote.on("close", resolve);
+        }),
+    ),
+  );
+  return localCode;
+}
+
 async function main() {
   const bindArgs = BIND ? ["--bind-interface", BIND] : [];
+
+  if (SESSIONS > 1) {
+    const localCode = await runMany(SESSIONS, bindArgs);
+    const topology = [...events].reverse().find((e) => e.kind === "topology");
+    if (topology) {
+      console.error(
+        `topology: ${topology.data.sessions} sessions on ${topology.data.distinct_nodes} node(s), ports ${JSON.stringify(topology.data.listen_ports)}`,
+      );
+    }
+    await report(localCode);
+    process.exit(localCode === 0 ? 0 : 1);
+  }
+
   const listenCmd = [REMOTE_BIN, "listen", "--timeout-secs", TIMEOUT].join(" ");
   const remote = run("ssh", ["-o", "BatchMode=yes", HOST, listenCmd], "remote");
 
