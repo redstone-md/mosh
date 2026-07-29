@@ -14,7 +14,6 @@ use crate::mls_crypto::{AddOutcome, MlsCryptoError, MlsSessionCrypto};
 use crate::moss_ffi::{
     drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode, MossReceivedMessage,
 };
-use crate::shared_node::SharedMossNode;
 use crate::org_envelope::{self, OrgContext, OrgSigned};
 use crate::org_roster::{self, Roster};
 use crate::org_signing;
@@ -24,6 +23,7 @@ use crate::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
 };
+use crate::shared_node::SharedMossNode;
 use ed25519_dalek::SigningKey;
 
 const CONTROL_CHANNEL_PREFIX: &str = "group-control/";
@@ -2795,7 +2795,10 @@ fn leave_group_room(session: &GroupSession) {
         }
     }
     if let Err(error) = session.node.leave_room(&session.mesh_id) {
-        eprintln!("group {} could not leave its room: {error}", session.group_id);
+        eprintln!(
+            "group {} could not leave its room: {error}",
+            session.group_id
+        );
     }
 }
 
@@ -3178,7 +3181,9 @@ mod tests {
             runtime.shared_node.current().is_some(),
             "the shared node went down while a group was still open"
         );
-        runtime.close(&second.group_id).expect("second should close");
+        runtime
+            .close(&second.group_id)
+            .expect("second should close");
         assert!(
             runtime.shared_node.current().is_none(),
             "the shared node outlived every group — nothing would ever stop moss"

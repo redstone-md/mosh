@@ -577,7 +577,8 @@ impl OrgRuntime {
         if self.orgs.contains_key(&bundle.org_pubkey) {
             return Err(OrgError::Duplicate(bundle.org_pubkey));
         }
-        let node = self.open_org_room(&bundle.mesh_id, request.listen_port, &request.static_peer)?;
+        let node =
+            self.open_org_room(&bundle.mesh_id, request.listen_port, &request.static_peer)?;
         // Read AFTER node start: on a truly fresh install the keystore only
         // receives the identity when the first node comes up.
         let signer = self.signing_key()?;

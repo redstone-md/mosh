@@ -315,11 +315,7 @@ impl PrivateDmRuntime {
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<Persistence>>,
     ) -> Self {
-        Self::from_shared_node(
-            SharedMossNode::new(moss),
-            attachment_store,
-            persistence,
-        )
+        Self::from_shared_node(SharedMossNode::new(moss), attachment_store, persistence)
     }
 
     /// The constructor a real client uses: every runtime in the process is

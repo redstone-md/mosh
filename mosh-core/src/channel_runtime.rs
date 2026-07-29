@@ -15,11 +15,11 @@ use crate::moss_ffi::{
 };
 use crate::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
 use crate::persistence::Persistence;
-use crate::shared_node::SharedMossNode;
 use crate::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
 };
+use crate::shared_node::SharedMossNode;
 
 const TOPIC_PREFIX: &str = "public-channel/";
 const BLOB_PREFIX: &str = "channel-blob/";
@@ -1447,7 +1447,10 @@ fn join_channel_room(
 fn leave_channel_room(session: &ChannelSession) {
     for channel in [&session.topic, &session.blob_topic] {
         if let Err(error) = session.node.unsubscribe_room(&session.mesh_id, channel) {
-            eprintln!("channel {} could not unsubscribe {channel}: {error}", session.name);
+            eprintln!(
+                "channel {} could not unsubscribe {channel}: {error}",
+                session.name
+            );
         }
     }
     if let Err(error) = session.node.leave_room(&session.mesh_id) {

@@ -10,7 +10,6 @@ use adapters::channel_runtime::{
     ChannelLeaveResult, ChannelListSnapshot, ChannelRuntime, ChannelSendResult, ChannelSnapshot,
     JoinChannelRequest,
 };
-use adapters::shared_node::SharedMossNode;
 use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
 use adapters::openmls_crypto::{
     run_openmls_alice_bob_roundtrip, run_openmls_smoke_test, OpenMlsRoundTripStatus,
@@ -26,6 +25,7 @@ use adapters::private_group_runtime::{
     GroupSnapshot, JoinGroupRequest, PrivateGroupRuntime,
 };
 use adapters::secure_storage::{OsSecureSecretStore, SecureStorageStatus};
+use adapters::shared_node::SharedMossNode;
 use tauri::Manager;
 
 const APP_NAME: &str = "Mosh";
