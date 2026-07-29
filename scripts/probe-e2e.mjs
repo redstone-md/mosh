@@ -38,6 +38,9 @@ const HOST = arg("host");
 const TIMEOUT = arg("timeout", "180");
 const BIND = arg("bind-interface");
 const MESSAGE = arg("message", "probe ping");
+// More than one means the real test: N conversations open at the same time from
+// a single local process, against N independent remote counterparts.
+const SESSIONS = Number(arg("sessions", "1"));
 
 if (!HOST) {
   console.error("usage: probe-e2e.mjs --host user@host [--timeout 180] [--bind-interface NAME]");
@@ -75,16 +78,38 @@ function run(command, args, source, onEvent) {
   return child;
 }
 
-/** Resolves once the remote prints its invite, or rejects if it dies first. */
-function waitForInvite(remote) {
+/** Resolves once the given remote source prints its invite, or rejects if it dies first. */
+function waitForInvite(remote, source = "remote") {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("remote never emitted an invite")), 60_000);
+    const timer = setTimeout(() => reject(new Error(`${source} never emitted an invite`)), 60_000);
     const check = setInterval(() => {
-      const hit = events.find((e) => e.kind === "invite");
+      const hit = events.find((e) => e.source === source && e.kind === "invite");
       if (hit) {
         clearInterval(check);
         clearTimeout(timer);
         resolve(hit.data.invite_uri);
+      } else if (remote.exitCode !== null) {
+        clearInterval(check);
+        clearTimeout(timer);
+        reject(new Error(`remote exited early (${remote.exitCode})`));
+      }
+    }, 200);
+  });
+}
+
+/** Resolves once the remote has printed `count` invites, or rejects if it dies. */
+function waitForInvites(remote, count) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`remote emitted fewer than ${count} invites`)),
+      90_000,
+    );
+    const check = setInterval(() => {
+      const hits = events.filter((e) => e.source === "remote" && e.kind === "invite");
+      if (hits.length >= count) {
+        clearInterval(check);
+        clearTimeout(timer);
+        resolve(hits.slice(0, count).map((hit) => hit.data.invite_uri));
       } else if (remote.exitCode !== null) {
         clearInterval(check);
         clearTimeout(timer);
@@ -116,14 +141,60 @@ async function report(localCode) {
 
   console.error("");
   console.error(describe("local ", last("local")));
-  console.error(describe("remote", last("remote")));
+  // Multi-session runs label each counterpart separately, so there is no single
+  // "remote" to print — report every one of them instead of nothing.
+  const remoteSources = [...new Set(events.map((e) => e.source))]
+    .filter((source) => source.startsWith("remote"))
+    .sort();
+  for (const source of remoteSources) console.error(describe(source, last(source)));
   if (flags.size) console.error(`flags: ${[...flags].join(", ")}`);
   console.error(`timeline: probe-timeline.jsonl (${events.length} events)`);
   console.error(localCode === 0 ? "VERDICT: delivered" : "VERDICT: failed");
 }
 
-async function main() {
-  const bindArgs = BIND ? ["--bind-interface", BIND] : [];
+/// Several conversations at once, all from ONE local process — the shape the
+/// desktop app has and a single dial does not. Each remote `listen` is its own
+/// process and therefore its own counterpart, so N of them stand in for N
+/// different people without needing N people.
+async function runMany(sessions, bindArgs) {
+  // ONE remote process serving every conversation, not one per conversation.
+  // N processes on a single host would put N nodes behind one address — the
+  // exact shape this work removed — so the far end would be reproducing the
+  // defect the run is trying to measure.
+  const listenCmd = [
+    REMOTE_BIN,
+    "listen-many",
+    "--sessions",
+    String(sessions),
+    "--timeout-secs",
+    TIMEOUT,
+  ].join(" ");
+  const remote = run("ssh", ["-o", "BatchMode=yes", HOST, listenCmd], "remote");
+  const remotes = [remote];
+  const invites = await waitForInvites(remote, sessions);
+  console.error(`[runner] ${invites.length} invites received, dialing all from one process`);
+
+  const dialArgs = ["dial-many"];
+  for (const invite of invites) dialArgs.push("--invite", invite);
+  dialArgs.push("--message", MESSAGE, "--timeout-secs", TIMEOUT, ...bindArgs);
+  const local = run(LOCAL_BIN, dialArgs, "local");
+
+  const localCode = await new Promise((resolve) => local.on("close", resolve));
+  for (const remote of remotes) remote.kill();
+  await Promise.all(
+    remotes.map(
+      (remote) =>
+        new Promise((resolve) => {
+          if (remote.exitCode !== null || remote.signalCode !== null) resolve();
+          else remote.on("close", resolve);
+        }),
+    ),
+  );
+  return localCode;
+}
+
+/** One conversation, the original shape. */
+async function runSingle(bindArgs) {
   const listenCmd = [REMOTE_BIN, "listen", "--timeout-secs", TIMEOUT].join(" ");
   const remote = run("ssh", ["-o", "BatchMode=yes", HOST, listenCmd], "remote");
 
@@ -143,6 +214,24 @@ async function main() {
     else remote.on("close", resolve);
   });
 
+  await report(localCode);
+  process.exit(localCode === 0 ? 0 : 1);
+}
+
+async function main() {
+  const bindArgs = BIND ? ["--bind-interface", BIND] : [];
+  if (SESSIONS <= 1) {
+    await runSingle(bindArgs);
+    return;
+  }
+
+  const localCode = await runMany(SESSIONS, bindArgs);
+  for (const topology of events.filter((e) => e.kind === "topology")) {
+    console.error(
+      `topology[${topology.source}]: ${topology.data.sessions} sessions on ` +
+        `${topology.data.distinct_nodes} node(s), ports ${JSON.stringify(topology.data.listen_ports)}`,
+    );
+  }
   await report(localCode);
   process.exit(localCode === 0 ? 0 : 1);
 }

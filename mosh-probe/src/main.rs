@@ -71,6 +71,46 @@ enum Command {
         #[arg(long, default_value_t = 180)]
         timeout_secs: u64,
     },
+    /// Create SEVERAL invites from one process and wait for every one of them
+    /// to complete.
+    ///
+    /// The counterpart to `dial-many`, and the reason it exists: running N
+    /// separate `listen` processes on one host puts N nodes behind one address,
+    /// which is the very shape this work removed. A test whose far end
+    /// reproduces the defect cannot measure the fix. One process, N rooms, on
+    /// both ends.
+    ListenMany {
+        #[arg(long, default_value_t = 2)]
+        sessions: usize,
+        #[arg(long, default_value = "probe-listen-many")]
+        display_name: String,
+        #[arg(long, default_value_t = 0)]
+        listen_port: u16,
+        #[arg(long, default_value_t = 180)]
+        timeout_secs: u64,
+    },
+    /// Accept SEVERAL invites in one process, then send on each and require
+    /// every one to be delivered.
+    ///
+    /// This is the shape the desktop app actually has and `dial` does not: one
+    /// process, one identity, several conversations at once. Each session used
+    /// to start its own moss node, so N conversations meant N nodes sharing one
+    /// peer id — a remote peer keeps one connection per identity and closed the
+    /// rest, which is why a chat only worked once every other chat was closed.
+    /// One `dial` can never show that; N concurrent ones can.
+    DialMany {
+        /// Repeat once per invite.
+        #[arg(long = "invite", required = true)]
+        invites: Vec<String>,
+        #[arg(long, default_value = "probe-dial-many")]
+        display_name: String,
+        #[arg(long, default_value_t = 0)]
+        listen_port: u16,
+        #[arg(long, default_value = "probe ping")]
+        message: String,
+        #[arg(long, default_value_t = 180)]
+        timeout_secs: u64,
+    },
     /// Accept an invite, then send a message and wait for it to be delivered.
     Dial {
         #[arg(long)]
@@ -305,6 +345,218 @@ fn pump(
     Ok(reached)
 }
 
+/// `pump` across several sessions at once: one snapshot line per session per
+/// tick, finishing only when EVERY session satisfies `done`. Concurrency is the
+/// point — checking them one after another would let an earlier session finish
+/// and go quiet while a later one is still starting.
+fn pump_all(
+    role: &str,
+    dm: &mut PrivateDmRuntime,
+    session_ids: &[String],
+    timeout: Duration,
+    mut done: impl FnMut(&SessionSnapshot) -> bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        let mut all = true;
+        for session_id in session_ids {
+            let snap = dm.poll_session(session_id)?;
+            snapshot_line(role, &snap);
+            if !done(&snap) {
+                all = false;
+            }
+        }
+        if all {
+            return Ok(true);
+        }
+        std::thread::sleep(TICK);
+    }
+    Ok(false)
+}
+
+fn dial_many(
+    moss_lib: Option<std::path::PathBuf>,
+    invites: Vec<String>,
+    display_name: String,
+    listen_port: u16,
+    message: String,
+    timeout_secs: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let role = "dial-many";
+    report_interfaces(role);
+    let runtime = load_runtime(moss_lib)?;
+    let store = scratch_store()?;
+    let mut dm = PrivateDmRuntime::from_shared(runtime, store, None);
+
+    let mut session_ids = Vec::new();
+    for invite in invites {
+        let accepted = dm.accept_invite(AcceptInviteRequest {
+            invite_uri: invite,
+            display_name: display_name.clone(),
+            listen_port,
+            static_peer: None,
+        })?;
+        emit(
+            role,
+            "accepted",
+            serde_json::json!({
+                "session_id": accepted.session_id,
+                "mesh_id": accepted.mesh_id,
+            }),
+        );
+        session_ids.push(accepted.session_id);
+    }
+
+    let budget = Duration::from_secs(timeout_secs);
+    let started = std::time::Instant::now();
+    let ready = pump_all(role, &mut dm, &session_ids, budget, |snap| {
+        snap.state == "ready"
+    })?;
+
+    // One node or N is visible from here: every session reports the port of the
+    // node carrying it, so N distinct ports means N nodes under one identity —
+    // the thing that used to break the second conversation.
+    let ports: Vec<i32> = session_ids
+        .iter()
+        .filter_map(|id| dm.poll_session(id).ok())
+        .filter_map(|snap| snap.mesh.map(|mesh| mesh.listen_port))
+        .collect();
+    let mut distinct = ports.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    emit(
+        role,
+        "topology",
+        serde_json::json!({
+            "sessions": session_ids.len(),
+            "listen_ports": ports,
+            "distinct_nodes": distinct.len(),
+        }),
+    );
+
+    if !ready {
+        emit(
+            role,
+            "verdict",
+            serde_json::json!({ "ok": false, "stage": "mls_handshake" }),
+        );
+        std::process::exit(1);
+    }
+
+    let mut sent_ids = Vec::new();
+    for session_id in &session_ids {
+        let sent = dm.send_message(session_id, message.clone())?;
+        emit(
+            role,
+            "sent",
+            serde_json::json!({ "session_id": session_id, "message_id": sent.message_id }),
+        );
+        sent_ids.push(sent.message_id);
+    }
+
+    let remaining = budget.saturating_sub(started.elapsed());
+    let delivered = pump_all(role, &mut dm, &session_ids, remaining, |snap| {
+        snap.messages.iter().any(|message| {
+            sent_ids
+                .iter()
+                .any(|id| message.message_id.as_deref() == Some(id.as_str()))
+                && format!("{:?}", message.delivery_status).contains("Delivered")
+        })
+    })?;
+
+    emit(
+        role,
+        "verdict",
+        serde_json::json!({
+            "ok": delivered && distinct.len() == 1,
+            "stage": if delivered { "delivered" } else { "delivery" },
+            "sessions": session_ids.len(),
+            "distinct_nodes": distinct.len(),
+        }),
+    );
+    if !delivered || distinct.len() != 1 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn listen_many(
+    moss_lib: Option<std::path::PathBuf>,
+    sessions: usize,
+    display_name: String,
+    listen_port: u16,
+    timeout_secs: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let role = "listen-many";
+    report_interfaces(role);
+    let runtime = load_runtime(moss_lib)?;
+    let store = scratch_store()?;
+    let mut dm = PrivateDmRuntime::from_shared(runtime, store, None);
+
+    let mut session_ids = Vec::new();
+    for index in 0..sessions {
+        let created = dm.create_invite(StartSessionRequest {
+            display_name: format!("{display_name}-{index}"),
+            // Only the first invite picks the port; they all land on the same
+            // node, which is the point.
+            listen_port: if index == 0 { listen_port } else { 0 },
+            static_peer: None,
+        })?;
+        // The runner greps these to hand every URI to the other end, so they
+        // are emitted before anything downstream can fail.
+        emit(
+            role,
+            "invite",
+            serde_json::json!({
+                "index": index,
+                "invite_uri": created.invite_uri,
+                "session_id": created.session_id,
+                "mesh_id": created.mesh_id,
+            }),
+        );
+        session_ids.push(created.session_id);
+    }
+
+    let ready = pump_all(
+        role,
+        &mut dm,
+        &session_ids,
+        Duration::from_secs(timeout_secs),
+        |snap| snap.state == "ready" && !snap.messages.is_empty(),
+    )?;
+
+    let ports: Vec<i32> = session_ids
+        .iter()
+        .filter_map(|id| dm.poll_session(id).ok())
+        .filter_map(|snap| snap.mesh.map(|mesh| mesh.listen_port))
+        .collect();
+    let mut distinct = ports.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    emit(
+        role,
+        "topology",
+        serde_json::json!({
+            "sessions": session_ids.len(),
+            "listen_ports": ports,
+            "distinct_nodes": distinct.len(),
+        }),
+    );
+    emit(
+        role,
+        "verdict",
+        serde_json::json!({
+            "ok": ready && distinct.len() == 1,
+            "sessions": session_ids.len(),
+            "distinct_nodes": distinct.len(),
+        }),
+    );
+    if !ready || distinct.len() != 1 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn listen(
     moss_lib: Option<std::path::PathBuf>,
     display_name: String,
@@ -466,6 +718,32 @@ fn main() {
             display_name,
             listen_port,
             static_peer,
+            timeout_secs,
+        ),
+        Command::ListenMany {
+            sessions,
+            display_name,
+            listen_port,
+            timeout_secs,
+        } => listen_many(
+            cli.moss_lib,
+            sessions,
+            display_name,
+            listen_port,
+            timeout_secs,
+        ),
+        Command::DialMany {
+            invites,
+            display_name,
+            listen_port,
+            message,
+            timeout_secs,
+        } => dial_many(
+            cli.moss_lib,
+            invites,
+            display_name,
+            listen_port,
+            message,
             timeout_secs,
         ),
         Command::Dial {
