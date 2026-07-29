@@ -97,6 +97,28 @@ function waitForInvite(remote, source = "remote") {
   });
 }
 
+/** Resolves once the remote has printed `count` invites, or rejects if it dies. */
+function waitForInvites(remote, count) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`remote emitted fewer than ${count} invites`)),
+      90_000,
+    );
+    const check = setInterval(() => {
+      const hits = events.filter((e) => e.source === "remote" && e.kind === "invite");
+      if (hits.length >= count) {
+        clearInterval(check);
+        clearTimeout(timer);
+        resolve(hits.slice(0, count).map((hit) => hit.data.invite_uri));
+      } else if (remote.exitCode !== null) {
+        clearInterval(check);
+        clearTimeout(timer);
+        reject(new Error(`remote exited early (${remote.exitCode})`));
+      }
+    }, 200);
+  });
+}
+
 function describe(label, snap) {
   if (!snap) return `${label}: no snapshot`;
   const m = snap.data.mesh ?? {};
@@ -135,15 +157,21 @@ async function report(localCode) {
 /// process and therefore its own counterpart, so N of them stand in for N
 /// different people without needing N people.
 async function runMany(sessions, bindArgs) {
-  const remotes = [];
-  const invites = [];
-  for (let index = 0; index < sessions; index += 1) {
-    const source = `remote-${index}`;
-    const listenCmd = [REMOTE_BIN, "listen", "--timeout-secs", TIMEOUT].join(" ");
-    const remote = run("ssh", ["-o", "BatchMode=yes", HOST, listenCmd], source);
-    remotes.push(remote);
-    invites.push(await waitForInvite(remote, source));
-  }
+  // ONE remote process serving every conversation, not one per conversation.
+  // N processes on a single host would put N nodes behind one address — the
+  // exact shape this work removed — so the far end would be reproducing the
+  // defect the run is trying to measure.
+  const listenCmd = [
+    REMOTE_BIN,
+    "listen-many",
+    "--sessions",
+    String(sessions),
+    "--timeout-secs",
+    TIMEOUT,
+  ].join(" ");
+  const remote = run("ssh", ["-o", "BatchMode=yes", HOST, listenCmd], "remote");
+  const remotes = [remote];
+  const invites = await waitForInvites(remote, sessions);
   console.error(`[runner] ${invites.length} invites received, dialing all from one process`);
 
   const dialArgs = ["dial-many"];
@@ -165,21 +193,8 @@ async function runMany(sessions, bindArgs) {
   return localCode;
 }
 
-async function main() {
-  const bindArgs = BIND ? ["--bind-interface", BIND] : [];
-
-  if (SESSIONS > 1) {
-    const localCode = await runMany(SESSIONS, bindArgs);
-    const topology = [...events].reverse().find((e) => e.kind === "topology");
-    if (topology) {
-      console.error(
-        `topology: ${topology.data.sessions} sessions on ${topology.data.distinct_nodes} node(s), ports ${JSON.stringify(topology.data.listen_ports)}`,
-      );
-    }
-    await report(localCode);
-    process.exit(localCode === 0 ? 0 : 1);
-  }
-
+/** One conversation, the original shape. */
+async function runSingle(bindArgs) {
   const listenCmd = [REMOTE_BIN, "listen", "--timeout-secs", TIMEOUT].join(" ");
   const remote = run("ssh", ["-o", "BatchMode=yes", HOST, listenCmd], "remote");
 
@@ -199,6 +214,24 @@ async function main() {
     else remote.on("close", resolve);
   });
 
+  await report(localCode);
+  process.exit(localCode === 0 ? 0 : 1);
+}
+
+async function main() {
+  const bindArgs = BIND ? ["--bind-interface", BIND] : [];
+  if (SESSIONS <= 1) {
+    await runSingle(bindArgs);
+    return;
+  }
+
+  const localCode = await runMany(SESSIONS, bindArgs);
+  for (const topology of events.filter((e) => e.kind === "topology")) {
+    console.error(
+      `topology[${topology.source}]: ${topology.data.sessions} sessions on ` +
+        `${topology.data.distinct_nodes} node(s), ports ${JSON.stringify(topology.data.listen_ports)}`,
+    );
+  }
   await report(localCode);
   process.exit(localCode === 0 ? 0 : 1);
 }

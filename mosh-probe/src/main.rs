@@ -71,6 +71,24 @@ enum Command {
         #[arg(long, default_value_t = 180)]
         timeout_secs: u64,
     },
+    /// Create SEVERAL invites from one process and wait for every one of them
+    /// to complete.
+    ///
+    /// The counterpart to `dial-many`, and the reason it exists: running N
+    /// separate `listen` processes on one host puts N nodes behind one address,
+    /// which is the very shape this work removed. A test whose far end
+    /// reproduces the defect cannot measure the fix. One process, N rooms, on
+    /// both ends.
+    ListenMany {
+        #[arg(long, default_value_t = 2)]
+        sessions: usize,
+        #[arg(long, default_value = "probe-listen-many")]
+        display_name: String,
+        #[arg(long, default_value_t = 0)]
+        listen_port: u16,
+        #[arg(long, default_value_t = 180)]
+        timeout_secs: u64,
+    },
     /// Accept SEVERAL invites in one process, then send on each and require
     /// every one to be delivered.
     ///
@@ -462,6 +480,83 @@ fn dial_many(
     Ok(())
 }
 
+fn listen_many(
+    moss_lib: Option<std::path::PathBuf>,
+    sessions: usize,
+    display_name: String,
+    listen_port: u16,
+    timeout_secs: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let role = "listen-many";
+    report_interfaces(role);
+    let runtime = load_runtime(moss_lib)?;
+    let store = scratch_store()?;
+    let mut dm = PrivateDmRuntime::from_shared(runtime, store, None);
+
+    let mut session_ids = Vec::new();
+    for index in 0..sessions {
+        let created = dm.create_invite(StartSessionRequest {
+            display_name: format!("{display_name}-{index}"),
+            // Only the first invite picks the port; they all land on the same
+            // node, which is the point.
+            listen_port: if index == 0 { listen_port } else { 0 },
+            static_peer: None,
+        })?;
+        // The runner greps these to hand every URI to the other end, so they
+        // are emitted before anything downstream can fail.
+        emit(
+            role,
+            "invite",
+            serde_json::json!({
+                "index": index,
+                "invite_uri": created.invite_uri,
+                "session_id": created.session_id,
+                "mesh_id": created.mesh_id,
+            }),
+        );
+        session_ids.push(created.session_id);
+    }
+
+    let ready = pump_all(
+        role,
+        &mut dm,
+        &session_ids,
+        Duration::from_secs(timeout_secs),
+        |snap| snap.state == "ready" && !snap.messages.is_empty(),
+    )?;
+
+    let ports: Vec<i32> = session_ids
+        .iter()
+        .filter_map(|id| dm.poll_session(id).ok())
+        .filter_map(|snap| snap.mesh.map(|mesh| mesh.listen_port))
+        .collect();
+    let mut distinct = ports.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    emit(
+        role,
+        "topology",
+        serde_json::json!({
+            "sessions": session_ids.len(),
+            "listen_ports": ports,
+            "distinct_nodes": distinct.len(),
+        }),
+    );
+    emit(
+        role,
+        "verdict",
+        serde_json::json!({
+            "ok": ready && distinct.len() == 1,
+            "sessions": session_ids.len(),
+            "distinct_nodes": distinct.len(),
+        }),
+    );
+    if !ready || distinct.len() != 1 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn listen(
     moss_lib: Option<std::path::PathBuf>,
     display_name: String,
@@ -623,6 +718,18 @@ fn main() {
             display_name,
             listen_port,
             static_peer,
+            timeout_secs,
+        ),
+        Command::ListenMany {
+            sessions,
+            display_name,
+            listen_port,
+            timeout_secs,
+        } => listen_many(
+            cli.moss_lib,
+            sessions,
+            display_name,
+            listen_port,
             timeout_secs,
         ),
         Command::DialMany {
