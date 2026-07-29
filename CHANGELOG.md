@@ -4,6 +4,31 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-07-29
+
+### Fixed
+- **The rest of the client still ran a node per conversation.** 0.7.3 put every
+  DM on one node; public channels, private groups and orgs each kept starting
+  their own. Node identity is per process, so a client in three channels and two
+  groups still announced one peer id from six ports — the exact pattern 0.7.3
+  measured: a remote peer keeps one session per identity, closes the rest on
+  arrival, and declines to dial the others because it already holds that id.
+
+  Channels, groups and orgs now join a room on the same node the DMs use, so a
+  whole client is one node and one port. Wire-compatible: a joined room is
+  byte-identical to the same room on an older client, so 0.7.4 still talks to
+  0.7.3 and 0.7.2.
+
+- **Closing a channel, group or org kept its subscriptions alive.** With a node
+  per conversation, dropping the node ended them. On a shared node it has to be
+  said out loud — leaving now unsubscribes and leaves the room.
+
+- **The joiner's first KeyPackage went to the wrong room.** `accept_invite`
+  published it room-less, which since 0.7.3 means the shared node's own
+  substrate room rather than the invite's. The handshake only recovered because
+  the drain loop re-publishes it correctly until the Welcome arrives; the first
+  attempt was always thrown away.
+
 ## [0.7.3] - 2026-07-29
 
 ### Fixed

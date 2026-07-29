@@ -12,9 +12,9 @@ use crate::commit_sequencer::{CommitSequencer, Disposition};
 use crate::message_id::MessageIdGen;
 use crate::mls_crypto::{AddOutcome, MlsCryptoError, MlsSessionCrypto};
 use crate::moss_ffi::{
-    clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
-    MossNodeConfig, MossReceivedMessage,
+    drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode, MossReceivedMessage,
 };
+use crate::shared_node::SharedMossNode;
 use crate::org_envelope::{self, OrgContext, OrgSigned};
 use crate::org_roster::{self, Roster};
 use crate::org_signing;
@@ -356,7 +356,10 @@ struct PersistedGroupSession {
 }
 
 pub struct PrivateGroupRuntime {
-    moss: Arc<MossFfiRuntime>,
+    // The one moss node this process runs. Every group is a room on it, not a
+    // node of its own — see `shared_node` for why more than one is actively
+    // harmful.
+    shared_node: Arc<SharedMossNode>,
     attachment_store: Arc<AttachmentStore>,
     persistence: Option<Arc<Persistence>>,
     persisted_counts: HashMap<String, usize>,
@@ -378,7 +381,7 @@ struct GroupSession {
     joined: bool,
     listen_port: u16,
     static_peer: Option<String>,
-    node: MossNode,
+    node: Arc<MossNode>,
     crypto: MlsSessionCrypto,
     messages: Vec<GroupMessage>,
     message_ids: MessageIdGen,
@@ -441,14 +444,47 @@ impl PrivateGroupRuntime {
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<Persistence>>,
     ) -> Self {
+        Self::from_shared_node(SharedMossNode::new(moss), attachment_store, persistence)
+    }
+
+    /// The constructor a real client uses: every runtime in the process is
+    /// handed the SAME holder, so groups share their node with DMs, channels
+    /// and orgs. `from_shared` mints a private holder, which is what tests
+    /// running two peers in one process need.
+    pub fn from_shared_node(
+        shared_node: Arc<SharedMossNode>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<Persistence>>,
+    ) -> Self {
         Self {
-            moss,
+            shared_node,
             attachment_store,
             persistence,
             persisted_counts: HashMap::new(),
             finalized_group_records: HashSet::new(),
             groups: HashMap::new(),
         }
+    }
+
+    /// Take a reference to the shared node and put this group's room on it.
+    /// Rolls the reference back if the room work fails, so a group that never
+    /// opened cannot pin the node up forever.
+    fn open_group_room(
+        &mut self,
+        mesh_id: &str,
+        group_id: &str,
+        listen_port: u16,
+        static_peer: Option<String>,
+    ) -> Result<Arc<MossNode>, PrivateGroupError> {
+        let node = self
+            .shared_node
+            .acquire(listen_port, static_peer)
+            .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
+        if let Err(error) = join_group_room(&node, mesh_id, group_id) {
+            self.shared_node.release();
+            return Err(error);
+        }
+        Ok(node)
     }
 
     /// Rebuild private groups + history from the encrypted store. Best-effort:
@@ -491,8 +527,7 @@ impl PrivateGroupRuntime {
                     continue;
                 }
             };
-            let node = match start_node(
-                &self.moss,
+            let node = match self.open_group_room(
                 &rec.mesh_id,
                 &rec.group_id,
                 rec.listen_port,
@@ -679,13 +714,7 @@ impl PrivateGroupRuntime {
         let mesh_id = crypto.random_token("groupmesh")?;
         let participant_id = crypto.random_token("participant")?;
         let creator_fingerprint = crypto.fingerprint();
-        let node = start_node(
-            &self.moss,
-            &mesh_id,
-            &group_id,
-            listen_port,
-            static_peer.clone(),
-        )?;
+        let node = self.open_group_room(&mesh_id, &group_id, listen_port, static_peer.clone())?;
         let device_fingerprint = node
             .public_key_hex()
             .ok_or_else(|| PrivateGroupError::Moss("public key unavailable".to_string()))?;
@@ -761,8 +790,7 @@ impl PrivateGroupRuntime {
         let mut crypto = MlsSessionCrypto::new(&credential_identity)?;
         let participant_id = crypto.random_token("participant")?;
         let key_package = crypto.key_package_bytes()?;
-        let node = start_node(
-            &self.moss,
+        let node = self.open_group_room(
             &invite.mesh_id,
             &invite.group_id,
             listen_port,
@@ -1037,7 +1065,7 @@ impl PrivateGroupRuntime {
                 .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
             session
                 .node
-                .publish(&data_channel, &payload)
+                .publish_room(&session.mesh_id, &data_channel, &payload)
                 .map_err(|error| PrivateGroupError::Moss(error.to_string()))
         };
         let result = match publish {
@@ -1148,7 +1176,7 @@ impl PrivateGroupRuntime {
                 .ok_or_else(|| PrivateGroupError::MissingGroup(group_id.to_string()))?;
             session
                 .node
-                .publish(&data_channel, &payload)
+                .publish_room(&session.mesh_id, &data_channel, &payload)
                 .map_err(|error| PrivateGroupError::Moss(error.to_string()))
         };
         let result = match publish {
@@ -1269,7 +1297,13 @@ impl PrivateGroupRuntime {
             }
         }
 
-        self.groups.remove(group_id);
+        // On a shared node dropping the session no longer ends its
+        // subscriptions — the node lives on for the other groups, so leaving
+        // has to be said out loud or a closed group keeps receiving.
+        if let Some(session) = self.groups.remove(group_id) {
+            leave_group_room(&session);
+            self.shared_node.release();
+        }
         self.persisted_counts.remove(group_id);
         self.finalized_group_records.remove(group_id);
         if let Some(p) = self.persistence.as_ref() {
@@ -2330,7 +2364,7 @@ impl GroupSession {
                         participant_id: self.participant_id.clone(),
                         frame,
                     };
-                    publish_json(&self.node, &self.blob_channel, &chunk)?;
+                    publish_json(&self.node, &self.mesh_id, &self.blob_channel, &chunk)?;
                 }
                 Ok(())
             }
@@ -2527,7 +2561,7 @@ impl GroupSession {
                     participant_id: self.participant_id.clone(),
                     request,
                 };
-                let _ = publish_json(&self.node, &self.blob_channel, &envelope);
+                let _ = publish_json(&self.node, &self.mesh_id, &self.blob_channel, &envelope);
             }
         }
     }
@@ -2732,47 +2766,58 @@ fn channel_group_id(channel: &str) -> Option<&str> {
         .or_else(|| channel.strip_prefix(BLOB_CHANNEL_PREFIX))
 }
 
-fn start_node(
-    runtime: &Arc<MossFfiRuntime>,
+/// Puts a group's room on the shared node and subscribes its three channels
+/// there. Wire-identical to what a node owning that room published before, so a
+/// consolidated client still talks to every already-released one.
+fn join_group_room(
+    node: &MossNode,
     mesh_id: &str,
     group_id: &str,
-    listen_port: u16,
-    static_peer: Option<String>,
-) -> Result<MossNode, PrivateGroupError> {
-    let node = runtime
-        .init_default_node(
-            mesh_id,
-            &MossNodeConfig {
-                listen_port,
-                static_peer,
-                bind_interface: None,
-            },
-        )
+) -> Result<(), PrivateGroupError> {
+    node.join_room(mesh_id)
         .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
-    node.set_message_callback()
-        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
-    node.set_event_callback()
-        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
-    clear_event_log();
-    node.start()
-        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
-    node.subscribe(&format!("{CONTROL_CHANNEL_PREFIX}{group_id}"))
-        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
-    node.subscribe(&format!("{DATA_CHANNEL_PREFIX}{group_id}"))
-        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
-    node.subscribe(&format!("{BLOB_CHANNEL_PREFIX}{group_id}"))
-        .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
-    Ok(node)
+    for channel in group_channels(group_id) {
+        node.subscribe_room(mesh_id, &channel)
+            .map_err(|error| PrivateGroupError::Moss(error.to_string()))?;
+    }
+    Ok(())
 }
 
+/// The inverse of `join_group_room`. Unsubscribe first, then forget the key:
+/// leaving first would strand subscriptions that can no longer resolve.
+fn leave_group_room(session: &GroupSession) {
+    for channel in group_channels(&session.group_id) {
+        if let Err(error) = session.node.unsubscribe_room(&session.mesh_id, &channel) {
+            eprintln!(
+                "group {} could not unsubscribe {channel}: {error}",
+                session.group_id
+            );
+        }
+    }
+    if let Err(error) = session.node.leave_room(&session.mesh_id) {
+        eprintln!("group {} could not leave its room: {error}", session.group_id);
+    }
+}
+
+fn group_channels(group_id: &str) -> [String; 3] {
+    [
+        format!("{CONTROL_CHANNEL_PREFIX}{group_id}"),
+        format!("{DATA_CHANNEL_PREFIX}{group_id}"),
+        format!("{BLOB_CHANNEL_PREFIX}{group_id}"),
+    ]
+}
+
+/// Always room-scoped: the shared node's own room is the substrate, so a
+/// room-less publish would land where none of this group's peers listen.
 fn publish_json<T: Serialize>(
     node: &MossNode,
+    mesh_id: &str,
     channel: &str,
     value: &T,
 ) -> Result<(), PrivateGroupError> {
     let payload =
         serde_json::to_vec(value).map_err(|error| PrivateGroupError::Codec(error.to_string()))?;
-    node.publish(channel, &payload)
+    node.publish_room(mesh_id, channel, &payload)
         .map_err(|error| PrivateGroupError::Moss(error.to_string()))
 }
 
@@ -2802,9 +2847,9 @@ fn publish_control_message<T: Serialize>(
                 channel_kind: control_channel,
             };
             let env = org_envelope::sign(signer, &ctx, &payload);
-            publish_json(node, control_channel, &env)
+            publish_json(node, mesh_id, control_channel, &env)
         }
-        None => publish_json(node, control_channel, value),
+        None => publish_json(node, mesh_id, control_channel, value),
     }
 }
 
@@ -3082,6 +3127,62 @@ mod tests {
         };
         let env = org_envelope::sign(sender, &ctx, &serde_json::to_vec(envelope).unwrap());
         serde_json::to_vec(&env).unwrap()
+    }
+
+    // Every group now shares one moss node, so a group's own room is what
+    // separates it from the others — and the node outliving the group is a new
+    // failure mode: nothing ends its subscriptions unless close says so.
+    #[test]
+    fn groups_share_one_node_and_close_releases_it() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let moss = Arc::new(MossFfiRuntime::load_default().expect("moss should load"));
+        let mut runtime = PrivateGroupRuntime::from_shared(moss, temp_store(), None);
+        let first = runtime
+            .create_group(CreateGroupRequest {
+                label: Some("First".to_string()),
+                display_name: "Alice".to_string(),
+                listen_port: 42370,
+                static_peer: None,
+                org_pubkey: None,
+            })
+            .expect("first group should be created");
+        let second = runtime
+            .create_group(CreateGroupRequest {
+                label: Some("Second".to_string()),
+                display_name: "Alice".to_string(),
+                listen_port: 42371,
+                static_peer: None,
+                org_pubkey: None,
+            })
+            .expect("second group should be created");
+
+        // One node, not two. Two would present the same peer id from two ports
+        // and a remote peer would keep only the first.
+        let first_node = Arc::as_ptr(&runtime.groups[&first.group_id].node);
+        let second_node = Arc::as_ptr(&runtime.groups[&second.group_id].node);
+        assert_eq!(
+            first_node, second_node,
+            "two open groups started two moss nodes under one identity"
+        );
+        assert_ne!(
+            first.mesh_id, second.mesh_id,
+            "groups must stay in separate rooms on the shared node"
+        );
+
+        runtime.close(&first.group_id).expect("first should close");
+        assert!(
+            runtime.shared_node.current().is_some(),
+            "the shared node went down while a group was still open"
+        );
+        runtime.close(&second.group_id).expect("second should close");
+        assert!(
+            runtime.shared_node.current().is_none(),
+            "the shared node outlived every group — nothing would ever stop moss"
+        );
     }
 
     #[test]

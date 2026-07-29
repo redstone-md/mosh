@@ -20,5 +20,6 @@ pub mod persistence;
 pub mod private_dm_runtime;
 pub mod private_group_runtime;
 pub mod secure_storage;
+pub mod shared_node;
 pub mod voice_call_runtime;
 pub mod vpn_consent;

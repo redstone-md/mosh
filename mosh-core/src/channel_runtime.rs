@@ -11,11 +11,11 @@ use crate::attachment_runtime::{
 use crate::attachment_store::AttachmentStore;
 use crate::message_id::MessageIdGen;
 use crate::moss_ffi::{
-    clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
-    MossNodeConfig, MossReceivedMessage,
+    drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode, MossReceivedMessage,
 };
 use crate::outbound_delivery::{MessageDeliveryStatus, OutboundAttemptRecord};
 use crate::persistence::Persistence;
+use crate::shared_node::SharedMossNode;
 use crate::private_dm_runtime::{
     AttachmentDescriptor, AttachmentSendResult, AttachmentState, AttachmentView, DmOffer, MeshInfo,
     SnapshotEvent, VoiceMeta,
@@ -216,7 +216,10 @@ impl From<crate::attachment_store::AttachmentStoreError> for ChannelRuntimeError
 }
 
 pub struct ChannelRuntime {
-    moss: Arc<MossFfiRuntime>,
+    // The one moss node this process runs. Every joined channel is a room on
+    // it, not a node of its own — see `shared_node` for why more than one is
+    // actively harmful.
+    shared_node: Arc<SharedMossNode>,
     attachment_store: Arc<AttachmentStore>,
     persistence: Option<Arc<Persistence>>,
     persisted_counts: HashMap<String, usize>,
@@ -232,7 +235,7 @@ struct ChannelSession {
     device_fingerprint: String,
     listen_port: u16,
     static_peer: Option<String>,
-    node: MossNode,
+    node: Arc<MossNode>,
     messages: Vec<ChannelMessage>,
     message_ids: MessageIdGen,
     seen_set: HashSet<String>,
@@ -254,13 +257,47 @@ impl ChannelRuntime {
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<Persistence>>,
     ) -> Self {
+        Self::from_shared_node(SharedMossNode::new(moss), attachment_store, persistence)
+    }
+
+    /// The constructor a real client uses: every runtime in the process is
+    /// handed the SAME holder, so channels share their node with DMs, groups
+    /// and orgs. `from_shared` mints a private holder, which is what tests
+    /// running two peers in one process need.
+    pub fn from_shared_node(
+        shared_node: Arc<SharedMossNode>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<Persistence>>,
+    ) -> Self {
         Self {
-            moss,
+            shared_node,
             attachment_store,
             persistence,
             persisted_counts: HashMap::new(),
             channels: HashMap::new(),
         }
+    }
+
+    /// Take a reference to the shared node and put this channel's room on it.
+    /// Rolls the reference back if the room work fails, so a channel that never
+    /// opened cannot pin the node up forever.
+    fn open_channel_room(
+        &mut self,
+        mesh_id: &str,
+        topic: &str,
+        blob_topic: &str,
+        listen_port: u16,
+        static_peer: Option<String>,
+    ) -> Result<Arc<MossNode>, ChannelRuntimeError> {
+        let node = self
+            .shared_node
+            .acquire(listen_port, static_peer)
+            .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
+        if let Err(error) = join_channel_room(&node, mesh_id, topic, blob_topic) {
+            self.shared_node.release();
+            return Err(error);
+        }
+        Ok(node)
     }
 
     /// Restore joined public channels and local scrollback from encrypted disk.
@@ -280,8 +317,7 @@ impl ChannelRuntime {
                     continue;
                 }
             };
-            let node = match start_channel_node(
-                &self.moss,
+            let node = match self.open_channel_room(
                 &rec.mesh_id,
                 &rec.topic,
                 &rec.blob_topic,
@@ -411,8 +447,7 @@ impl ChannelRuntime {
         let mesh_id = format!("{MESH_PREFIX}{normalized}");
         let topic = format!("{TOPIC_PREFIX}{normalized}");
         let blob_topic = format!("{BLOB_PREFIX}{normalized}");
-        let node = start_channel_node(
-            &self.moss,
+        let node = self.open_channel_room(
             &mesh_id,
             &topic,
             &blob_topic,
@@ -470,6 +505,7 @@ impl ChannelRuntime {
         };
         publish_json(
             &session.node,
+            &session.mesh_id,
             &session.blob_topic,
             &ChannelBlobEnvelope::DmOffer { offer },
         )
@@ -492,7 +528,13 @@ impl ChannelRuntime {
     pub fn leave(&mut self, name: &str) -> Result<ChannelLeaveResult, ChannelRuntimeError> {
         let normalized = normalize_name(name)?;
         match self.channels.remove(&normalized) {
-            Some(_) => {
+            Some(session) => {
+                // On a shared node dropping the session no longer ends its
+                // subscriptions — the node lives on for the other channels, so
+                // leaving has to be said out loud or a left channel keeps
+                // receiving.
+                leave_channel_room(&session);
+                self.shared_node.release();
                 self.persisted_counts.remove(&normalized);
                 if let Some(p) = self.persistence.as_ref() {
                     if let Err(error) = p.delete_channel(&normalized) {
@@ -578,7 +620,7 @@ impl ChannelRuntime {
                 .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
             session
                 .node
-                .publish(&topic, &payload)
+                .publish_room(&session.mesh_id, &topic, &payload)
                 .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))
         };
         let result = match publish {
@@ -690,7 +732,7 @@ impl ChannelRuntime {
                 .ok_or_else(|| ChannelRuntimeError::MissingChannel(normalized.clone()))?;
             session
                 .node
-                .publish(&topic, &payload)
+                .publish_room(&session.mesh_id, &topic, &payload)
                 .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))
         };
         let result = match publish {
@@ -1090,7 +1132,7 @@ impl ChannelSession {
                         from_fingerprint: self.device_fingerprint.clone(),
                         frame,
                     };
-                    publish_json(&self.node, &self.blob_topic, &chunk)?;
+                    publish_json(&self.node, &self.mesh_id, &self.blob_topic, &chunk)?;
                 }
                 Ok(())
             }
@@ -1217,7 +1259,7 @@ impl ChannelSession {
             from_fingerprint: self.device_fingerprint.clone(),
             manifest: manifest.clone(),
         };
-        publish_json(&self.node, &self.blob_topic, &envelope)?;
+        publish_json(&self.node, &self.mesh_id, &self.blob_topic, &envelope)?;
 
         let descriptor = descriptor_of(&manifest);
         self.attachment_slots.insert(
@@ -1300,7 +1342,7 @@ impl ChannelSession {
                     from_fingerprint: self.device_fingerprint.clone(),
                     request,
                 };
-                let _ = publish_json(&self.node, &self.blob_topic, &envelope);
+                let _ = publish_json(&self.node, &self.mesh_id, &self.blob_topic, &envelope);
             }
         }
     }
@@ -1382,36 +1424,35 @@ impl ChannelSession {
     }
 }
 
-fn start_channel_node(
-    runtime: &Arc<MossFfiRuntime>,
+/// Puts a channel's room on the shared node and subscribes its two topics
+/// there. Wire-identical to what a node owning that room published before, so a
+/// consolidated client still talks to every already-released one.
+fn join_channel_room(
+    node: &MossNode,
     mesh_id: &str,
     topic: &str,
     blob_topic: &str,
-    listen_port: u16,
-    static_peer: Option<String>,
-) -> Result<MossNode, ChannelRuntimeError> {
-    let node = runtime
-        .init_default_node(
-            mesh_id,
-            &MossNodeConfig {
-                listen_port,
-                static_peer,
-                bind_interface: None,
-            },
-        )
+) -> Result<(), ChannelRuntimeError> {
+    node.join_room(mesh_id)
         .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-    node.set_message_callback()
-        .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-    node.set_event_callback()
-        .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-    clear_event_log();
-    node.start()
-        .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-    node.subscribe(topic)
-        .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-    node.subscribe(blob_topic)
-        .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
-    Ok(node)
+    for channel in [topic, blob_topic] {
+        node.subscribe_room(mesh_id, channel)
+            .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))?;
+    }
+    Ok(())
+}
+
+/// The inverse of `join_channel_room`. Unsubscribe first, then forget the key:
+/// leaving first would strand subscriptions that can no longer resolve.
+fn leave_channel_room(session: &ChannelSession) {
+    for channel in [&session.topic, &session.blob_topic] {
+        if let Err(error) = session.node.unsubscribe_room(&session.mesh_id, channel) {
+            eprintln!("channel {} could not unsubscribe {channel}: {error}", session.name);
+        }
+    }
+    if let Err(error) = session.node.leave_room(&session.mesh_id) {
+        eprintln!("channel {} could not leave its room: {error}", session.name);
+    }
 }
 
 pub fn normalize_name(raw: &str) -> Result<String, ChannelRuntimeError> {
@@ -1437,14 +1478,17 @@ fn channel_name_from_blob(topic: &str) -> Option<&str> {
     topic.strip_prefix(BLOB_PREFIX)
 }
 
+/// Always room-scoped: the shared node's own room is the substrate, so a
+/// room-less publish would land where none of this channel's peers listen.
 fn publish_json<T: Serialize>(
     node: &MossNode,
+    mesh_id: &str,
     topic: &str,
     value: &T,
 ) -> Result<(), ChannelRuntimeError> {
     let payload =
         serde_json::to_vec(value).map_err(|error| ChannelRuntimeError::Codec(error.to_string()))?;
-    node.publish(topic, &payload)
+    node.publish_room(mesh_id, topic, &payload)
         .map_err(|error| ChannelRuntimeError::Moss(error.to_string()))
 }
 
@@ -1556,6 +1600,54 @@ mod tests {
             Some("mosh-dev")
         );
         assert_eq!(channel_name_from_topic("mls-control/sid"), None);
+    }
+
+    // Every joined channel now shares one moss node, so a channel's own room is
+    // what separates it from the others — and the node outliving the channel is
+    // a new failure mode: nothing ends its subscriptions unless leave says so.
+    #[test]
+    fn channels_share_one_node_and_leave_releases_it() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut channels = ChannelRuntime::from_shared(runtime, temp_store(), None);
+        for (name, port) in [("shared-one", 42360u16), ("shared-two", 42361)] {
+            channels
+                .join(JoinChannelRequest {
+                    name: name.to_string(),
+                    display_name: "Alice".to_string(),
+                    listen_port: port,
+                    static_peer: None,
+                })
+                .unwrap_or_else(|error| panic!("{name} should join: {error}"));
+        }
+
+        // One node, not two. Two would present the same peer id from two ports
+        // and a remote peer would keep only the first.
+        let first = Arc::as_ptr(&channels.channels["shared-one"].node);
+        let second = Arc::as_ptr(&channels.channels["shared-two"].node);
+        assert_eq!(
+            first, second,
+            "two joined channels started two moss nodes under one identity"
+        );
+        assert_ne!(
+            channels.channels["shared-one"].mesh_id, channels.channels["shared-two"].mesh_id,
+            "channels must stay in separate rooms on the shared node"
+        );
+
+        channels.leave("shared-one").expect("first should leave");
+        assert!(
+            channels.shared_node.current().is_some(),
+            "the shared node went down while a channel was still joined"
+        );
+        channels.leave("shared-two").expect("second should leave");
+        assert!(
+            channels.shared_node.current().is_none(),
+            "the shared node outlived every channel — nothing would ever stop moss"
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
-//! Organization runtime (spec §3): one moss node per joined org, roster
-//! gossip on `org-control/<mesh_id>`, and the member side of the join flow.
-//! The org itself is a signed document, not a server — this runtime only
-//! verifies and reacts; all authority lives in the roster signature.
+//! Organization runtime (spec §3): each joined org is a room on the process's
+//! one moss node, roster gossip on `org-control/<mesh_id>`, and the member side
+//! of the join flow. The org itself is a signed document, not a server — this
+//! runtime only verifies and reacts; all authority lives in the roster
+//! signature.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,13 +10,12 @@ use std::sync::Arc;
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
-use crate::moss_ffi::{
-    clear_event_log, drain_messages_where, MossFfiRuntime, MossNode, MossNodeConfig,
-};
+use crate::moss_ffi::{drain_messages_where, MossFfiRuntime, MossNode};
 use crate::org_envelope::{self, OrgContext, OrgSigned};
 use crate::org_roster::{self, Roster, RosterError};
 use crate::org_signing;
 use crate::persistence::Persistence;
+use crate::shared_node::SharedMossNode;
 
 const ORG_CONTROL_PREFIX: &str = "org-control/";
 const ORG_CHANNEL_KIND: &str = "org-control";
@@ -214,7 +214,7 @@ struct OrgSession {
     display_name: String,
     listen_port: u16,
     static_peer: Option<String>,
-    node: MossNode,
+    node: Arc<MossNode>,
     control_channel: String,
     signer: SigningKey,
     own_peer_id: String,
@@ -316,7 +316,12 @@ impl OrgSession {
         let Ok(payload) = serde_json::to_vec(&wire) else {
             return;
         };
-        if let Err(error) = self.node.publish(&self.control_channel, &payload) {
+        // Room-scoped: the shared node's own room is the substrate, so a
+        // room-less publish would land where no org member listens.
+        if let Err(error) = self
+            .node
+            .publish_room(&self.mesh_id, &self.control_channel, &payload)
+        {
             eprintln!("org roster publish failed for {}: {error}", self.org_pubkey);
         }
     }
@@ -461,6 +466,36 @@ impl OrgSession {
     }
 }
 
+/// Puts an org's room on the shared node and subscribes its control channel
+/// there. Wire-identical to what a node owning that room published before, so a
+/// consolidated client still talks to every already-released one.
+fn join_org_room(node: &MossNode, mesh_id: &str) -> Result<(), OrgError> {
+    node.join_room(mesh_id)
+        .map_err(|e| OrgError::Moss(e.to_string()))?;
+    node.subscribe_room(mesh_id, &format!("{ORG_CONTROL_PREFIX}{mesh_id}"))
+        .map_err(|e| OrgError::Moss(e.to_string()))
+}
+
+/// The inverse of `join_org_room`. Unsubscribe first, then forget the key:
+/// leaving first would strand a subscription that can no longer resolve.
+fn leave_org_room(session: &OrgSession) {
+    if let Err(error) = session
+        .node
+        .unsubscribe_room(&session.mesh_id, &session.control_channel)
+    {
+        eprintln!(
+            "org {} could not unsubscribe its control channel: {error}",
+            session.org_pubkey
+        );
+    }
+    if let Err(error) = session.node.leave_room(&session.mesh_id) {
+        eprintln!(
+            "org {} could not leave its room: {error}",
+            session.org_pubkey
+        );
+    }
+}
+
 fn publish_signed(session: &OrgSession, message: &OrgMessage) -> Result<(), OrgError> {
     let payload = serde_json::to_vec(message).map_err(|e| OrgError::Codec(e.to_string()))?;
     let env = org_envelope::sign(&session.signer, &session.ctx(), &payload);
@@ -472,7 +507,7 @@ fn publish_signed(session: &OrgSession, message: &OrgMessage) -> Result<(), OrgE
     let bytes = serde_json::to_vec(&wire).map_err(|e| OrgError::Codec(e.to_string()))?;
     session
         .node
-        .publish(&session.control_channel, &bytes)
+        .publish_room(&session.mesh_id, &session.control_channel, &bytes)
         .map_err(|e| OrgError::Moss(e.to_string()))
 }
 
@@ -509,15 +544,29 @@ fn upsert_link(links: &mut Vec<OrgDmLink>, peer_id: &str, session_id: Option<Str
 }
 
 pub struct OrgRuntime {
-    moss: Arc<MossFfiRuntime>,
+    // The one moss node this process runs. Every joined org is a room on it,
+    // not a node of its own — see `shared_node` for why more than one is
+    // actively harmful.
+    shared_node: Arc<SharedMossNode>,
     persistence: Option<Arc<Persistence>>,
     orgs: HashMap<String, OrgSession>,
 }
 
 impl OrgRuntime {
     pub fn from_shared(moss: Arc<MossFfiRuntime>, persistence: Option<Arc<Persistence>>) -> Self {
+        Self::from_shared_node(SharedMossNode::new(moss), persistence)
+    }
+
+    /// The constructor a real client uses: every runtime in the process is
+    /// handed the SAME holder, so orgs share their node with DMs, channels and
+    /// groups. `from_shared` mints a private holder, which is what tests
+    /// running two peers in one process need.
+    pub fn from_shared_node(
+        shared_node: Arc<SharedMossNode>,
+        persistence: Option<Arc<Persistence>>,
+    ) -> Self {
         Self {
-            moss,
+            shared_node,
             persistence,
             orgs: HashMap::new(),
         }
@@ -528,7 +577,7 @@ impl OrgRuntime {
         if self.orgs.contains_key(&bundle.org_pubkey) {
             return Err(OrgError::Duplicate(bundle.org_pubkey));
         }
-        let node = self.start_node(&bundle.mesh_id, request.listen_port, &request.static_peer)?;
+        let node = self.open_org_room(&bundle.mesh_id, request.listen_port, &request.static_peer)?;
         // Read AFTER node start: on a truly fresh install the keystore only
         // receives the identity when the first node comes up.
         let signer = self.signing_key()?;
@@ -550,9 +599,15 @@ impl OrgRuntime {
     }
 
     pub fn leave_org(&mut self, org_pubkey: &str) -> Result<(), OrgError> {
-        self.orgs
+        let session = self
+            .orgs
             .remove(org_pubkey)
             .ok_or_else(|| OrgError::NotJoined(org_pubkey.to_string()))?;
+        // On a shared node dropping the session no longer ends its
+        // subscription — the node lives on for the other orgs, so leaving has
+        // to be said out loud or a left org keeps receiving roster gossip.
+        leave_org_room(&session);
+        self.shared_node.release();
         if let Some(p) = self.persistence.as_ref() {
             p.delete_org(org_pubkey)
                 .map_err(|e| OrgError::Persistence(e.to_string()))?;
@@ -745,7 +800,7 @@ impl OrgRuntime {
                 continue;
             }
             let Ok(node) =
-                self.start_node(&record.mesh_id, record.listen_port, &record.static_peer)
+                self.open_org_room(&record.mesh_id, record.listen_port, &record.static_peer)
             else {
                 continue;
             };
@@ -760,7 +815,7 @@ impl OrgRuntime {
     fn build_session(
         &self,
         record: PersistedOrgRecord,
-        node: MossNode,
+        node: Arc<MossNode>,
         signer: SigningKey,
     ) -> OrgSession {
         let own_peer_id = org_signing::peer_id_hex(&signer);
@@ -830,31 +885,23 @@ impl OrgRuntime {
         }
     }
 
-    fn start_node(
+    /// Take a reference to the shared node and put this org's room on it.
+    /// Rolls the reference back if the room work fails, so an org that never
+    /// joined cannot pin the node up forever.
+    fn open_org_room(
         &self,
         mesh_id: &str,
         listen_port: u16,
         static_peer: &Option<String>,
-    ) -> Result<MossNode, OrgError> {
+    ) -> Result<Arc<MossNode>, OrgError> {
         let node = self
-            .moss
-            .init_default_node(
-                mesh_id,
-                &MossNodeConfig {
-                    listen_port,
-                    static_peer: static_peer.clone(),
-                    bind_interface: None,
-                },
-            )
+            .shared_node
+            .acquire(listen_port, static_peer.clone())
             .map_err(|e| OrgError::Moss(e.to_string()))?;
-        node.set_message_callback()
-            .map_err(|e| OrgError::Moss(e.to_string()))?;
-        node.set_event_callback()
-            .map_err(|e| OrgError::Moss(e.to_string()))?;
-        clear_event_log();
-        node.start().map_err(|e| OrgError::Moss(e.to_string()))?;
-        node.subscribe(&format!("{ORG_CONTROL_PREFIX}{mesh_id}"))
-            .map_err(|e| OrgError::Moss(e.to_string()))?;
+        if let Err(error) = join_org_room(&node, mesh_id) {
+            self.shared_node.release();
+            return Err(error);
+        }
         Ok(node)
     }
 }

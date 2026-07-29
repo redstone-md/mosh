@@ -154,9 +154,9 @@ fn apply_delivery(
 }
 
 use crate::moss_ffi::{
-    clear_event_log, drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode,
-    MossNodeConfig, MossReceivedMessage,
+    drain_messages_where, snapshot_event_log, MossFfiRuntime, MossNode, MossReceivedMessage,
 };
+use crate::shared_node::SharedMossNode;
 
 const SEEN_MESSAGE_CAP: usize = 4096;
 
@@ -178,24 +178,11 @@ pub struct PrivateDmRuntime {
     relay_results: Vec<mpsc::Receiver<relay::RelayJobResult>>,
     // Debounces the snapshot's relay_ready flag (see shared_relay_ready).
     relay_readiness: relay::RelayReadiness,
-    // The ONE moss node every DM shares, and how many sessions rely on it.
-    //
-    // Each session used to start its own. Node identity is per process (the
-    // keystore is a process global), so N open conversations meant N nodes
-    // presenting the SAME peer id from N ports; a remote peer keeps one session
-    // per identity, closed the rest on arrival, and declined to dial the others
-    // because it already held that id. Measured across three clients over three
-    // days: 95% of all sessions dead inside a second, one identity on 27 ports
-    // in an hour. Sessions now share this node and separate themselves by room
-    // (moss >= v0.8.19), which is wire-identical to what they published before.
-    dm_node: Option<Arc<MossNode>>,
-    dm_node_ref: relay::RelayRef,
+    // The ONE moss node every conversation in this process shares — DMs,
+    // channels, groups and orgs alike. See `shared_node` for why more than one
+    // is actively harmful.
+    shared_node: Arc<SharedMossNode>,
 }
-
-/// The shared node's own room. Never carries DM traffic — every session
-/// publishes in its own `mesh_id` room — but a node must be born in some room,
-/// and naming it makes that explicit rather than accidental.
-const DM_SUBSTRATE_ROOM: &str = "mosh-dm/1";
 
 /// Borrowed intake of the relay send worker, threaded through the session
 /// methods that may route a frame while the DM path is Relayed. None while
@@ -328,8 +315,24 @@ impl PrivateDmRuntime {
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<Persistence>>,
     ) -> Self {
+        Self::from_shared_node(
+            SharedMossNode::new(moss),
+            attachment_store,
+            persistence,
+        )
+    }
+
+    /// The constructor a real client uses: every runtime in the process is
+    /// handed the SAME holder, so DMs, channels, groups and orgs all end up on
+    /// one node. `from_shared` mints a private holder instead, which is what
+    /// tests running two peers in one process need.
+    pub fn from_shared_node(
+        shared_node: Arc<SharedMossNode>,
+        attachment_store: Arc<AttachmentStore>,
+        persistence: Option<Arc<Persistence>>,
+    ) -> Self {
         Self {
-            moss,
+            moss: Arc::clone(shared_node.moss()),
             attachment_store,
             persistence,
             persisted_counts: HashMap::new(),
@@ -339,45 +342,26 @@ impl PrivateDmRuntime {
             relay: None,
             relay_results: Vec::new(),
             relay_readiness: relay::RelayReadiness::new(),
-            dm_node: None,
-            dm_node_ref: relay::RelayRef::default(),
+            shared_node,
         }
     }
 
-    /// Bring the shared DM node up on first demand and increment its refcount;
-    /// later sessions bump the count and get the same handle. Modelled on
-    /// `ensure_relay_up`, including the ordering: start BEFORE bumping, or a
-    /// transient failure leaks a ref that can never be released.
-    ///
-    /// The node is born once, with the first session's port. A later session
-    /// that came from an invite naming a static peer dials it instead — the
-    /// node is already listening, so the address only needs connecting to.
+    /// Bring the shared node up on first demand and take a reference to it;
+    /// later sessions get the same handle.
     fn ensure_dm_node(
         &mut self,
         listen_port: u16,
         static_peer: Option<String>,
     ) -> Result<Arc<MossNode>, PrivateDmRuntimeError> {
-        if self.dm_node.is_none() {
-            let node = start_shared_node(&self.moss, listen_port, static_peer.clone())?;
-            self.dm_node = Some(Arc::new(node));
-        } else if let (Some(node), Some(peer)) = (self.dm_node.as_ref(), static_peer.as_deref()) {
-            if let Err(error) = node.connect(peer) {
-                eprintln!("shared dm node could not dial {peer}: {error}");
-            }
-        }
-        self.dm_node_ref.acquire();
-        self.dm_node
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| PrivateDmRuntimeError::Moss("dm node missing".into()))
+        self.shared_node
+            .acquire(listen_port, static_peer)
+            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
     }
 
-    /// Decrement the shared node's refcount; the last release drops it, which
+    /// Drop this session's reference; the last one takes the node down, which
     /// stops moss (MossNode::drop → Moss_Stop).
     fn release_dm_node(&mut self) {
-        if self.dm_node_ref.release() == 0 {
-            self.dm_node = None;
-        }
+        self.shared_node.release();
     }
 
     /// Bring the shared relay node (and its send worker) up on first demand
@@ -689,8 +673,14 @@ impl PrivateDmRuntime {
         // One-shot create-time KeyPackage: the session (and its DmPath) does not
         // exist yet, and this always runs while the path would be Discover, which
         // route_send maps to this exact direct publish. Kept direct on purpose.
-        node.publish(&control_channel(&invite.session_id), &key_package_payload)
-            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+        // Room-scoped like every other send — the shared node's own room is the
+        // substrate, and Alice listens in the invite's room, not in that one.
+        node.publish_room(
+            &invite.mesh_id,
+            &control_channel(&invite.session_id),
+            &key_package_payload,
+        )
+        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
 
         let mut session = PrivateDmSession::new(
             SessionRole::Bob,
@@ -2979,34 +2969,6 @@ fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
     }
 }
 
-/// Starts the one node every DM session shares. Its own room is a constant and
-/// carries nothing; sessions join their own rooms on top (see join_session).
-fn start_shared_node(
-    runtime: &Arc<MossFfiRuntime>,
-    listen_port: u16,
-    static_peer: Option<String>,
-) -> Result<MossNode, PrivateDmRuntimeError> {
-    let node = runtime
-        .init_default_node(
-            DM_SUBSTRATE_ROOM,
-            &MossNodeConfig {
-                listen_port,
-                static_peer,
-                bind_interface: None,
-            },
-        )
-        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-
-    node.set_message_callback()
-        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    node.set_event_callback()
-        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    clear_event_log();
-    node.start()
-        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    Ok(node)
-}
-
 /// Joins a session's room on the shared node and subscribes its three channels
 /// there. Wire-identical to what a node owning that room published before, so a
 /// consolidated client still talks to every already-released one.
@@ -3799,7 +3761,7 @@ mod tests {
             .close_session(&first.session_id)
             .expect("first session should close");
         assert!(
-            alice.dm_node.is_some(),
+            alice.shared_node.current().is_some(),
             "the shared node went down while a conversation was still open"
         );
         // ...and closing the last one takes it down.
@@ -3807,7 +3769,7 @@ mod tests {
             .close_session(&second.session_id)
             .expect("second session should close");
         assert!(
-            alice.dm_node.is_none(),
+            alice.shared_node.current().is_none(),
             "the shared node outlived every conversation — nothing would ever stop moss"
         );
     }
