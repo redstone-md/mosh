@@ -178,7 +178,24 @@ pub struct PrivateDmRuntime {
     relay_results: Vec<mpsc::Receiver<relay::RelayJobResult>>,
     // Debounces the snapshot's relay_ready flag (see shared_relay_ready).
     relay_readiness: relay::RelayReadiness,
+    // The ONE moss node every DM shares, and how many sessions rely on it.
+    //
+    // Each session used to start its own. Node identity is per process (the
+    // keystore is a process global), so N open conversations meant N nodes
+    // presenting the SAME peer id from N ports; a remote peer keeps one session
+    // per identity, closed the rest on arrival, and declined to dial the others
+    // because it already held that id. Measured across three clients over three
+    // days: 95% of all sessions dead inside a second, one identity on 27 ports
+    // in an hour. Sessions now share this node and separate themselves by room
+    // (moss >= v0.8.19), which is wire-identical to what they published before.
+    dm_node: Option<Arc<MossNode>>,
+    dm_node_ref: relay::RelayRef,
 }
+
+/// The shared node's own room. Never carries DM traffic — every session
+/// publishes in its own `mesh_id` room — but a node must be born in some room,
+/// and naming it makes that explicit rather than accidental.
+const DM_SUBSTRATE_ROOM: &str = "mosh-dm/1";
 
 /// Borrowed intake of the relay send worker, threaded through the session
 /// methods that may route a frame while the DM path is Relayed. None while
@@ -243,7 +260,7 @@ struct PrivateDmSession {
     // The remote peer's display name, learned from the first inbound frame.
     peer_display_name: Option<String>,
     peer_joined: bool,
-    node: MossNode,
+    node: Arc<MossNode>,
     crypto: MlsSessionCrypto,
     messages: Vec<ChatMessage>,
     message_ids: MessageIdGen,
@@ -322,6 +339,44 @@ impl PrivateDmRuntime {
             relay: None,
             relay_results: Vec::new(),
             relay_readiness: relay::RelayReadiness::new(),
+            dm_node: None,
+            dm_node_ref: relay::RelayRef::default(),
+        }
+    }
+
+    /// Bring the shared DM node up on first demand and increment its refcount;
+    /// later sessions bump the count and get the same handle. Modelled on
+    /// `ensure_relay_up`, including the ordering: start BEFORE bumping, or a
+    /// transient failure leaks a ref that can never be released.
+    ///
+    /// The node is born once, with the first session's port. A later session
+    /// that came from an invite naming a static peer dials it instead — the
+    /// node is already listening, so the address only needs connecting to.
+    fn ensure_dm_node(
+        &mut self,
+        listen_port: u16,
+        static_peer: Option<String>,
+    ) -> Result<Arc<MossNode>, PrivateDmRuntimeError> {
+        if self.dm_node.is_none() {
+            let node = start_shared_node(&self.moss, listen_port, static_peer.clone())?;
+            self.dm_node = Some(Arc::new(node));
+        } else if let (Some(node), Some(peer)) = (self.dm_node.as_ref(), static_peer.as_deref()) {
+            if let Err(error) = node.connect(peer) {
+                eprintln!("shared dm node could not dial {peer}: {error}");
+            }
+        }
+        self.dm_node_ref.acquire();
+        self.dm_node
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| PrivateDmRuntimeError::Moss("dm node missing".into()))
+    }
+
+    /// Decrement the shared node's refcount; the last release drops it, which
+    /// stops moss (MossNode::drop → Moss_Stop).
+    fn release_dm_node(&mut self) {
+        if self.dm_node_ref.release() == 0 {
+            self.dm_node = None;
         }
     }
 
@@ -397,19 +452,18 @@ impl PrivateDmRuntime {
                     continue;
                 }
             };
-            let node = match start_node(
-                &self.moss,
-                &rec.mesh_id,
-                &rec.session_id,
-                rec.listen_port,
-                rec.static_peer.clone(),
-            ) {
+            let node = match self.ensure_dm_node(rec.listen_port, rec.static_peer.clone()) {
                 Ok(n) => n,
                 Err(e) => {
                     eprintln!("rehydrate: node start failed for {}: {e}", rec.session_id);
                     continue;
                 }
             };
+            if let Err(e) = join_session(&node, &rec.mesh_id, &rec.session_id) {
+                eprintln!("rehydrate: join failed for {}: {e}", rec.session_id);
+                self.release_dm_node();
+                continue;
+            }
             let mut session = PrivateDmSession::new(
                 if rec.role_is_alice {
                     SessionRole::Alice
@@ -548,13 +602,11 @@ impl PrivateDmRuntime {
         let mesh_id = crypto.random_token("mesh")?;
         let participant_id = crypto.random_token("participant")?;
         let fingerprint = crypto.fingerprint();
-        let node = start_node(
-            &self.moss,
-            &mesh_id,
-            &session_id,
-            request.listen_port,
-            request.static_peer,
-        )?;
+        let node = self.ensure_dm_node(request.listen_port, request.static_peer)?;
+        if let Err(error) = join_session(&node, &mesh_id, &session_id) {
+            self.release_dm_node();
+            return Err(error);
+        }
         // Embed our moss peer id so a hard-NAT joiner can relay-send the MLS
         // handshake before any direct window exists (identity is per-device,
         // so the per-DM node id equals our relay-mesh id).
@@ -616,13 +668,11 @@ impl PrivateDmRuntime {
         let participant_id = crypto.random_token("participant")?;
         let key_package = crypto.key_package_bytes()?;
         let persist_static_peer = request.static_peer.clone().or(invite.peer_address.clone());
-        let node = start_node(
-            &self.moss,
-            &invite.mesh_id,
-            &invite.session_id,
-            request.listen_port,
-            persist_static_peer.clone(),
-        )?;
+        let node = self.ensure_dm_node(request.listen_port, persist_static_peer.clone())?;
+        if let Err(error) = join_session(&node, &invite.mesh_id, &invite.session_id) {
+            self.release_dm_node();
+            return Err(error);
+        }
         let envelope = ControlEnvelope::KeyPackage {
             session_id: invite.session_id.clone(),
             participant_id: participant_id.clone(),
@@ -1082,6 +1132,11 @@ impl PrivateDmRuntime {
     ) -> Result<CloseSessionResult, PrivateDmRuntimeError> {
         match self.sessions.remove(session_id) {
             Some(session) => {
+                // Dropping the session no longer ends its subscriptions: the
+                // node outlives it now. Say so explicitly, or a closed
+                // conversation keeps receiving on the shared node forever.
+                leave_session(&session.node, &session.mesh_id, &session.session_id);
+                self.release_dm_node();
                 // A relayed session holds a ref on the shared relay node; drop
                 // it so the node's refcount stays accurate and it can stop once
                 // the last relayed DM closes.
@@ -1621,7 +1676,7 @@ impl PrivateDmSession {
         invite_uri: Option<String>,
         listen_port: u16,
         static_peer: Option<String>,
-        node: MossNode,
+        node: Arc<MossNode>,
         crypto: MlsSessionCrypto,
         attachment_store: Arc<AttachmentStore>,
     ) -> Self {
@@ -1900,7 +1955,7 @@ impl PrivateDmSession {
         match self.path {
             DmPath::Direct | DmPath::Discover => self
                 .node
-                .publish(&kind.channel_for(&self.session_id), payload)
+                .publish_room(&self.mesh_id, &kind.channel_for(&self.session_id), payload)
                 .map(|_| RouteOutcome::Published)
                 .map_err(|e| PrivateDmRuntimeError::Moss(e.to_string())),
             DmPath::Relayed => {
@@ -2187,7 +2242,7 @@ impl PrivateDmSession {
                     from_device,
                 ));
                 self.node
-                    .subscribe(&channel)
+                    .subscribe_room(&self.mesh_id, &channel)
                     .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
                 Ok(())
             }
@@ -2211,7 +2266,9 @@ impl PrivateDmSession {
             } if session_id == self.session_id && participant_id != self.participant_id => {
                 if let Some(call) = self.call.as_ref() {
                     if call.call_id == call_id {
-                        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                        let _ = self
+                            .node
+                            .unsubscribe_room(&self.mesh_id, &voice_call_channel(&call.call_id));
                         let remote = call.remote_device.clone();
                         let call_id_owned = call.call_id.clone();
                         self.call = None;
@@ -2230,7 +2287,9 @@ impl PrivateDmSession {
                     if call.call_id == call_id {
                         let duration = call.duration_ms(now_ms());
                         let kind = call.end_kind();
-                        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                        let _ = self
+                            .node
+                            .unsubscribe_room(&self.mesh_id, &voice_call_channel(&call.call_id));
                         let remote = call.remote_device.clone();
                         let call_id_owned = call.call_id.clone();
                         self.call = None;
@@ -2669,6 +2728,13 @@ impl PrivateDmSession {
                 info.nat_type = nat;
             }
         }
+        // The node is shared, so it reports every open conversation's channels.
+        // This snapshot belongs to ONE of them: showing the others would put
+        // another chat's session id in this chat's diagnostics panel. Peer lists
+        // stay whole on purpose — `has_live_peer` matches the counterpart by id
+        // against them.
+        info.channels
+            .retain(|channel| channel_session_id(channel) == Some(self.session_id.as_str()));
         Some(info)
     }
 
@@ -2728,7 +2794,7 @@ impl PrivateDmSession {
             String::new(),
         ));
         self.node
-            .subscribe(&voice_call_channel(&call_id))
+            .subscribe_room(&self.mesh_id, &voice_call_channel(&call_id))
             .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
         let body = CallOfferBody {
             key_b64: key_b64.clone(),
@@ -2747,7 +2813,7 @@ impl PrivateDmSession {
         // Call* signaling stays on the direct node until voice-relay is in
         // scope. Relaying signaling alone would negotiate a call whose media
         // path (out of S2 scope) is still pubsub-only, i.e. no audio.
-        publish_json(&self.node, &self.control_channel, &envelope)?;
+        publish_json(&self.node, &self.mesh_id, &self.control_channel, &envelope)?;
         Ok(CallStarted {
             session_id: self.session_id.clone(),
             call_id,
@@ -2770,13 +2836,15 @@ impl PrivateDmSession {
             call_id: call_id.to_string(),
         };
         // Stays direct until voice-relay is in scope (see call_start).
-        publish_json(&self.node, &self.control_channel, &envelope)
+        publish_json(&self.node, &self.mesh_id, &self.control_channel, &envelope)
     }
 
     fn call_decline(&mut self, call_id: &str, reason: &str) -> Result<(), PrivateDmRuntimeError> {
         if let Some(call) = self.call.take() {
             if call.call_id == call_id {
-                let _ = self.node.unsubscribe_voice_call(&call.call_id);
+                let _ = self
+                    .node
+                    .unsubscribe_room(&self.mesh_id, &voice_call_channel(&call.call_id));
                 let remote = call.remote_device.clone();
                 let call_id_owned = call.call_id.clone();
                 self.append_call_event_message(&remote, "missed", 0, &call_id_owned);
@@ -2786,7 +2854,7 @@ impl PrivateDmSession {
                     call_id: call_id.to_string(),
                     reason: reason.to_string(),
                 };
-                publish_json(&self.node, &self.control_channel, &envelope)?;
+                publish_json(&self.node, &self.mesh_id, &self.control_channel, &envelope)?;
             } else {
                 self.call = Some(call);
             }
@@ -2803,7 +2871,9 @@ impl PrivateDmSession {
             return Ok(());
         }
         let duration = call.duration_ms(now_ms());
-        let _ = self.node.unsubscribe_voice_call(&call.call_id);
+        let _ = self
+            .node
+            .unsubscribe_room(&self.mesh_id, &voice_call_channel(&call.call_id));
         let kind = call.end_kind();
         let remote = call.remote_device.clone();
         let call_id_owned = call.call_id.clone();
@@ -2814,7 +2884,7 @@ impl PrivateDmSession {
             call_id: call_id.to_string(),
             reason: reason.to_string(),
         };
-        publish_json(&self.node, &self.control_channel, &envelope)
+        publish_json(&self.node, &self.mesh_id, &self.control_channel, &envelope)
     }
 
     fn call_send_frame(
@@ -2830,7 +2900,7 @@ impl PrivateDmSession {
         }
         // ponytail: voice stays direct-only; relay carries control/data/blob, add voice relay when a hard-NAT call actually needs it
         self.node
-            .publish(&voice_call_channel(call_id), &frame)
+            .publish_room(&self.mesh_id, &voice_call_channel(call_id), &frame)
             .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
     }
 
@@ -2909,16 +2979,16 @@ fn descriptor_of(manifest: &AttachmentManifest) -> AttachmentDescriptor {
     }
 }
 
-fn start_node(
+/// Starts the one node every DM session shares. Its own room is a constant and
+/// carries nothing; sessions join their own rooms on top (see join_session).
+fn start_shared_node(
     runtime: &Arc<MossFfiRuntime>,
-    mesh_id: &str,
-    session_id: &str,
     listen_port: u16,
     static_peer: Option<String>,
 ) -> Result<MossNode, PrivateDmRuntimeError> {
     let node = runtime
         .init_default_node(
-            mesh_id,
+            DM_SUBSTRATE_ROOM,
             &MossNodeConfig {
                 listen_port,
                 static_peer,
@@ -2934,14 +3004,46 @@ fn start_node(
     clear_event_log();
     node.start()
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    node.subscribe(&control_channel(session_id))
-        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    node.subscribe(&data_channel(session_id))
-        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-    node.subscribe(&blob_channel(session_id))
-        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
-
     Ok(node)
+}
+
+/// Joins a session's room on the shared node and subscribes its three channels
+/// there. Wire-identical to what a node owning that room published before, so a
+/// consolidated client still talks to every already-released one.
+fn join_session(
+    node: &MossNode,
+    mesh_id: &str,
+    session_id: &str,
+) -> Result<(), PrivateDmRuntimeError> {
+    node.join_room(mesh_id)
+        .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+    for channel in [
+        control_channel(session_id),
+        data_channel(session_id),
+        blob_channel(session_id),
+    ] {
+        node.subscribe_room(mesh_id, &channel)
+            .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))?;
+    }
+    Ok(())
+}
+
+/// The inverse of `join_session`. On a shared node a closed conversation must
+/// be told to stop, because dropping the node no longer does it — that is what
+/// used to end a session's subscriptions.
+fn leave_session(node: &MossNode, mesh_id: &str, session_id: &str) {
+    for channel in [
+        control_channel(session_id),
+        data_channel(session_id),
+        blob_channel(session_id),
+    ] {
+        if let Err(error) = node.unsubscribe_room(mesh_id, &channel) {
+            eprintln!("unsubscribe {channel} failed: {error}");
+        }
+    }
+    if let Err(error) = node.leave_room(mesh_id) {
+        eprintln!("leave_room {mesh_id} failed: {error}");
+    }
 }
 
 #[cfg(test)]
@@ -3648,6 +3750,65 @@ mod tests {
         assert!(
             session.has_seen_message(&data),
             "a repeated data frame must be suppressed"
+        );
+    }
+
+    // Every session now shares one moss node, so a session's own room is what
+    // separates it from the others — and the node outliving the session is a
+    // new failure mode: nothing ends its subscriptions unless close_session
+    // says so.
+    #[test]
+    fn sessions_share_one_node_and_close_releases_it() {
+        let _guard = MOSS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        drain_received_messages();
+
+        let runtime = Arc::new(MossFfiRuntime::load_default().expect("Moss runtime should load"));
+        let mut alice = PrivateDmRuntime::from_shared(Arc::clone(&runtime), temp_store(), None);
+        let first = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42187,
+                static_peer: None,
+            })
+            .expect("first invite should be created");
+        let second = alice
+            .create_invite(StartSessionRequest {
+                display_name: "Alice".to_string(),
+                listen_port: 42188,
+                static_peer: None,
+            })
+            .expect("second invite should be created");
+
+        // One node, not two. This is the whole point: two nodes would present
+        // the same peer id from two ports and a remote peer would keep one.
+        let first_node = Arc::as_ptr(&alice.sessions[&first.session_id].node);
+        let second_node = Arc::as_ptr(&alice.sessions[&second.session_id].node);
+        assert_eq!(
+            first_node, second_node,
+            "two open conversations started two moss nodes under one identity"
+        );
+        assert_ne!(
+            alice.sessions[&first.session_id].mesh_id, alice.sessions[&second.session_id].mesh_id,
+            "sessions must stay in separate rooms on the shared node"
+        );
+
+        // Closing one leaves the node up for the other...
+        alice
+            .close_session(&first.session_id)
+            .expect("first session should close");
+        assert!(
+            alice.dm_node.is_some(),
+            "the shared node went down while a conversation was still open"
+        );
+        // ...and closing the last one takes it down.
+        alice
+            .close_session(&second.session_id)
+            .expect("second session should close");
+        assert!(
+            alice.dm_node.is_none(),
+            "the shared node outlived every conversation — nothing would ever stop moss"
         );
     }
 

@@ -140,15 +140,19 @@ pub enum BlobEnvelope {
     },
 }
 
+/// Publishes in a session's room. Every DM channel belongs to one — the node is
+/// shared across sessions, so the room is what keeps them apart, exactly as a
+/// per-session node's own room used to.
 pub fn publish_json<T: Serialize>(
     node: &MossNode,
+    mesh_id: &str,
     channel: &str,
     value: &T,
 ) -> Result<(), PrivateDmRuntimeError> {
     let payload = serde_json::to_vec(value)
         .map_err(|error| PrivateDmRuntimeError::Codec(error.to_string()))?;
 
-    node.publish(channel, &payload)
+    node.publish_room(mesh_id, channel, &payload)
         .map_err(|error| PrivateDmRuntimeError::Moss(error.to_string()))
 }
 

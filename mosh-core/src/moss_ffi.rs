@@ -55,6 +55,10 @@ type MossInit = unsafe extern "C" fn(*const c_char, *const u8, *const c_char) ->
 type MossStart = unsafe extern "C" fn(MossHandle) -> i32;
 type MossStop = unsafe extern "C" fn(MossHandle) -> i32;
 type MossSubscribe = unsafe extern "C" fn(MossHandle, *const c_char) -> i32;
+type MossJoinRoom = unsafe extern "C" fn(MossHandle, *const c_char, *const u8, u32) -> i32;
+type MossRoomChannel = unsafe extern "C" fn(MossHandle, *const c_char, *const c_char) -> i32;
+type MossPublishRoom =
+    unsafe extern "C" fn(MossHandle, *const c_char, *const c_char, *const u8, u32) -> i32;
 type MossConnect = unsafe extern "C" fn(MossHandle, *const c_char) -> i32;
 type MossPublish = unsafe extern "C" fn(MossHandle, *const c_char, *const u8, u32) -> i32;
 type MossSetCallback = unsafe extern "C" fn(MossHandle, Option<MessageCallback>) -> i32;
@@ -186,6 +190,16 @@ pub struct MossFfiRuntime {
     start: MossStart,
     stop: MossStop,
     subscribe: MossSubscribe,
+    unsubscribe: MossSubscribe,
+    // Room-aware calls, so one node can serve every session instead of one node
+    // per session. Required, not optional: mosh ships the moss it was built
+    // against, and a stale copy beside the binary should fail loudly at load
+    // rather than half-work at runtime.
+    join_room: MossJoinRoom,
+    leave_room: MossSubscribe,
+    subscribe_room: MossRoomChannel,
+    unsubscribe_room: MossRoomChannel,
+    publish_room: MossPublishRoom,
     connect: MossConnect,
     connect_to_peer: MossConnect,
     publish: MossPublish,
@@ -235,6 +249,12 @@ impl MossFfiRuntime {
             start: load_symbol(&library, b"Moss_Start\0")?,
             stop: load_symbol(&library, b"Moss_Stop\0")?,
             subscribe: load_symbol(&library, b"Moss_Subscribe\0")?,
+            unsubscribe: load_symbol(&library, b"Moss_Unsubscribe\0")?,
+            join_room: load_symbol(&library, b"Moss_JoinRoom\0")?,
+            leave_room: load_symbol(&library, b"Moss_LeaveRoom\0")?,
+            subscribe_room: load_symbol(&library, b"Moss_SubscribeRoom\0")?,
+            unsubscribe_room: load_symbol(&library, b"Moss_UnsubscribeRoom\0")?,
+            publish_room: load_symbol(&library, b"Moss_PublishRoom\0")?,
             connect: load_symbol(&library, b"Moss_Connect\0")?,
             connect_to_peer: load_symbol(&library, b"Moss_ConnectToPeer\0")?,
             publish: load_symbol(&library, b"Moss_Publish\0")?,
@@ -305,13 +325,82 @@ impl MossNode {
         })
     }
 
-    /// Best-effort unsubscribe — Moss FFI does not yet expose an unsubscribe
-    /// call, so we drop the in-process record. This is enough to stop the
-    /// runtime from routing frames to a closed call, since
-    /// `handle_voice_call_frame` ignores frames whose call_id no longer
-    /// matches `self.call`.
-    pub fn unsubscribe_voice_call(&self, _call_id: &str) -> Result<(), MossFfiError> {
-        Ok(())
+    pub fn unsubscribe(&self, channel: &str) -> Result<(), MossFfiError> {
+        let channel = c_string(channel)?;
+
+        check_code("unsubscribe", unsafe {
+            (self.runtime.unsubscribe)(self.handle, channel.as_ptr())
+        })
+    }
+
+    /// Joins a room so this node can subscribe and publish in it alongside the
+    /// one it was started with. Idempotent.
+    pub fn join_room(&self, mesh_id: &str) -> Result<(), MossFfiError> {
+        let mesh_id = c_string(mesh_id)?;
+
+        check_code("join_room", unsafe {
+            (self.runtime.join_room)(self.handle, mesh_id.as_ptr(), std::ptr::null(), 0)
+        })
+    }
+
+    /// Forgets a room's key. Subscriptions in it stop resolving, so unsubscribe
+    /// first if the peers should be told.
+    pub fn leave_room(&self, mesh_id: &str) -> Result<(), MossFfiError> {
+        let mesh_id = c_string(mesh_id)?;
+
+        check_code("leave_room", unsafe {
+            (self.runtime.leave_room)(self.handle, mesh_id.as_ptr())
+        })
+    }
+
+    pub fn subscribe_room(&self, mesh_id: &str, channel: &str) -> Result<(), MossFfiError> {
+        let mesh_id = c_string(mesh_id)?;
+        let channel = c_string(channel)?;
+
+        check_code("subscribe_room", unsafe {
+            (self.runtime.subscribe_room)(self.handle, mesh_id.as_ptr(), channel.as_ptr())
+        })
+    }
+
+    pub fn unsubscribe_room(&self, mesh_id: &str, channel: &str) -> Result<(), MossFfiError> {
+        let mesh_id = c_string(mesh_id)?;
+        let channel = c_string(channel)?;
+
+        check_code("unsubscribe_room", unsafe {
+            (self.runtime.unsubscribe_room)(self.handle, mesh_id.as_ptr(), channel.as_ptr())
+        })
+    }
+
+    pub fn publish_room(
+        &self,
+        mesh_id: &str,
+        channel: &str,
+        payload: &[u8],
+    ) -> Result<(), MossFfiError> {
+        #[cfg(test)]
+        if let Some(message) = TEST_PUBLISH_FAILURE
+            .lock()
+            .expect("test publish failure lock poisoned")
+            .take()
+        {
+            return Err(MossFfiError::InjectedPublishFailure(message));
+        }
+
+        let mesh_id = c_string(mesh_id)?;
+        let channel = c_string(channel)?;
+
+        // Same tolerance as `publish`: "no peers yet" is the normal state of a
+        // session that has not meshed, not a send failure. Treating it as one
+        // marked every early message Failed.
+        check_publish_code(unsafe {
+            (self.runtime.publish_room)(
+                self.handle,
+                mesh_id.as_ptr(),
+                channel.as_ptr(),
+                payload.as_ptr(),
+                payload.len() as u32,
+            )
+        })
     }
 
     pub fn connect(&self, address: &str) -> Result<(), MossFfiError> {
