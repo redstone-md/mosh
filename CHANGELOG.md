@@ -4,6 +4,38 @@ All notable changes to Mosh are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-07-29
+
+### Fixed
+- **A conversation only worked once every other conversation was closed.** Each
+  open chat started its own moss node, and node identity is per device — so N
+  open chats meant N nodes presenting the *same* peer id from N ports. A peer on
+  the other side keeps one connection per identity: it closed the rest the
+  moment they arrived, and refused to dial the others at all because it already
+  had that id.
+
+  Measured across three clients over three days: 33,715 connections, 32,330 of
+  them dead inside one second (95%), running at 205 / 131 / 113 discarded
+  handshakes an hour against only 6–8 peers each. One identity appeared on 27
+  different ports within a single hour. Every one of those is a full
+  public-key handshake, thrown away.
+
+  All chats now share one node and stay separated by room (moss v0.8.19).
+  Wire-compatible: a room joined this way is byte-identical to the same room on
+  an older client, so 0.7.3 and 0.7.2 still talk.
+
+- **A closed chat kept receiving.** `Moss_Unsubscribe` has existed in the
+  library all along, but mosh never bound it — with a node per chat, dropping
+  the node ended its subscriptions. On a shared node it must be said out loud.
+  Closing a chat now leaves its room.
+
+- **One chat's diagnostics listed every other chat's channels**, because the
+  node they now share reports all of them. Filtered to the chat you are looking
+  at. Peer lists stay whole — that is how a chat recognises its counterpart.
+
+### Changed
+- Moss bumped to **v0.8.19**, which is what lets one node hold several rooms.
+
 ## [0.7.2] - 2026-07-29
 
 ### Fixed
