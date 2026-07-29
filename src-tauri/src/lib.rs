@@ -10,7 +10,6 @@ use adapters::channel_runtime::{
     ChannelLeaveResult, ChannelListSnapshot, ChannelRuntime, ChannelSendResult, ChannelSnapshot,
     JoinChannelRequest,
 };
-use adapters::moss_ffi::MossFfiRuntime;
 use adapters::moss_runtime::{MossDynamicRuntime, MossRuntime, MossRuntimeStatus};
 use adapters::openmls_crypto::{
     run_openmls_alice_bob_roundtrip, run_openmls_smoke_test, OpenMlsRoundTripStatus,
@@ -26,6 +25,7 @@ use adapters::private_group_runtime::{
     GroupSnapshot, JoinGroupRequest, PrivateGroupRuntime,
 };
 use adapters::secure_storage::{OsSecureSecretStore, SecureStorageStatus};
+use adapters::shared_node::SharedMossNode;
 use tauri::Manager;
 
 const APP_NAME: &str = "Mosh";
@@ -75,7 +75,7 @@ struct PrivateDmState {
 
 impl PrivateDmState {
     fn ready(
-        moss: Arc<MossFfiRuntime>,
+        shared_node: Arc<SharedMossNode>,
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<adapters::persistence::Persistence>>,
     ) -> Self {
@@ -85,11 +85,12 @@ impl PrivateDmState {
         // and must be installed before any node starts (including rehydrate).
         if let Some(store) = persistence.clone() {
             adapters::moss_ffi::set_moss_keystore(store);
-            if let Err(error) = moss.install_keystore() {
+            if let Err(error) = shared_node.moss().install_keystore() {
                 eprintln!("moss keystore install failed: {error}");
             }
         }
-        let mut runtime = PrivateDmRuntime::from_shared(moss, attachment_store, persistence);
+        let mut runtime =
+            PrivateDmRuntime::from_shared_node(shared_node, attachment_store, persistence);
         runtime.rehydrate();
         Self {
             runtime: Mutex::new(Some(runtime)),
@@ -137,11 +138,12 @@ struct ChannelState {
 
 impl ChannelState {
     fn ready(
-        moss: Arc<MossFfiRuntime>,
+        shared_node: Arc<SharedMossNode>,
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<adapters::persistence::Persistence>>,
     ) -> Self {
-        let mut runtime = ChannelRuntime::from_shared(moss, attachment_store, persistence);
+        let mut runtime =
+            ChannelRuntime::from_shared_node(shared_node, attachment_store, persistence);
         runtime.rehydrate();
         Self {
             runtime: Mutex::new(Some(runtime)),
@@ -200,11 +202,12 @@ struct PrivateGroupState {
 
 impl PrivateGroupState {
     fn ready(
-        moss: Arc<MossFfiRuntime>,
+        shared_node: Arc<SharedMossNode>,
         attachment_store: Arc<AttachmentStore>,
         persistence: Option<Arc<adapters::persistence::Persistence>>,
     ) -> Self {
-        let mut runtime = PrivateGroupRuntime::from_shared(moss, attachment_store, persistence);
+        let mut runtime =
+            PrivateGroupRuntime::from_shared_node(shared_node, attachment_store, persistence);
         runtime.rehydrate();
         Self {
             runtime: Mutex::new(Some(runtime)),
@@ -246,10 +249,10 @@ struct OrgState {
 
 impl OrgState {
     fn ready(
-        moss: Arc<MossFfiRuntime>,
+        shared_node: Arc<SharedMossNode>,
         persistence: Option<Arc<adapters::persistence::Persistence>>,
     ) -> Self {
-        let mut runtime = OrgRuntime::from_shared(moss, persistence);
+        let mut runtime = OrgRuntime::from_shared_node(shared_node, persistence);
         runtime.rehydrate();
         Self {
             runtime: Mutex::new(Some(runtime)),
@@ -1409,24 +1412,32 @@ pub fn run() {
             apply_stored_vpn_bypass(app.handle());
             match tauri_moss::load_moss_runtime_from_app_handle(app.handle()) {
                 Ok(moss) => {
-                    let moss = Arc::new(moss);
+                    // ONE holder for all four runtimes: DMs, channels, groups
+                    // and orgs then share a single moss node and separate
+                    // themselves by room. Handing each runtime its own holder
+                    // would put the same peer id on four ports, and a remote
+                    // peer keeps only the first (see `shared_node`).
+                    let shared_node = SharedMossNode::new(Arc::new(moss));
                     let attachment_store = load_attachment_store(app.handle());
                     app.manage(PrivateDmState::ready(
-                        Arc::clone(&moss),
+                        Arc::clone(&shared_node),
                         Arc::clone(&attachment_store),
                         persistence_load.persistence.clone(),
                     ));
                     app.manage(ChannelState::ready(
-                        Arc::clone(&moss),
+                        Arc::clone(&shared_node),
                         Arc::clone(&attachment_store),
                         persistence_load.persistence.clone(),
                     ));
                     app.manage(PrivateGroupState::ready(
-                        Arc::clone(&moss),
+                        Arc::clone(&shared_node),
                         attachment_store,
                         persistence_load.persistence.clone(),
                     ));
-                    app.manage(OrgState::ready(moss, persistence_load.persistence.clone()));
+                    app.manage(OrgState::ready(
+                        shared_node,
+                        persistence_load.persistence.clone(),
+                    ));
                 }
                 Err(error) => {
                     let message = error.to_string();

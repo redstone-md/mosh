@@ -2538,7 +2538,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "mosh-core"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -2564,7 +2564,7 @@ dependencies = [
 
 [[package]]
 name = "mosh-probe"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "clap",
  "mosh-core",
