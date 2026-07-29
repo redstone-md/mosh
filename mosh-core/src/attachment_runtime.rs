@@ -443,10 +443,9 @@ impl AttachmentRuntime {
         // batches and buries the link that was already struggling.
         let wanted = |transfer: &IncomingTransfer, index: u64| {
             !transfer.chunks.contains_key(&index)
-                && transfer
-                    .requested_at
-                    .get(&index)
-                    .is_none_or(|sent| now.saturating_duration_since(*sent) >= CHUNK_REQUEST_TIMEOUT)
+                && transfer.requested_at.get(&index).is_none_or(|sent| {
+                    now.saturating_duration_since(*sent) >= CHUNK_REQUEST_TIMEOUT
+                })
         };
         let mut indices = Vec::new();
         // A streaming player's requested region jumps the queue so playback
